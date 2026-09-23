@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">文字起こし</string>
+    <string name="start">開始</string>
+    <string name="stop">文字起こし終了</string>
+    <string name="finishing">終了処理中…</string>
+    <string name="loading_model">音声モデル読み込み中…</string>
+    <string name="listening">文字起こし中</string>
+    <string name="tap_hint">画面をタッチすると操作画面が消えます</string>
+    <string name="copy_all">全文コピー</string>
+    <string name="share">共有</string>
+    <string name="new_session">新しく開始</string>
+    <string name="copied">クリップボードにコピーしました</string>
+    <string name="empty_result">(認識されたテキストはありません)</string>
+    <string name="saved_to">保存先: %1$s</string>
+    <string name="permission_denied">マイクの権限が必要です</string>
+    <string name="notification_channel">文字起こし</string>
+    <string name="notification_text">文字起こし中 (タップで表示)</string>
+    <string name="error_prefix">エラー: %1$s</string>
+</resources>

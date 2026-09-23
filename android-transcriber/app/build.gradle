@@ -1,0 +1,113 @@
+import javax.inject.Inject
+
+plugins {
+    id 'com.android.application'
+}
+
+// ---------------------------------------------------------------------------
+// Vosk 日本語モデル (オフライン音声認識用)
+// ビルド時に自動ダウンロードし、APK の assets/model-ja に同梱する。
+// ネットワークに繋がらない環境では、zip を手動で
+//   <プロジェクト>/.model-cache/vosk-model-small-ja-0.22.zip
+// に置けばそれが使われる。
+// ---------------------------------------------------------------------------
+def voskModelName = 'vosk-model-small-ja-0.22'
+def voskModelUrl = "https://alphacephei.com/vosk/models/${voskModelName}.zip"
+
+abstract class PrepareVoskModel extends DefaultTask {
+    @Input abstract Property<String> getModelName()
+    @Input abstract Property<String> getModelUrl()
+    @Internal abstract RegularFileProperty getZipFile()
+    @OutputDirectory abstract DirectoryProperty getOutputDir()
+
+    @Inject abstract ArchiveOperations getArchiveOps()
+    @Inject abstract FileSystemOperations getFsOps()
+
+    @TaskAction
+    void prepare() {
+        File zip = zipFile.get().asFile
+        if (!zip.exists()) {
+            zip.parentFile.mkdirs()
+            File tmp = new File(zip.path + '.part')
+            logger.lifecycle("Downloading ${modelUrl.get()}")
+            new URL(modelUrl.get()).withInputStream { input ->
+                tmp.withOutputStream { out -> out << input }
+            }
+            tmp.renameTo(zip)
+        }
+        File out = outputDir.get().asFile
+        fsOps.delete { delete out }
+        fsOps.copy {
+            from archiveOps.zipTree(zip)
+            into new File(out, 'model-ja')
+            // zip 先頭のフォルダ名 (vosk-model-small-ja-0.22/) を取り除く
+            eachFile { details ->
+                details.relativePath = new RelativePath(true, details.relativePath.segments.drop(1) as String[])
+            }
+            includeEmptyDirs = false
+        }
+        // アプリ側で「展開済みモデルが最新か」を判定するための目印
+        new File(out, 'model-ja/version.txt').text = modelName.get()
+    }
+}
+
+def prepareVoskModel = tasks.register('prepareVoskModel', PrepareVoskModel) {
+    modelName.set(voskModelName)
+    modelUrl.set(voskModelUrl)
+    zipFile.set(rootProject.layout.projectDirectory.file(".model-cache/${voskModelName}.zip"))
+    outputDir.set(layout.buildDirectory.dir('generated/voskModel'))
+}
+
+android {
+    namespace 'app.mojiokoshi'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'app.mojiokoshi'
+        minSdk 23          // Android 6.0
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+
+        ndk {
+            // Xperia Z4 (Snapdragon 810) は ARM。x86 系ライブラリは除外して APK を軽くする
+            abiFilters 'armeabi-v7a', 'arm64-v8a'
+        }
+    }
+
+    buildTypes {
+        release {
+            // JNA はリフレクションを使うため難読化はしない
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        // リリースビルド時の lint でビルドを止めない
+        checkReleaseBuilds false
+    }
+
+    packaging {
+        jniLibs {
+            // Android 6.0 で確実にネイティブライブラリを展開させる
+            useLegacyPackaging true
+        }
+    }
+}
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        variant.sources.assets.addGeneratedSourceDirectory(prepareVoskModel) { it.outputDir }
+    }
+}
+
+dependencies {
+    implementation 'com.alphacephei:vosk-android:0.3.47'
+    implementation 'net.java.dev.jna:jna:5.13.0@aar'
+}

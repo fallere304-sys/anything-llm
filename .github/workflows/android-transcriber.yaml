@@ -1,0 +1,41 @@
+name: Build Android transcriber APK
+
+on:
+  push:
+    paths:
+      - "android-transcriber/**"
+      - ".github/workflows/android-transcriber.yaml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-transcriber
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache Vosk model
+        uses: actions/cache@v4
+        with:
+          path: android-transcriber/.model-cache
+          key: vosk-model-small-ja-0.22
+
+      - name: Build APK
+        run: ./gradlew --no-daemon assembleRelease
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mojiokoshi-apk
+          path: android-transcriber/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
