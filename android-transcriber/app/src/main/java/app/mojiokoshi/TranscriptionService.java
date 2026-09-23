@@ -60,6 +60,14 @@ public class TranscriptionService extends Service {
     private static final long PARTIAL_UPDATE_INTERVAL_MS = 300;
     /** 保険として wake lock には上限を付ける (2 時間の要件に対して十分な余裕) */
     private static final long WAKE_LOCK_TIMEOUT_MS = 6 * 60 * 60 * 1000L;
+    /**
+     * 認識待ち音声の上限 (5 分 = 1500 チャンク、約 10MB)。
+     * 初回のモデル展開 (数十秒) の間の音声は十分に溜められ、
+     * 認識が録音に追いつかない状態が続いてもメモリを使い切らない。
+     */
+    private static final int MAX_QUEUED_CHUNKS = 5 * 60 * 5;
+    /** 録音中の画面に渡す直近の行数 */
+    private static final int RECENT_LINES = 8;
 
     enum Phase { IDLE, RUNNING, FINISHING, FINISHED }
 
@@ -74,10 +82,15 @@ public class TranscriptionService extends Service {
         boolean modelReady;
         long startElapsedMs;
         long endElapsedMs;
+        /** 全文。コピーのコストを避けるため FINISHED のときだけ入る (それ以外は "") */
         String text;
+        /** 直近 RECENT_LINES 行 (録音中のプレビュー用) */
+        String recent;
         String partial;
         File file;
         String error;
+        /** 致命的ではない問題 (音声の欠落・ファイル保存失敗)。無ければ null */
+        String warning;
     }
 
     // ---- プロセス内で共有する状態 (LOCK で保護) ----
@@ -90,6 +103,8 @@ public class TranscriptionService extends Service {
     private static String partial = "";
     private static File outputFile;
     private static String error;
+    private static long droppedSamples;
+    private static boolean saveFailed;
     private static Listener listener;
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -119,10 +134,13 @@ public class TranscriptionService extends Service {
             s.modelReady = modelReady;
             s.startElapsedMs = startElapsedMs;
             s.endElapsedMs = endElapsedMs;
-            s.text = text.toString();
+            // 2 時間分の全文 (数十万文字) を 0.3 秒ごとに複製しないよう、録音中は末尾だけ渡す
+            s.text = phase == Phase.FINISHED ? text.toString() : "";
+            s.recent = tail(text, RECENT_LINES);
             s.partial = partial;
             s.file = outputFile;
             s.error = error;
+            s.warning = warningLocked();
             return s;
         }
     }
@@ -136,8 +154,39 @@ public class TranscriptionService extends Service {
                 partial = "";
                 outputFile = null;
                 error = null;
+                droppedSamples = 0;
+                saveFailed = false;
             }
         }
+    }
+
+    private static String warningLocked() {
+        StringBuilder w = new StringBuilder();
+        if (droppedSamples > 0) {
+            w.append("処理が追いつかず、約").append(droppedSamples / SAMPLE_RATE)
+                    .append("秒分の音声を認識できませんでした");
+        }
+        if (saveFailed) {
+            if (w.length() > 0) {
+                w.append('\n');
+            }
+            w.append("ファイルへの保存に失敗しました (空き容量不足など)。画面のテキストをコピーしてください");
+        }
+        return w.length() > 0 ? w.toString() : null;
+    }
+
+    /** text の末尾 lines 行を返す (各行は '\n' で終わる)。 */
+    private static String tail(CharSequence text, int lines) {
+        int end = text.length();
+        int found = 0;
+        int i;
+        for (i = end - 1; i >= 0; i--) {
+            // 末尾の改行は最終行の終端なので数えない
+            if (text.charAt(i) == '\n' && i != end - 1 && ++found == lines) {
+                break;
+            }
+        }
+        return text.subSequence(i + 1, end).toString();
     }
 
     static void start(Context context) {
@@ -160,7 +209,8 @@ public class TranscriptionService extends Service {
 
     // ---- サービス本体 ----
 
-    private final BlockingQueue<short[]> queue = new LinkedBlockingQueue<>();
+    // END_OF_STREAM を必ず入れられるよう 1 つ余分に確保する
+    private final BlockingQueue<short[]> queue = new LinkedBlockingQueue<>(MAX_QUEUED_CHUNKS + 1);
     private volatile boolean stopRequested;
     private PowerManager.WakeLock wakeLock;
     private Thread recordThread;
@@ -200,6 +250,8 @@ public class TranscriptionService extends Service {
             text.setLength(0);
             partial = "";
             error = null;
+            droppedSamples = 0;
+            saveFailed = false;
             outputFile = createOutputFile();
         }
         startForegroundCompat();
@@ -259,7 +311,7 @@ public class TranscriptionService extends Service {
             while (!stopRequested) {
                 int n = recorder.read(buf, 0, buf.length);
                 if (n > 0) {
-                    queue.offer(Arrays.copyOf(buf, n));
+                    enqueue(Arrays.copyOf(buf, n));
                 } else if (n < 0) {
                     fail("録音エラー (" + n + ")");
                     return;
@@ -279,6 +331,23 @@ public class TranscriptionService extends Service {
             }
             queue.offer(END_OF_STREAM);
         }
+    }
+
+    /**
+     * 認識待ちが上限を超えたら最も古い音声を捨てる。
+     * 欠落は避けられないが、画面に出る内容を「今の発言」に近く保ち、欠落量は結果画面で知らせる。
+     */
+    private void enqueue(short[] chunk) {
+        while (queue.size() >= MAX_QUEUED_CHUNKS) {
+            short[] old = queue.poll();
+            if (old == null) {
+                break;
+            }
+            synchronized (LOCK) {
+                droppedSamples += old.length;
+            }
+        }
+        queue.offer(chunk);
     }
 
     /** 認識スレッド: キューの音声を Vosk に渡し、確定した文をファイルと画面へ出す。 */
@@ -301,6 +370,7 @@ public class TranscriptionService extends Service {
             notifyChanged();
 
             recognizer = new Recognizer(model, SAMPLE_RATE);
+            Writer[] out = {writer};
             long lastPartialAt = 0;
             while (true) {
                 short[] chunk = queue.take();
@@ -308,7 +378,7 @@ public class TranscriptionService extends Service {
                     break;
                 }
                 if (recognizer.acceptWaveForm(chunk, chunk.length)) {
-                    appendFinal(recognizer.getResult(), writer);
+                    appendFinal(recognizer.getResult(), out);
                 } else {
                     long now = SystemClock.elapsedRealtime();
                     if (now - lastPartialAt >= PARTIAL_UPDATE_INTERVAL_MS) {
@@ -321,7 +391,8 @@ public class TranscriptionService extends Service {
                     }
                 }
             }
-            appendFinal(recognizer.getFinalResult(), writer);
+            appendFinal(recognizer.getFinalResult(), out);
+            writer = out[0];
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (IOException | RuntimeException e) {
@@ -354,7 +425,11 @@ public class TranscriptionService extends Service {
         }
     }
 
-    private void appendFinal(String json, Writer writer) throws IOException {
+    /**
+     * 確定した 1 文を画面用テキストとファイルに追加する。
+     * ファイル書き込みに失敗しても認識は止めず、以降の保存だけを諦める (out[0] を null にする)。
+     */
+    private void appendFinal(String json, Writer[] out) {
         String line = TextFormatter.clean(field(json, "text"));
         synchronized (LOCK) {
             partial = "";
@@ -362,10 +437,24 @@ public class TranscriptionService extends Service {
                 text.append(line).append('\n');
             }
         }
+        Writer writer = out[0];
         if (!line.isEmpty() && writer != null) {
-            writer.write(line);
-            writer.write('\n');
-            writer.flush();
+            try {
+                writer.write(line);
+                writer.write('\n');
+                writer.flush();
+            } catch (IOException e) {
+                Log.e(TAG, "save failed; continuing in memory", e);
+                out[0] = null;
+                try {
+                    writer.close();
+                } catch (IOException ignored) {
+                    // 既に書けない状態
+                }
+                synchronized (LOCK) {
+                    saveFailed = true;
+                }
+            }
         }
         notifyChanged();
     }

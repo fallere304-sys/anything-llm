@@ -30,7 +30,6 @@ public class MainActivity extends Activity implements TranscriptionService.Liste
     private static final int REQUEST_PERMISSIONS = 1;
     /** 操作パネルを出してから自動で黒画面に戻るまで */
     private static final long CONTROLS_TIMEOUT_MS = 8000;
-    private static final int PREVIEW_LINES = 8;
 
     private View startScreen;
     private View recordingScreen;
@@ -240,6 +239,10 @@ public class MainActivity extends Activity implements TranscriptionService.Liste
     }
 
     private void renderRecording(TranscriptionService.Snapshot s) {
+        if (controls.getVisibility() != View.VISIBLE) {
+            // 黒画面中は描画しない (タッチで操作パネルを出したときに最新状態を描く)
+            return;
+        }
         if (s.phase == TranscriptionService.Phase.FINISHING) {
             statusText.setText(R.string.finishing);
             stopButton.setEnabled(false);
@@ -247,7 +250,7 @@ public class MainActivity extends Activity implements TranscriptionService.Liste
             statusText.setText(s.modelReady ? R.string.listening : R.string.loading_model);
             stopButton.setEnabled(true);
         }
-        previewText.setText(tail(s.text, PREVIEW_LINES) + s.partial);
+        previewText.setText(s.recent + s.partial);
         updateElapsed(s);
     }
 
@@ -276,6 +279,9 @@ public class MainActivity extends Activity implements TranscriptionService.Liste
         if (s.error != null) {
             info.append(getString(R.string.error_prefix, s.error)).append('\n');
             Toast.makeText(this, s.error, Toast.LENGTH_LONG).show();
+        }
+        if (s.warning != null) {
+            info.append(s.warning).append('\n');
         }
         if (s.file != null && s.file.exists()) {
             info.append(getString(R.string.saved_to, s.file.getAbsolutePath()));
@@ -348,17 +354,5 @@ public class MainActivity extends Activity implements TranscriptionService.Liste
                 .setType("text/plain")
                 .putExtra(Intent.EXTRA_TEXT, resultText.getText().toString());
         startActivity(Intent.createChooser(send, getString(R.string.share)));
-    }
-
-    private static String tail(String text, int lines) {
-        int idx = text.length();
-        // 末尾の改行の分を 1 つ余分に数える
-        for (int i = 0; i <= lines && idx > 0; i++) {
-            idx = text.lastIndexOf('\n', idx - 1);
-            if (idx < 0) {
-                return text;
-            }
-        }
-        return text.substring(idx + 1);
     }
 }
