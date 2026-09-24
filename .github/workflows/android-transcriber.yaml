@@ -10,6 +10,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: android-transcriber
@@ -37,3 +39,21 @@ jobs:
           name: mojiokoshi-apk
           path: android-transcriber/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      # スマホからも直接ダウンロードできるよう、固定 URL の Release に APK を置く
+      # https://github.com/<owner>/<repo>/releases/download/mojiokoshi-latest/mojiokoshi.apk
+      - name: Rename APK
+        run: cp app/build/outputs/apk/release/app-release.apk mojiokoshi.apk
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mojiokoshi-latest
+          name: 文字起こしアプリ (最新ビルド)
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          body: |
+            Xperia Z4 / Android 6.0 以上向けの文字起こしアプリ。
+            下の **mojiokoshi.apk** をタップしてダウンロードし、端末でインストールしてください。
+            ビルド元コミット: ${{ github.sha }}
+          files: android-transcriber/mojiokoshi.apk
+          overwrite_files: true
