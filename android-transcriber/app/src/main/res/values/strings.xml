@@ -6,6 +6,7 @@
     <string name="finishing">終了処理中…</string>
     <string name="loading_model">音声モデル読み込み中…</string>
     <string name="listening">文字起こし中</string>
+    <string name="listening_backlog">文字起こし中 (処理待ち %1$d 秒)</string>
     <string name="tap_hint">画面をタッチすると操作画面が消えます</string>
     <string name="copy_all">全文コピー</string>
     <string name="share">共有</string>

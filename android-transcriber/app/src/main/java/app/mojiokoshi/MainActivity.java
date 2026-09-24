@@ -247,7 +247,14 @@ public class MainActivity extends Activity implements TranscriptionService.Liste
             statusText.setText(R.string.finishing);
             stopButton.setEnabled(false);
         } else {
-            statusText.setText(s.modelReady ? R.string.listening : R.string.loading_model);
+            if (!s.modelReady) {
+                statusText.setText(R.string.loading_model);
+            } else if (s.backlogMs >= 2000) {
+                // 端末の処理が録音に追いついていない量を出す (性能評価の目安)
+                statusText.setText(getString(R.string.listening_backlog, s.backlogMs / 1000));
+            } else {
+                statusText.setText(R.string.listening);
+            }
             stopButton.setEnabled(true);
         }
         previewText.setText(s.recent + s.partial);

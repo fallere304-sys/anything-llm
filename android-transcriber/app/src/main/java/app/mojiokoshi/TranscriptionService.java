@@ -19,10 +19,10 @@ import android.os.PowerManager;
 import android.os.SystemClock;
 import android.util.Log;
 
-import org.json.JSONException;
-import org.json.JSONObject;
-import org.vosk.Model;
-import org.vosk.Recognizer;
+import com.k2fsa.sherpa.onnx.OfflineRecognizer;
+import com.k2fsa.sherpa.onnx.OfflineStream;
+import com.k2fsa.sherpa.onnx.SpeechSegment;
+import com.k2fsa.sherpa.onnx.Vad;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -42,7 +42,9 @@ import java.util.concurrent.LinkedBlockingQueue;
  * 画面が暗い / 消灯していても 2 時間以上止まらずに動き続けることを目的にしている。
  *
  * 録音スレッドと認識スレッドを分け、キューで繋いでいる。
+ * 認識スレッドは Silero VAD で発話の区切りを検出し、1 発話ごとに ReazonSpeech モデルで文字にする。
  * モデル読み込み中や認識が一時的に遅れても録音は途切れず、後から追いつく。
+ * 音声はメモリ上でのみ扱い、認識後に捨てる (ファイルには残さない)。
  * 確定した文は 1 文ごとにテキストファイルへ追記するので、途中で落ちても内容は残る。
  */
 public class TranscriptionService extends Service {
@@ -51,13 +53,19 @@ public class TranscriptionService extends Service {
     static final String ACTION_START = "app.mojiokoshi.START";
     static final String ACTION_STOP = "app.mojiokoshi.STOP";
 
-    private static final int SAMPLE_RATE = 16000;
+    private static final int SAMPLE_RATE = ModelManager.SAMPLE_RATE;
+    /** 発話区切りの検出は少し遅れるので、発話の頭が欠けないよう手前 0.5 秒も認識に含める */
+    private static final int SEGMENT_PAD_SAMPLES = SAMPLE_RATE / 2;
+    /** 発話の頭を補うために保持しておく直近の音声 (1 発話の上限 20 秒 + 余裕) */
+    private static final int HISTORY_SAMPLES = SAMPLE_RATE * 30;
     /** 0.2 秒ぶん */
     private static final int CHUNK_SAMPLES = SAMPLE_RATE / 5;
     private static final short[] END_OF_STREAM = new short[0];
     private static final int NOTIFICATION_ID = 1;
     private static final String CHANNEL_ID = "transcription";
-    private static final long PARTIAL_UPDATE_INTERVAL_MS = 300;
+    private static final long PARTIAL_UPDATE_INTERVAL_MS = 500;
+    /** 発話中に画面へ出す目印 (このモデルは発話が終わるまで文字を出さない) */
+    private static final String SPEAKING_MARK = "…";
     /** 保険として wake lock には上限を付ける (2 時間の要件に対して十分な余裕) */
     private static final long WAKE_LOCK_TIMEOUT_MS = 6 * 60 * 60 * 1000L;
     /**
@@ -91,6 +99,8 @@ public class TranscriptionService extends Service {
         String error;
         /** 致命的ではない問題 (音声の欠落・ファイル保存失敗)。無ければ null */
         String warning;
+        /** 認識待ちの音声の長さ (ミリ秒)。端末の処理が追いついているかの目安 */
+        long backlogMs;
     }
 
     // ---- プロセス内で共有する状態 (LOCK で保護) ----
@@ -105,6 +115,7 @@ public class TranscriptionService extends Service {
     private static String error;
     private static long droppedSamples;
     private static boolean saveFailed;
+    private static long backlogMs;
     private static Listener listener;
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -141,6 +152,7 @@ public class TranscriptionService extends Service {
             s.file = outputFile;
             s.error = error;
             s.warning = warningLocked();
+            s.backlogMs = backlogMs;
             return s;
         }
     }
@@ -252,6 +264,7 @@ public class TranscriptionService extends Service {
             error = null;
             droppedSamples = 0;
             saveFailed = false;
+            backlogMs = 0;
             outputFile = createOutputFile();
         }
         startForegroundCompat();
@@ -273,7 +286,7 @@ public class TranscriptionService extends Service {
             public void run() {
                 recognizeLoop();
             }
-        }, "vosk-recognize");
+        }, "asr-recognize");
         recordThread.setPriority(Thread.MAX_PRIORITY);
         recordThread.start();
         recognizeThread.start();
@@ -350,10 +363,13 @@ public class TranscriptionService extends Service {
         queue.offer(chunk);
     }
 
-    /** 認識スレッド: キューの音声を Vosk に渡し、確定した文をファイルと画面へ出す。 */
+    /**
+     * 認識スレッド: キューの音声を発話ごとに区切って認識し、確定した文をファイルと画面へ出す。
+     * 音声は発話の区切りまでメモリに溜め、認識したら捨てる。
+     */
     private void recognizeLoop() {
         Writer writer = null;
-        Recognizer recognizer = null;
+        Vad vad = null;
         try {
             File file;
             synchronized (LOCK) {
@@ -363,35 +379,34 @@ public class TranscriptionService extends Service {
                 writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file, true), "UTF-8"));
             }
 
-            Model model = ModelManager.await(this);
+            OfflineRecognizer recognizer = ModelManager.await(this);
+            vad = ModelManager.createVad(this);
             synchronized (LOCK) {
                 modelReady = true;
             }
             notifyChanged();
 
-            recognizer = new Recognizer(model, SAMPLE_RATE);
             Writer[] out = {writer};
+            Segmenter segmenter = new Segmenter(vad, recognizer, out);
             long lastPartialAt = 0;
             while (true) {
                 short[] chunk = queue.take();
                 if (chunk == END_OF_STREAM) {
                     break;
                 }
-                if (recognizer.acceptWaveForm(chunk, chunk.length)) {
-                    appendFinal(recognizer.getResult(), out);
-                } else {
-                    long now = SystemClock.elapsedRealtime();
-                    if (now - lastPartialAt >= PARTIAL_UPDATE_INTERVAL_MS) {
-                        lastPartialAt = now;
-                        String p = TextFormatter.clean(field(recognizer.getPartialResult(), "partial"));
-                        synchronized (LOCK) {
-                            partial = p;
-                        }
-                        notifyChanged();
+                segmenter.accept(chunk);
+                long now = SystemClock.elapsedRealtime();
+                if (now - lastPartialAt >= PARTIAL_UPDATE_INTERVAL_MS) {
+                    lastPartialAt = now;
+                    String p = vad.isSpeechDetected() ? SPEAKING_MARK : "";
+                    synchronized (LOCK) {
+                        partial = p;
+                        backlogMs = queue.size() * 1000L * CHUNK_SAMPLES / SAMPLE_RATE;
                     }
+                    notifyChanged();
                 }
             }
-            appendFinal(recognizer.getFinalResult(), out);
+            segmenter.finish();
             writer = out[0];
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -401,8 +416,8 @@ public class TranscriptionService extends Service {
             // 録音スレッドの終了を待ってキューを空にする
             drainUntilEnd();
         } finally {
-            if (recognizer != null) {
-                recognizer.close();
+            if (vad != null) {
+                vad.release();
             }
             if (writer != null) {
                 try {
@@ -412,6 +427,86 @@ public class TranscriptionService extends Service {
                 }
             }
             finish();
+        }
+    }
+
+    /** 音声を VAD に流し、区切られた発話を 1 つずつ認識する。 */
+    private final class Segmenter {
+        private final Vad vad;
+        private final OfflineRecognizer recognizer;
+        private final Writer[] out;
+        private final float[] window = new float[ModelManager.VAD_WINDOW];
+        private int windowFill;
+        /** 直近の音声 (発話の頭の補完用)。history[i % 長さ] が通算 i 番目のサンプル */
+        private final float[] history = new float[HISTORY_SAMPLES];
+        private long total;
+        private long prevSegmentEnd;
+
+        Segmenter(Vad vad, OfflineRecognizer recognizer, Writer[] out) {
+            this.vad = vad;
+            this.recognizer = recognizer;
+            this.out = out;
+        }
+
+        void accept(short[] chunk) {
+            for (short v : chunk) {
+                float f = v / 32768f;
+                history[(int) (total % HISTORY_SAMPLES)] = f;
+                total++;
+                window[windowFill++] = f;
+                if (windowFill == window.length) {
+                    vad.acceptWaveform(window);
+                    windowFill = 0;
+                    drainSegments();
+                }
+            }
+        }
+
+        void finish() {
+            if (windowFill > 0) {
+                vad.acceptWaveform(Arrays.copyOf(window, windowFill));
+                windowFill = 0;
+            }
+            vad.flush();
+            drainSegments();
+        }
+
+        private void drainSegments() {
+            while (!vad.empty()) {
+                SpeechSegment segment = vad.front();
+                vad.pop();
+                decode(withLeadingPad(segment));
+            }
+        }
+
+        /** 発話の手前の音声を最大 0.5 秒足す。直前の発話と重なる部分は足さない。 */
+        private float[] withLeadingPad(SpeechSegment segment) {
+            float[] samples = segment.getSamples();
+            long start = segment.getStart();
+            long from = Math.max(Math.max(prevSegmentEnd, start - SEGMENT_PAD_SAMPLES),
+                    total - HISTORY_SAMPLES);
+            prevSegmentEnd = start + samples.length;
+            int pad = (int) Math.max(0, start - from);
+            if (pad == 0) {
+                return samples;
+            }
+            float[] padded = new float[pad + samples.length];
+            for (int k = 0; k < pad; k++) {
+                padded[k] = history[(int) ((from + k) % HISTORY_SAMPLES)];
+            }
+            System.arraycopy(samples, 0, padded, pad, samples.length);
+            return padded;
+        }
+
+        private void decode(float[] samples) {
+            OfflineStream stream = recognizer.createStream();
+            try {
+                stream.acceptWaveform(samples, SAMPLE_RATE);
+                recognizer.decode(stream);
+                appendFinal(recognizer.getResult(stream).getText(), out);
+            } finally {
+                stream.release();
+            }
         }
     }
 
@@ -429,8 +524,8 @@ public class TranscriptionService extends Service {
      * 確定した 1 文を画面用テキストとファイルに追加する。
      * ファイル書き込みに失敗しても認識は止めず、以降の保存だけを諦める (out[0] を null にする)。
      */
-    private void appendFinal(String json, Writer[] out) {
-        String line = TextFormatter.clean(field(json, "text"));
+    private void appendFinal(String recognized, Writer[] out) {
+        String line = TextFormatter.clean(recognized);
         synchronized (LOCK) {
             partial = "";
             if (!line.isEmpty()) {
@@ -554,16 +649,5 @@ public class TranscriptionService extends Service {
                 .setUsesChronometer(true)
                 .addAction(new Notification.Action.Builder(0, getString(R.string.stop), stop).build())
                 .build();
-    }
-
-    private static String field(String json, String key) {
-        if (json == null) {
-            return "";
-        }
-        try {
-            return new JSONObject(json).optString(key, "");
-        } catch (JSONException e) {
-            return "";
-        }
     }
 }

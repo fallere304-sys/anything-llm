@@ -4,32 +4,37 @@ import android.content.Context;
 import android.content.res.AssetManager;
 import android.util.Log;
 
-import org.vosk.LibVosk;
-import org.vosk.LogLevel;
-import org.vosk.Model;
+import com.k2fsa.sherpa.onnx.OfflineModelConfig;
+import com.k2fsa.sherpa.onnx.OfflineRecognizer;
+import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig;
+import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig;
+import com.k2fsa.sherpa.onnx.SileroVadModelConfig;
+import com.k2fsa.sherpa.onnx.Vad;
+import com.k2fsa.sherpa.onnx.VadModelConfig;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
 
 /**
- * APK に同梱した Vosk 日本語モデルを内部ストレージへ展開し、読み込んで保持する。
- * 展開 (初回のみ、数十秒) と読み込み (数秒) はアプリ起動直後にバックグラウンドで始め、
+ * APK に同梱した音声認識モデル (sherpa-onnx + ReazonSpeech) を読み込んで保持する。
+ * 読み込み (数秒〜十数秒) はアプリ起動直後にバックグラウンドで始め、
  * 開始ボタンが押された時点で待たずに済むようにする。
+ * モデルは assets から直接読むので、ストレージへの展開は不要。
  */
 final class ModelManager {
     private static final String TAG = "ModelManager";
-    private static final String ASSET_DIR = "model-ja";
-    private static final String VERSION_FILE = "version.txt";
+    private static final String DIR = "asr/";
+    static final int SAMPLE_RATE = 16000;
+    /** Silero VAD に一度に渡すサンプル数 */
+    static final int VAD_WINDOW = 512;
+    /**
+     * 認識スレッド数。Xperia Z4 (Snapdragon 810) の高性能コア 4 つのうち 2 つを使う。
+     * 4 にすると速くはなるが発熱で速度を落とされやすい。
+     */
+    private static final int NUM_THREADS = 2;
 
     private static final Object LOCK = new Object();
     private static Thread loader;
-    private static Model model;
+    private static OfflineRecognizer recognizer;
     private static IOException error;
 
     private ModelManager() {
@@ -37,28 +42,24 @@ final class ModelManager {
 
     /** バックグラウンドでモデルの準備を開始する (多重呼び出し可)。 */
     static void prepareAsync(Context context) {
-        final Context app = context.getApplicationContext();
+        final AssetManager assets = context.getApplicationContext().getAssets();
         synchronized (LOCK) {
-            if (model != null || loader != null) {
+            if (recognizer != null || loader != null) {
                 return;
             }
             error = null;
             loader = new Thread(new Runnable() {
                 @Override
                 public void run() {
-                    Model loaded = null;
+                    OfflineRecognizer loaded = null;
                     IOException failure = null;
                     try {
-                        LibVosk.setLogLevel(LogLevel.WARNINGS);
-                        File dir = syncAssets(app);
-                        loaded = new Model(dir.getAbsolutePath());
-                    } catch (IOException e) {
-                        failure = e;
+                        loaded = new OfflineRecognizer(assets, recognizerConfig());
                     } catch (RuntimeException | UnsatisfiedLinkError e) {
                         failure = new IOException(e.toString(), e);
                     }
                     synchronized (LOCK) {
-                        model = loaded;
+                        recognizer = loaded;
                         error = failure;
                         loader = null;
                         LOCK.notifyAll();
@@ -67,26 +68,26 @@ final class ModelManager {
                         Log.e(TAG, "model load failed", failure);
                     }
                 }
-            }, "vosk-model-loader");
+            }, "asr-model-loader");
             loader.start();
         }
     }
 
     static boolean isReady() {
         synchronized (LOCK) {
-            return model != null;
+            return recognizer != null;
         }
     }
 
-    /** モデルの準備完了を待って返す。失敗していれば IOException。 */
-    static Model await(Context context) throws IOException, InterruptedException {
+    /** 認識器の準備完了を待って返す。失敗していれば IOException。 */
+    static OfflineRecognizer await(Context context) throws IOException, InterruptedException {
         prepareAsync(context);
         synchronized (LOCK) {
-            while (model == null && error == null) {
+            while (recognizer == null && error == null) {
                 LOCK.wait();
             }
-            if (model != null) {
-                return model;
+            if (recognizer != null) {
+                return recognizer;
             }
             IOException e = error;
             // 次回呼び出し時に再試行できるようにしておく
@@ -95,81 +96,40 @@ final class ModelManager {
         }
     }
 
-    private static File syncAssets(Context context) throws IOException {
-        AssetManager assets = context.getAssets();
-        String bundled = readAll(assets.open(ASSET_DIR + "/" + VERSION_FILE));
-        File target = new File(context.getFilesDir(), ASSET_DIR);
-        File versionFile = new File(target, VERSION_FILE);
-        if (versionFile.exists() && bundled.equals(readAll(new FileInputStream(versionFile)))) {
-            return target;
-        }
+    /** 発話区切り検出器を作る。状態を持つので文字起こしのたびに新しく作る (軽量)。 */
+    static Vad createVad(Context context) {
+        SileroVadModelConfig silero = new SileroVadModelConfig();
+        silero.setModel(DIR + "silero_vad.onnx");
+        silero.setThreshold(0.5f);
+        // 0.8 秒の無音で 1 発話とみなす (短いと文の途中の間で切れて誤認識が増える)
+        silero.setMinSilenceDuration(0.8f);
+        silero.setMinSpeechDuration(0.25f);
+        silero.setWindowSize(VAD_WINDOW);
+        // モデルが扱えるのは 30 秒程度までなので、長い発話は 20 秒で区切る
+        silero.setMaxSpeechDuration(20f);
 
-        Log.i(TAG, "extracting model " + bundled);
-        File tmp = new File(context.getFilesDir(), ASSET_DIR + ".tmp");
-        deleteRecursive(tmp);
-        copyAssetDir(assets, ASSET_DIR, tmp);
-        deleteRecursive(target);
-        if (!tmp.renameTo(target)) {
-            throw new IOException("cannot rename " + tmp + " to " + target);
-        }
-        return target;
+        VadModelConfig config = new VadModelConfig();
+        config.setSileroVadModelConfig(silero);
+        config.setSampleRate(SAMPLE_RATE);
+        config.setNumThreads(1);
+        return new Vad(context.getApplicationContext().getAssets(), config);
     }
 
-    private static void copyAssetDir(AssetManager assets, String path, File dest) throws IOException {
-        String[] children = assets.list(path);
-        if (children == null || children.length == 0) {
-            // ファイル
-            File parent = dest.getParentFile();
-            if (parent != null && !parent.exists() && !parent.mkdirs()) {
-                throw new IOException("cannot create " + parent);
-            }
-            InputStream in = assets.open(path);
-            try {
-                OutputStream out = new FileOutputStream(dest);
-                try {
-                    byte[] buf = new byte[64 * 1024];
-                    int n;
-                    while ((n = in.read(buf)) > 0) {
-                        out.write(buf, 0, n);
-                    }
-                } finally {
-                    out.close();
-                }
-            } finally {
-                in.close();
-            }
-            return;
-        }
-        if (!dest.exists() && !dest.mkdirs()) {
-            throw new IOException("cannot create " + dest);
-        }
-        for (String child : children) {
-            copyAssetDir(assets, path + "/" + child, new File(dest, child));
-        }
-    }
+    private static OfflineRecognizerConfig recognizerConfig() {
+        OfflineTransducerModelConfig transducer = new OfflineTransducerModelConfig();
+        transducer.setEncoder(DIR + "encoder-epoch-99-avg-1.int8.onnx");
+        transducer.setDecoder(DIR + "decoder-epoch-99-avg-1.onnx");
+        transducer.setJoiner(DIR + "joiner-epoch-99-avg-1.int8.onnx");
 
-    private static void deleteRecursive(File f) {
-        File[] children = f.listFiles();
-        if (children != null) {
-            for (File c : children) {
-                deleteRecursive(c);
-            }
-        }
-        //noinspection ResultOfMethodCallIgnored
-        f.delete();
-    }
+        OfflineModelConfig model = new OfflineModelConfig();
+        model.setTransducer(transducer);
+        model.setTokens(DIR + "tokens.txt");
+        model.setModelType("transducer");
+        model.setNumThreads(NUM_THREADS);
 
-    private static String readAll(InputStream in) throws IOException {
-        try {
-            BufferedReader r = new BufferedReader(new InputStreamReader(in, "UTF-8"));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = r.readLine()) != null) {
-                sb.append(line);
-            }
-            return sb.toString().trim();
-        } finally {
-            in.close();
-        }
+        OfflineRecognizerConfig config = new OfflineRecognizerConfig();
+        config.setModelConfig(model);
+        config.setDecodingMethod("greedy_search");
+        return config;
     }
 }

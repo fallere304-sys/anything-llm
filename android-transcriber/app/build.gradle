@@ -5,19 +5,44 @@ plugins {
 }
 
 // ---------------------------------------------------------------------------
-// Vosk 日本語モデル (オフライン音声認識用)
-// ビルド時に自動ダウンロードし、APK の assets/model-ja に同梱する。
-// ネットワークに繋がらない環境では、zip を手動で
-//   <プロジェクト>/.model-cache/vosk-model-small-ja-0.22.zip
+// 音声認識エンジン: sherpa-onnx (k2-fsa, Apache-2.0)
+// 日本語モデル: ReazonSpeech zipformer (reazonspeech-k2-v2, Apache-2.0) の int8 版
+// 発話区切り: Silero VAD
+//
+// いずれも GitHub の配布物をビルド時に自動ダウンロードし、APK に同梱する。
+// ネットワークに繋がらない環境では、同名のファイルを手動で
+//   <プロジェクト>/.model-cache/
 // に置けばそれが使われる。
 // ---------------------------------------------------------------------------
-def voskModelName = 'vosk-model-small-ja-0.22'
-def voskModelUrl = "https://alphacephei.com/vosk/models/${voskModelName}.zip"
+def sherpaVersion = '1.13.8'
+def sherpaRelease = 'https://github.com/k2-fsa/sherpa-onnx/releases/download'
+def asrModelName = 'sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01'
+def modelCacheDir = rootProject.file('.model-cache')
 
-abstract class PrepareVoskModel extends DefaultTask {
+void downloadIfMissing(String url, File dest) {
+    if (dest.exists()) {
+        return
+    }
+    dest.parentFile.mkdirs()
+    File tmp = new File(dest.path + '.part')
+    println "Downloading ${url}"
+    new URL(url).withInputStream { input ->
+        tmp.withOutputStream { out -> out << input }
+    }
+    if (!tmp.renameTo(dest)) {
+        throw new GradleException("cannot rename ${tmp} to ${dest}")
+    }
+}
+
+// sherpa-onnx の Android ライブラリ (AAR) は Maven Central に無いため、配布物を直接使う
+def sherpaAar = new File(modelCacheDir, "sherpa-onnx-${sherpaVersion}.aar")
+downloadIfMissing("${sherpaRelease}/v${sherpaVersion}/sherpa-onnx-${sherpaVersion}.aar", sherpaAar)
+
+abstract class PrepareAsrModel extends DefaultTask {
     @Input abstract Property<String> getModelName()
     @Input abstract Property<String> getModelUrl()
-    @Internal abstract RegularFileProperty getZipFile()
+    @Input abstract Property<String> getVadUrl()
+    @Internal abstract DirectoryProperty getCacheDir()
     @OutputDirectory abstract DirectoryProperty getOutputDir()
 
     @Inject abstract ArchiveOperations getArchiveOps()
@@ -25,37 +50,54 @@ abstract class PrepareVoskModel extends DefaultTask {
 
     @TaskAction
     void prepare() {
-        File zip = zipFile.get().asFile
-        if (!zip.exists()) {
-            zip.parentFile.mkdirs()
-            File tmp = new File(zip.path + '.part')
-            logger.lifecycle("Downloading ${modelUrl.get()}")
-            new URL(modelUrl.get()).withInputStream { input ->
-                tmp.withOutputStream { out -> out << input }
-            }
-            tmp.renameTo(zip)
-        }
+        File cache = cacheDir.get().asFile
+        String name = modelName.get()
+        File archive = new File(cache, "${name}.tar.bz2")
+        File vad = new File(cache, 'silero_vad.onnx')
+        download(modelUrl.get(), archive)
+        download(vadUrl.get(), vad)
+
         File out = outputDir.get().asFile
         fsOps.delete { delete out }
         fsOps.copy {
-            from archiveOps.zipTree(zip)
-            into new File(out, 'model-ja')
-            // zip 先頭のフォルダ名 (vosk-model-small-ja-0.22/) を取り除く
+            from archiveOps.tarTree(archive)  // 拡張子 .tar.bz2 から bzip2 と自動判定される
+            // 端末で使う int8 版だけを取り出す (sherpa-onnx の Android サンプルと同じ組み合わせ)
+            include "${name}/encoder-epoch-99-avg-1.int8.onnx"
+            include "${name}/decoder-epoch-99-avg-1.onnx"
+            include "${name}/joiner-epoch-99-avg-1.int8.onnx"
+            include "${name}/tokens.txt"
+            into new File(out, 'asr')
             eachFile { details ->
-                details.relativePath = new RelativePath(true, details.relativePath.segments.drop(1) as String[])
+                details.relativePath = new RelativePath(true, details.relativePath.lastName)
             }
             includeEmptyDirs = false
         }
-        // アプリ側で「展開済みモデルが最新か」を判定するための目印
-        new File(out, 'model-ja/version.txt').text = modelName.get()
+        fsOps.copy {
+            from vad
+            into new File(out, 'asr')
+        }
+    }
+
+    private static void download(String url, File dest) {
+        if (dest.exists()) {
+            return
+        }
+        dest.parentFile.mkdirs()
+        File tmp = new File(dest.path + '.part')
+        println "Downloading ${url}"
+        new URL(url).withInputStream { input ->
+            tmp.withOutputStream { o -> o << input }
+        }
+        tmp.renameTo(dest)
     }
 }
 
-def prepareVoskModel = tasks.register('prepareVoskModel', PrepareVoskModel) {
-    modelName.set(voskModelName)
-    modelUrl.set(voskModelUrl)
-    zipFile.set(rootProject.layout.projectDirectory.file(".model-cache/${voskModelName}.zip"))
-    outputDir.set(layout.buildDirectory.dir('generated/voskModel'))
+def prepareAsrModel = tasks.register('prepareAsrModel', PrepareAsrModel) {
+    modelName.set(asrModelName)
+    modelUrl.set("${sherpaRelease}/asr-models/${asrModelName}.tar.bz2")
+    vadUrl.set("${sherpaRelease}/asr-models/silero_vad.onnx")
+    cacheDir.set(rootProject.layout.projectDirectory.dir('.model-cache'))
+    outputDir.set(layout.buildDirectory.dir('generated/asrModel'))
 }
 
 android {
@@ -66,8 +108,8 @@ android {
         applicationId 'app.mojiokoshi'
         minSdk 23          // Android 6.0
         targetSdk 35
-        versionCode 1
-        versionName '1.0'
+        versionCode 2
+        versionName '2.0'
 
         ndk {
             // Xperia Z4 (Snapdragon 810) は ARM。x86 系ライブラリは除外して APK を軽くする
@@ -77,7 +119,7 @@ android {
 
     buildTypes {
         release {
-            // JNA はリフレクションを使うため難読化はしない
+            // JNI から Kotlin のクラスを参照するため難読化はしない
             minifyEnabled false
             signingConfig signingConfigs.debug
         }
@@ -86,6 +128,11 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    androidResources {
+        // モデル (約 170MB) を圧縮せずに格納し、起動時の読み込みを速くする
+        noCompress 'onnx'
     }
 
     lint {
@@ -103,11 +150,12 @@ android {
 
 androidComponents {
     onVariants(selector().all()) { variant ->
-        variant.sources.assets.addGeneratedSourceDirectory(prepareVoskModel) { it.outputDir }
+        variant.sources.assets.addGeneratedSourceDirectory(prepareAsrModel) { it.outputDir }
     }
 }
 
 dependencies {
-    implementation 'com.alphacephei:vosk-android:0.3.47'
-    implementation 'net.java.dev.jna:jna:5.13.0@aar'
+    implementation files(sherpaAar)
+    // sherpa-onnx の Android API は Kotlin 製 (1.7 でビルド) なので標準ライブラリが要る
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.24'
 }
