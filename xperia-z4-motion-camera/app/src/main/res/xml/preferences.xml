@@ -72,11 +72,6 @@
             android:inputType="number"
             android:key="port"
             android:title="@string/pref_port" />
-        <EditTextPreference
-            android:defaultValue=""
-            android:inputType="textPassword"
-            android:key="password"
-            android:title="@string/pref_password" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="@string/pref_cat_remote">
@@ -85,6 +80,18 @@
             android:key="remote_enabled"
             android:summary="@string/pref_remote_summary"
             android:title="@string/pref_remote" />
+        <EditTextPreference
+            android:defaultValue=""
+            android:inputType="textPassword"
+            android:key="password"
+            android:summary="@string/pref_password_summary"
+            android:title="@string/pref_password" />
+        <EditTextPreference
+            android:defaultValue="@string/default_external_host"
+            android:inputType="textUri"
+            android:key="external_host"
+            android:summary="@string/pref_external_host_summary"
+            android:title="@string/pref_external_host" />
         <EditTextPreference
             android:defaultValue="8443"
             android:inputType="number"

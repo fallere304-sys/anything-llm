@@ -14,8 +14,9 @@
   main { max-width: 960px; margin: 0 auto; padding: 12px 16px 40px; }
   .view { position: relative; background: #000; border-radius: 8px; overflow: hidden;
           aspect-ratio: 4 / 3; display: flex; align-items: center; justify-content: center; }
+  @supports not (aspect-ratio: 4 / 3) { .view { height: 70vw; max-height: 720px; } }
   .view img { max-width: 100%; max-height: 100%; }
-  .view .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  .view .msg { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center;
                flex-direction: column; gap: 10px; background: rgba(0,0,0,.6); text-align: center; padding: 16px; }
   button { font-size: 15px; padding: 8px 16px; border-radius: 6px; border: 0; background: #3a6df0; color: #fff; }
   button.secondary { background: #333; }
@@ -27,14 +28,27 @@
          background: #333; color: #fff; text-decoration: none; line-height: 1.2; cursor: pointer; }
   .toolbar { position: sticky; top: 0; z-index: 1; background: #111; display: flex; flex-wrap: wrap;
              align-items: center; gap: 8px; padding: 10px 4px; border-bottom: 1px solid #2a2a2a; }
-  .toolbar .all { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-right: auto; }
+  .toolbar .all { font-size: 14px; margin-right: auto; }
+  .toolbar button { font-size: 14px; padding: 8px 10px; }
   #selInfo { width: 100%; }
   #selInfo:empty { display: none; }
   #notice { min-height: 1.4em; margin: 6px 4px; }
-  input[type=checkbox] { width: 22px; height: 22px; margin: 0; accent-color: #3a6df0; flex: none; }
+  #notice.err { color: #ff8a80; }
+  /* Custom checkbox: same size and look in every browser, with a large tap area. */
+  .cb { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+        padding: 8px; margin: -8px; -webkit-tap-highlight-color: transparent; user-select: none; }
+  .cb input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+  .cb .box { width: 24px; height: 24px; flex: none; box-sizing: border-box; border: 2px solid #8a8a8a;
+             border-radius: 5px; background: #111; position: relative; }
+  .cb input:checked + .box { background: #3a6df0; border-color: #3a6df0; }
+  .cb input:checked + .box::after { content: ''; position: absolute; left: 6px; top: 1px; width: 6px; height: 12px;
+             border: solid #fff; border-width: 0 3px 3px 0; transform: rotate(45deg); }
+  .cb input.partial + .box { background: #3a6df0; border-color: #3a6df0; }
+  .cb input.partial + .box::after { content: ''; position: absolute; left: 4px; top: 9px; width: 12px; height: 3px; background: #fff; }
+  .cb input:focus-visible + .box { outline: 2px solid #8ab4ff; outline-offset: 2px; }
+  .cb input:disabled + .box { opacity: .4; }
   li { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid #2a2a2a; }
   li.checked { background: #1a2238; }
-  li .chk { display: flex; padding: 6px; margin: -6px; }
   li .info { flex: 1; min-width: 0; }
   li .info a { color: #8ab4ff; word-break: break-all; }
   li.playing .info a { font-weight: bold; }
@@ -46,11 +60,6 @@
   .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; font-size: 14px; }
   .kv dt { color: #999; }
   .kv dd { margin: 0; word-break: break-all; }
-  .verdict { margin: 12px 0 6px; font-weight: bold; }
-  .verdict.ok { color: #7bd88f; }
-  .verdict.ng { color: #ffb74d; }
-  ol.advice { padding-left: 20px; margin: 6px 0; font-size: 14px; }
-  ol.advice li { display: list-item; border: 0; padding: 3px 0; }
   .fp { font-family: ui-monospace, monospace; font-size: 12px; }
 </style>
 </head>
@@ -72,9 +81,9 @@
   <h2>録画</h2>
   <video id="player" controls playsinline></video>
   <div class="toolbar">
-    <label class="all"><input type="checkbox" id="selAll">すべて選択</label>
-    <button id="bulkSave" disabled>一括保存</button>
-    <button id="bulkDel" class="danger" disabled>一括削除</button>
+    <label class="cb all"><input type="checkbox" id="selAll"><span class="box"></span>すべて選択</label>
+    <button type="button" id="bulkSave" disabled>一括保存</button>
+    <button type="button" id="bulkDel" class="danger" disabled>一括削除</button>
     <div id="selInfo" class="meta"></div>
   </div>
   <div id="notice" class="meta" role="status"></div>
@@ -83,12 +92,6 @@
   <div class="panel">
     <dl class="kv" id="remoteKv"></dl>
     <p class="meta" id="remoteHint"></p>
-    <button class="secondary" id="diagBtn">ネットワーク診断を実行</button>
-    <div id="diag" class="hidden">
-      <div class="verdict" id="diagVerdict"></div>
-      <dl class="kv" id="diagKv"></dl>
-      <ol class="advice" id="diagAdvice"></ol>
-    </div>
   </div>
 
   <!-- Bulk save posts the names so the browser streams the ZIP straight to a download. -->
@@ -97,112 +100,138 @@
   </form>
 </main>
 <script>
+// ES5 + XMLHttpRequest only, so older phones / tablets and WebView-based browsers work too.
 (function () {
+  'use strict';
   var LIVE_LIMIT_MS = 10 * 60 * 1000;
-  var live = document.getElementById('live');
-  var paused = document.getElementById('paused');
-  var toggle = document.getElementById('toggle');
-  var stateEl = document.getElementById('state');
-  var player = document.getElementById('player');
-  var liveTimer = null;
-  var rotation = 0;
+  var MAX_ZIP_BYTES = 3.9e9; // the phone cannot write ZIP files over 4 GB (no ZIP64 before Android 7)
 
-  function startLive() {
-    live.src = '/stream.mjpg?t=' + Date.now();
-    paused.classList.add('hidden');
-    toggle.textContent = 'ライブ停止';
-    clearTimeout(liveTimer);
-    liveTimer = setTimeout(stopLive, LIVE_LIMIT_MS);
-  }
-  function stopLive() {
-    live.removeAttribute('src');
-    live.src = '';
-    paused.classList.remove('hidden');
-    toggle.textContent = 'ライブ再開';
-    clearTimeout(liveTimer);
-  }
-  toggle.onclick = function () { live.getAttribute('src') ? stopLive() : startLive(); };
-  document.getElementById('resume').onclick = startLive;
-  // Stop streaming when the tab is hidden: the phone only encodes JPEGs while someone watches.
-  document.addEventListener('visibilitychange', function () {
-    if (document.hidden) stopLive(); else startLive();
-  });
-
-  function fmtSize(b) { return b > 1e9 ? (b / 1e9).toFixed(2) + ' GB' : (b / 1e6).toFixed(1) + ' MB'; }
-  function fmtName(n) {
-    var m = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(n);
-    return m ? m[1] + '/' + m[2] + '/' + m[3] + ' ' + m[4] + ':' + m[5] + ':' + m[6] : n;
-  }
+  function $(id) { return document.getElementById(id); }
   function el(tag, text, cls) {
     var e = document.createElement(tag);
     if (text) e.textContent = text;
     if (cls) e.className = cls;
     return e;
   }
+  function show(e, on) {
+    if (on) e.className = e.className.replace(/(^|\s)hidden(\s|$)/g, ' ').replace(/^\s+|\s+$/g, '');
+    else if (!/(^|\s)hidden(\s|$)/.test(e.className)) e.className += ' hidden';
+  }
+  function fmtSize(b) { return b > 1e9 ? (b / 1e9).toFixed(2) + ' GB' : (b / 1e6).toFixed(1) + ' MB'; }
+  function fmtName(n) {
+    var m = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(n);
+    return m ? m[1] + '/' + m[2] + '/' + m[3] + ' ' + m[4] + ':' + m[5] + ':' + m[6] : n;
+  }
+  function recUrl(name) { return '/rec/' + encodeURIComponent(name); }
+
+  // cb(err, text)
+  function request(method, url, body, headers, cb) {
+    var x = new XMLHttpRequest();
+    x.open(method, url, true);
+    for (var k in headers) if (headers.hasOwnProperty(k)) x.setRequestHeader(k, headers[k]);
+    x.onreadystatechange = function () {
+      if (x.readyState !== 4) return;
+      if (x.status >= 200 && x.status < 300) cb(null, x.responseText);
+      else cb(new Error(x.status ? 'HTTP ' + x.status : '通信エラー'));
+    };
+    x.send(body === undefined ? null : body);
+  }
+  function getJson(url, cb) {
+    // Cache-busting: some mobile browsers reuse cached GET responses despite no-cache.
+    request('GET', url + (url.indexOf('?') < 0 ? '?' : '&') + '_=' + new Date().getTime(), undefined, {}, function (err, text) {
+      if (err) return cb(err);
+      var data;
+      try { data = JSON.parse(text); } catch (e) { return cb(e); }
+      cb(null, data);
+    });
+  }
+
+  // ---- live view ----
+  var live = $('live'), paused = $('paused'), toggle = $('toggle'), stateEl = $('state'), player = $('player');
+  var liveTimer = null, liveOn = false, rotation = 0;
+  function startLive() {
+    live.src = '/stream.mjpg?t=' + new Date().getTime();
+    liveOn = true;
+    show(paused, false);
+    toggle.textContent = 'ライブ停止';
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(stopLive, LIVE_LIMIT_MS);
+  }
+  function stopLive() {
+    live.removeAttribute('src');
+    liveOn = false;
+    show(paused, true);
+    toggle.textContent = 'ライブ再開';
+    clearTimeout(liveTimer);
+  }
+  toggle.onclick = function () { if (liveOn) stopLive(); else startLive(); };
+  $('resume').onclick = startLive;
+  // Stop streaming when the tab is hidden: the phone only encodes JPEGs while someone watches.
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) stopLive(); else startLive();
+  });
 
   // ---- recordings: list, selection, save / delete ----
-  var MAX_ZIP_BYTES = 3.9e9; // the phone cannot write ZIP files over 4 GB (no ZIP64 before Android 7)
-  var listEl = document.getElementById('list');
-  var selAll = document.getElementById('selAll');
-  var bulkSave = document.getElementById('bulkSave');
-  var bulkDel = document.getElementById('bulkDel');
-  var selInfo = document.getElementById('selInfo');
-  var notice = document.getElementById('notice');
-  var zipForm = document.getElementById('zipForm');
-  var items = [];
-  var selected = {};
+  var listEl = $('list'), selAll = $('selAll'), bulkSave = $('bulkSave'), bulkDel = $('bulkDel');
+  var selInfo = $('selInfo'), notice = $('notice'), zipForm = $('zipForm');
+  var items = [];        // [{name, size, modified}], newest first
+  var selected = {};     // name -> true
   var playing = null;
   var busy = false;
 
-  function say(text) { notice.textContent = text || ''; }
-  function recUrl(name) { return '/rec/' + encodeURIComponent(name); }
+  function say(text, isError) {
+    notice.textContent = text || '';
+    notice.className = 'meta' + (isError ? ' err' : '');
+  }
 
-  function selectedItems() {
-    return items.filter(function (it) { return selected[it.name]; });
+  function selectedNames() {
+    var out = [];
+    for (var i = 0; i < items.length; i++) if (selected[items[i].name]) out.push(items[i].name);
+    return out;
   }
 
   function updateToolbar() {
-    var sel = selectedItems();
-    var size = sel.reduce(function (a, it) { return a + it.size; }, 0);
-    bulkSave.disabled = bulkDel.disabled = busy || sel.length === 0;
+    var names = selectedNames(), size = 0;
+    for (var i = 0; i < items.length; i++) if (selected[items[i].name]) size += items[i].size;
+    bulkSave.disabled = bulkDel.disabled = busy || names.length === 0;
+    bulkSave.textContent = names.length ? '一括保存（' + names.length + '）' : '一括保存';
+    bulkDel.textContent = names.length ? '一括削除（' + names.length + '）' : '一括削除';
     selAll.disabled = busy || items.length === 0;
-    selAll.checked = items.length > 0 && sel.length === items.length;
-    selAll.indeterminate = sel.length > 0 && sel.length < items.length;
-    selInfo.textContent = sel.length ? sel.length + '件選択中（' + fmtSize(size) + '）' : '';
+    selAll.checked = items.length > 0 && names.length === items.length;
+    // Own "partial" state instead of .indeterminate, which some browsers do not draw.
+    selAll.className = names.length > 0 && names.length < items.length ? 'partial' : '';
+    selInfo.textContent = names.length ? names.length + '件選択中（' + fmtSize(size) + '）' : '';
+    var boxes = listEl.getElementsByTagName('input');
+    for (var j = 0; j < boxes.length; j++) boxes[j].disabled = busy;
+    var buttons = listEl.getElementsByTagName('button');
+    for (var k = 0; k < buttons.length; k++) buttons[k].disabled = busy;
+  }
+
+  function rowClass(name) {
+    return (selected[name] ? 'checked' : '') + (playing === name ? ' playing' : '');
   }
 
   function render() {
     listEl.textContent = '';
     if (!items.length) listEl.appendChild(el('li', 'まだ録画はありません', 'meta'));
-    items.forEach(function (it) {
-      var li = el('li');
-      if (selected[it.name]) li.classList.add('checked');
-      if (playing === it.name) li.classList.add('playing');
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var li = el('li', null, rowClass(it.name));
+      li.setAttribute('data-name', it.name);
 
-      var chkWrap = el('label', null, 'chk');
+      var label = el('label', null, 'cb');
       var chk = el('input');
       chk.type = 'checkbox';
       chk.checked = !!selected[it.name];
+      chk.setAttribute('data-name', it.name);
       chk.setAttribute('aria-label', fmtName(it.name) + ' を選択');
-      chk.onchange = function () {
-        if (chk.checked) selected[it.name] = true; else delete selected[it.name];
-        li.classList.toggle('checked', chk.checked);
-        updateToolbar();
-      };
-      chkWrap.appendChild(chk);
+      label.appendChild(chk);
+      label.appendChild(el('span', null, 'box'));
 
       var info = el('div', null, 'info');
       var play = el('a', fmtName(it.name));
-      play.href = '#';
-      play.onclick = function (ev) {
-        ev.preventDefault();
-        playing = it.name;
-        player.style.display = 'block';
-        player.src = recUrl(it.name);
-        player.play();
-        player.scrollIntoView({ behavior: 'smooth' });
-        render();
-      };
+      play.href = recUrl(it.name);
+      play.setAttribute('data-action', 'play');
       info.appendChild(play);
       info.appendChild(el('div', fmtSize(it.size), 'meta'));
 
@@ -211,43 +240,98 @@
       save.href = recUrl(it.name) + '?dl=download';
       save.setAttribute('download', it.name);
       var del = el('button', '削除', 'btn danger');
-      del.disabled = busy;
-      del.onclick = function () { deleteFiles([it.name]); };
+      del.type = 'button';
+      del.setAttribute('data-action', 'delete');
       actions.appendChild(save);
       actions.appendChild(del);
 
-      li.appendChild(chkWrap);
+      li.appendChild(label);
       li.appendChild(info);
       li.appendChild(actions);
       listEl.appendChild(li);
-    });
+    }
     updateToolbar();
   }
 
-  function loadList() {
-    return fetch('/api/recordings').then(function (r) { return r.json(); }).then(function (data) {
-      items = data;
-      // Forget selections of files that no longer exist (e.g. removed by the storage rotation).
-      var present = {};
-      items.forEach(function (it) { present[it.name] = true; });
-      Object.keys(selected).forEach(function (n) { if (!present[n]) delete selected[n]; });
+  function loadList(done) {
+    getJson('/api/recordings', function (err, data) {
+      if (err) {
+        say('録画一覧を読み込めません（' + err.message + '）', true);
+      } else {
+        items = data;
+        var present = {}, i;
+        for (i = 0; i < items.length; i++) present[items[i].name] = true;
+        // Forget selections of files that no longer exist (e.g. removed by the storage rotation).
+        for (var n in selected) if (selected.hasOwnProperty(n) && !present[n]) delete selected[n];
+      }
+      render(); // always, so buttons are re-enabled even after an error
+      if (done) done();
+    });
+  }
+
+  // One listener for all rows (rows are rebuilt on every refresh).
+  function rowName(node) {
+    while (node && node !== listEl) {
+      if (node.getAttribute && node.getAttribute('data-name')) return node.getAttribute('data-name');
+      node = node.parentNode;
+    }
+    return null;
+  }
+  listEl.addEventListener('change', function (ev) {
+    var t = ev.target;
+    if (!t || t.type !== 'checkbox') return;
+    var name = t.getAttribute('data-name');
+    if (t.checked) selected[name] = true; else delete selected[name];
+    var node = t;
+    while (node && node.tagName !== 'LI') node = node.parentNode;
+    if (node) node.className = rowClass(name);
+    updateToolbar();
+  });
+  listEl.addEventListener('click', function (ev) {
+    var t = ev.target;
+    while (t && t !== listEl && !(t.getAttribute && t.getAttribute('data-action'))) t = t.parentNode;
+    if (!t || t === listEl) return;
+    var name = rowName(t);
+    if (!name) return;
+    var action = t.getAttribute('data-action');
+    if (action === 'play') {
+      ev.preventDefault();
+      playing = name;
+      player.style.display = 'block';
+      player.src = recUrl(name);
+      try { player.play(); } catch (e) { /* autoplay may be refused; controls remain */ }
+      if (player.scrollIntoView) player.scrollIntoView();
       render();
-    }).catch(function () {});
+    } else if (action === 'delete') {
+      ev.preventDefault();
+      deleteFiles([name]);
+    }
+  });
+
+  selAll.addEventListener('change', function () {
+    // From "partial" or "none" -> select all; from "all" -> clear.
+    var selectAll = selAll.checked;
+    selected = {};
+    if (selectAll) for (var i = 0; i < items.length; i++) selected[items[i].name] = true;
+    render();
+  });
+
+  function download(url, name) {
+    var a = el('a');
+    a.href = url;
+    a.setAttribute('download', name);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }
 
   function saveFiles(names) {
-    if (names.length === 1) {
-      var a = el('a');
-      a.href = recUrl(names[0]) + '?dl=download';
-      a.setAttribute('download', names[0]);
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      return;
-    }
-    var total = selectedItems().reduce(function (s, it) { return s + it.size; }, 0);
+    if (!names.length) { say('チェックされた録画がありません', true); return; }
+    if (names.length === 1) { download(recUrl(names[0]) + '?dl=download', names[0]); return; }
+    var total = 0;
+    for (var i = 0; i < items.length; i++) if (selected[items[i].name]) total += items[i].size;
     if (total > MAX_ZIP_BYTES) {
-      say('選択したファイルの合計が大きすぎます（一括保存は3.9GBまで）。選択を減らしてください。');
+      say('選択したファイルの合計が大きすぎます（一括保存は3.9GBまで）。選択を減らしてください。', true);
       return;
     }
     zipForm.elements.names.value = names.join('\n');
@@ -255,61 +339,62 @@
     say(names.length + '件をZIPにまとめて保存します（無圧縮）…');
   }
 
+  function stopPlayerIf(names) {
+    for (var i = 0; i < names.length; i++) {
+      if (playing === names[i]) {
+        playing = null;
+        player.pause();
+        player.removeAttribute('src');
+        try { player.load(); } catch (e) { /* ignore */ }
+        player.style.display = 'none';
+      }
+    }
+  }
+
   function deleteFiles(names) {
+    if (busy) return;
+    if (!names.length) { say('チェックされた録画がありません', true); return; }
     var msg = names.length === 1
       ? '「' + fmtName(names[0]) + '」を削除しますか？\n削除すると元に戻せません。'
       : names.length + '件の録画を削除しますか？\n削除すると元に戻せません。';
-    if (!confirm(msg)) return;
+    if (!window.confirm(msg)) return;
     busy = true;
-    render();
-    fetch('/api/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'X-Requested-With': 'z4motioncam' },
-      body: names.join('\n')
-    }).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    }).then(function (res) {
-      res.deleted.forEach(function (n) {
-        delete selected[n];
-        if (playing === n) {
-          playing = null;
-          player.pause();
-          player.removeAttribute('src');
-          player.load();
-          player.style.display = 'none';
+    updateToolbar();
+    say('削除しています…');
+    stopPlayerIf(names); // release the file before deleting it
+    request('POST', '/api/delete', names.join('\n'),
+      { 'Content-Type': 'text/plain; charset=utf-8', 'X-Z4-Action': 'delete' },
+      function (err, text) {
+        var message, isError = false;
+        if (err) {
+          message = '削除に失敗しました（' + err.message + '）';
+          isError = true;
+        } else {
+          var res;
+          try { res = JSON.parse(text); } catch (e) { res = { deleted: [], failed: names }; }
+          for (var i = 0; i < res.deleted.length; i++) delete selected[res.deleted[i]];
+          message = res.deleted.length + '件削除しました';
+          if (res.failed.length) {
+            message += '（' + res.failed.length + '件は削除できませんでした）';
+            isError = true;
+          }
         }
+        busy = false;
+        loadList(function () { say(message, isError); });
       });
-      say(res.deleted.length + '件削除しました' + (res.failed.length ? '（' + res.failed.length + '件は削除できませんでした）' : ''));
-    }).catch(function (e) {
-      say('削除に失敗しました: ' + e.message);
-    }).then(function () {
-      busy = false;
-      return loadList();
-    });
   }
 
-  selAll.onchange = function () {
-    selected = {};
-    if (selAll.checked) items.forEach(function (it) { selected[it.name] = true; });
-    render();
-  };
-  bulkSave.onclick = function () {
-    saveFiles(selectedItems().map(function (it) { return it.name; }));
-  };
-  bulkDel.onclick = function () {
-    deleteFiles(selectedItems().map(function (it) { return it.name; }));
-  };
+  bulkSave.addEventListener('click', function () { saveFiles(selectedNames()); });
+  bulkDel.addEventListener('click', function () { deleteFiles(selectedNames()); });
 
-  // ---- remote access & network diagnosis ----
-  var remoteKv = document.getElementById('remoteKv');
-  var remoteHint = document.getElementById('remoteHint');
-  var diagBtn = document.getElementById('diagBtn');
+  // ---- remote access ----
+  var remoteKv = $('remoteKv'), remoteHint = $('remoteHint');
 
   function fillKv(dl, rows) {
     dl.textContent = '';
-    rows.forEach(function (r) {
-      if (r[1] === null || r[1] === undefined || r[1] === '') return;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r[1] === null || r[1] === undefined || r[1] === '') continue;
       dl.appendChild(el('dt', r[0]));
       var dd = el('dd', null, r[2] || '');
       if (/^https:\/\//.test(r[1])) {
@@ -321,13 +406,13 @@
         dd.textContent = r[1];
       }
       dl.appendChild(dd);
-    });
+    }
   }
 
   function showRemote(r) {
     if (!r || !r.enabled) {
       fillKv(remoteKv, [['状態', '無効']]);
-      remoteHint.textContent = 'ネットワーク診断で「外出先から視聴できます」と判定されたら、Z4の「設定 > 外出先からの視聴」を有効にしてください。';
+      remoteHint.textContent = 'Z4の「設定 > 外出先からの視聴」で有効にできます（8文字以上のパスワードが必要）。';
       return;
     }
     fillKv(remoteKv, [
@@ -335,9 +420,7 @@
       ['外出先URL', r.url],
       ['ポート開放', r.upnp],
       ['DDNS', r.ddns],
-      ['公開IPv4', r.publicV4],
-      ['IPv6', r.globalV6],
-      ['自己接続テスト', r.selfReachable === true ? '外部ポートへ接続できました' : null],
+      ['ルーターのグローバルIP', r.wanIp],
       ['証明書の指紋', r.fingerprint, 'fp']
     ]);
     remoteHint.textContent = r.active
@@ -345,42 +428,13 @@
       : '';
   }
 
-  var VERDICT_OK = { GLOBAL_ON_ROUTER: true };
-  diagBtn.onclick = function () {
-    diagBtn.disabled = true;
-    diagBtn.textContent = '診断中…（10秒ほどかかります）';
-    fetch('/api/netdiag?refresh=1').then(function (r) { return r.json(); }).then(function (d) {
-      document.getElementById('diag').classList.remove('hidden');
-      var v = document.getElementById('diagVerdict');
-      var v6 = d.globalV6 ? ' IPv6なら接続できる可能性があります。' : '';
-      v.textContent = (VERDICT_OK[d.verdict] ? '◎ ' : '△ ') + d.summary + (VERDICT_OK[d.verdict] ? '' : v6);
-      v.className = 'verdict ' + (VERDICT_OK[d.verdict] ? 'ok' : 'ng');
-      fillKv(document.getElementById('diagKv'), [
-        ['Z4のLAN IP', d.localV4],
-        ['ルーター', d.gateway],
-        ['公開IPv4（外から見たIP）', d.publicV4 || '取得できません'],
-        ['ルーターのWAN側IPv4', d.upnp ? (d.routerWanV4 || '（なし）') : null],
-        ['UPnP', d.upnp ? '応答あり' : (d.upnpError || '応答なし')],
-        ['IPv6グローバル', d.globalV6 || 'なし'],
-        ['診断時刻', new Date(d.checkedAt).toLocaleString()]
-      ]);
-      var ol = document.getElementById('diagAdvice');
-      ol.textContent = '';
-      d.advice.forEach(function (t) { ol.appendChild(el('li', t)); });
-    }).catch(function () {
-      document.getElementById('diag').classList.remove('hidden');
-      document.getElementById('diagVerdict').textContent = 'ネットワーク診断に失敗しました';
-    }).then(function () {
-      diagBtn.disabled = false;
-      diagBtn.textContent = 'ネットワーク診断を実行';
-    });
-  };
-
+  // ---- status ----
   var STATE = { recording: '● 録画中', watching: '監視中', starting: 'カメラ準備中',
                 cooling: '高温のため一時停止中', stopped: '停止中' };
   var lastState = '';
   function loadStatus() {
-    fetch('/api/status').then(function (r) { return r.json(); }).then(function (s) {
+    getJson('/api/status', function (err, s) {
+      if (err) { stateEl.textContent = '接続できません'; stateEl.className = ''; return; }
       var txt = (STATE[s.state] || s.state) + '  電池 ' + s.tempC.toFixed(1) + '℃'
         + (s.charging ? '（充電中）' : '') + '  空き ' + (s.freeBytes / 1e9).toFixed(1) + ' GB';
       if (s.lastMotion) txt += '  最終検知 ' + new Date(s.lastMotion).toLocaleTimeString();
@@ -389,13 +443,13 @@
       stateEl.className = s.state === 'recording' ? 'rec' : '';
       if (s.rotation !== rotation) {
         rotation = s.rotation;
-        live.style.transform = 'rotate(' + rotation + 'deg)';
+        live.style.webkitTransform = live.style.transform = 'rotate(' + rotation + 'deg)';
       }
       showRemote(s.remote);
-      // Refresh the list when a recording has just finished.
-      if (lastState === 'recording' && s.state !== 'recording') loadList();
+      // Refresh the list when a recording has just finished (not while a delete is running).
+      if (lastState === 'recording' && s.state !== 'recording' && !busy) loadList();
       lastState = s.state;
-    }).catch(function () { stateEl.textContent = '接続できません'; stateEl.className = ''; });
+    });
   }
 
   startLive();

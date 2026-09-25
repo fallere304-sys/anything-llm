@@ -8,7 +8,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.ConnectivityManager;
-import android.net.DhcpInfo;
 import android.net.wifi.WifiManager;
 import android.os.BatteryManager;
 import android.os.Binder;
@@ -46,8 +45,7 @@ public class CameraService extends Service implements HttpServer.Backend {
     private volatile RecordingStore store;
     private volatile CameraPipeline pipeline;
     private volatile RemoteAccess remote;
-    private volatile NetworkDiagnostics.Result diag;
-    private SSLSocketFactory clientTls;
+    private SSLSocketFactory ddnsTls;
     private HttpServer http;
     private String httpError;
     private byte[] indexHtml;
@@ -98,17 +96,6 @@ public class CameraService extends Service implements HttpServer.Backend {
             }
         } catch (IOException e) {
             indexHtml = "<h1>index.html missing</h1>".getBytes();
-        }
-
-        try {
-            InputStream in = getAssets().open("cacerts.pem");
-            try {
-                clientTls = NetUtil.clientTls(NetUtil.parsePem(new String(HttpServer.readAll(in), "UTF-8")));
-            } finally {
-                in.close();
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "extra roots unavailable", e);
         }
 
         applySettings(AppSettings.load(this));
@@ -169,7 +156,8 @@ public class CameraService extends Service implements HttpServer.Backend {
             }
         }
         if (thermal != ThermalPolicy.Level.CRITICAL) startPipeline();
-        remote = new RemoteAccess(this, s, this, clientTls);
+        if (s.ddnsConfigured() && ddnsTls == null) ddnsTls = loadDdnsTls();
+        remote = new RemoteAccess(this, s, this, ddnsTls);
         remote.start();
     }
 
@@ -206,6 +194,21 @@ public class CameraService extends Service implements HttpServer.Backend {
         } else {
             if (pipeline == null) startPipeline();
             pipeline.setThermalLevel(next);
+        }
+    }
+
+    /** TLS for the DuckDNS update: Android 5-7 lack some current root CAs, so bundled ones are added. */
+    private SSLSocketFactory loadDdnsTls() {
+        try {
+            InputStream in = getAssets().open("cacerts.pem");
+            try {
+                return NetUtil.clientTls(NetUtil.parsePem(new String(HttpServer.readAll(in), "UTF-8")));
+            } finally {
+                in.close();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "extra roots unavailable", e);
+            return null;
         }
     }
 
@@ -302,24 +305,6 @@ public class CameraService extends Service implements HttpServer.Backend {
                 store.usableBytes(), p != null && p.storageFull(), settings.rotation, hub.clients(),
                 err == null ? "null" : HttpServer.jsonString(err),
                 remote == null ? "null" : remote.statusJson());
-    }
-
-    @Override
-    public synchronized String netDiagJson(boolean refresh) {
-        NetworkDiagnostics.Result d = diag;
-        if (refresh || d == null || System.currentTimeMillis() - d.checkedAt > 5 * 60_000L) {
-            d = NetworkDiagnostics.run(gatewayIpv4(), clientTls);
-            diag = d;
-        }
-        return d.toJson(settings.remotePort);
-    }
-
-    private String gatewayIpv4() {
-        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
-        DhcpInfo dhcp = wm == null ? null : wm.getDhcpInfo();
-        if (dhcp == null || dhcp.gateway == 0) return null;
-        int g = dhcp.gateway; // little-endian
-        return (g & 0xFF) + "." + ((g >> 8) & 0xFF) + "." + ((g >> 16) & 0xFF) + "." + ((g >> 24) & 0xFF);
     }
 
     @Override

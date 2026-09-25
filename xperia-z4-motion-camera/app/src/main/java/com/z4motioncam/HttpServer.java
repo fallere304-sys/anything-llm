@@ -47,11 +47,8 @@ final class HttpServer {
 
         FrameHub frames();
 
-        /** Empty string disables authentication. */
+        /** Password for the Internet-facing (HTTPS) server. The LAN server never asks for one. */
         String password();
-
-        /** Network diagnosis as JSON; {@code refresh} forces a new run instead of the cached one. */
-        String netDiagJson(boolean refresh);
     }
 
     private static final Charset UTF8 = Charset.forName("UTF-8");
@@ -70,7 +67,10 @@ final class HttpServer {
     private final ServerSocketFactory factory;
     /** LAN server: refuse connections that do not come from the home network. */
     private final boolean localOnly;
-    /** Internet-facing server: never serve anything without a password. */
+    /**
+     * Internet-facing server: every request needs the password, and nothing is served while none
+     * is set. The LAN server (false) never asks for a password.
+     */
     private final boolean requirePassword;
     /** ip -> {failures, windowStart, blockedUntil} */
     private final Map<String, long[]> authFailures = new HashMap<>();
@@ -196,14 +196,13 @@ final class HttpServer {
 
     private void handle(Request req, OutputStream out, String clientIp) throws IOException {
         boolean head = "HEAD".equals(req.method);
-        String pw = backend.password();
-        boolean hasPassword = pw != null && !pw.isEmpty();
-        if (requirePassword && !hasPassword) {
-            writeSimple(out, 403, "text/plain; charset=utf-8",
-                    "パスワードが未設定のため外部からの接続を停止しています\n".getBytes(UTF8), head);
-            return;
-        }
-        if (hasPassword) {
+        if (requirePassword) {
+            String pw = backend.password();
+            if (pw == null || pw.isEmpty()) {
+                writeSimple(out, 403, "text/plain; charset=utf-8",
+                        "パスワードが未設定のため外部からの接続を停止しています\n".getBytes(UTF8), head);
+                return;
+            }
             if (isBlocked(clientIp)) {
                 writeSimple(out, 429, "text/plain; charset=utf-8",
                         "パスワードの誤りが続いたため一時的にブロックしています。15分後に再試行してください\n".getBytes(UTF8), head);
@@ -235,9 +234,6 @@ final class HttpServer {
         } else if (path.equals("/api/status")) {
             writeSimple(out, 200, "application/json; charset=utf-8",
                     backend.statusJson().getBytes(UTF8), head);
-        } else if (path.equals("/api/netdiag")) {
-            writeSimple(out, 200, "application/json; charset=utf-8",
-                    backend.netDiagJson("1".equals(req.query.get("refresh"))).getBytes(UTF8), head);
         } else if (path.equals("/api/recordings")) {
             writeSimple(out, 200, "application/json; charset=utf-8",
                     recordingsJson(backend.store().list()).getBytes(UTF8), head);
@@ -263,7 +259,8 @@ final class HttpServer {
         } else if (req.path.equals("/api/delete")) {
             // A custom header cannot be sent cross-origin without a CORS preflight, which this server
             // never approves, so other web pages cannot delete recordings through the viewer's browser.
-            if (!"z4motioncam".equals(req.headers.get("x-requested-with"))) {
+            // (Not X-Requested-With: Android WebView-based browsers overwrite that one.)
+            if (!"delete".equals(req.headers.get("x-z4-action"))) {
                 writeSimple(out, 403, "text/plain", "forbidden\n".getBytes(UTF8), false);
                 return;
             }

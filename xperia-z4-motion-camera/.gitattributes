@@ -1,4 +1,0 @@
-# Windows scripts are stored byte-for-byte (CRLF, and the BOM in netcheck.ps1) so downloads from
-# GitHub work as-is: cmd.exe misparses LF-only batch files in edge cases.
-*.bat -text
-*.ps1 -text

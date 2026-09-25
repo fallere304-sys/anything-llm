@@ -5,12 +5,11 @@ import java.util.Arrays;
 /**
  * Cheap frame-difference motion detector working on the luma plane of NV21 frames.
  *
- * <p>The frame is reduced to a coarse grid of cell averages (sampling every 4th pixel), which is
+ * <p>The frame is reduced to a coarse grid of cell averages (about 25 samples per cell), which is
  * compared with a slowly adapting background. Only a few thousand pixels are read per frame, so
  * it can run a few times per second at negligible CPU cost.
  */
 final class MotionDetector {
-    private static final int SAMPLE_STEP = 4;
     /** Luma difference (0..255) above which a cell counts as changed. */
     private static final int CELL_THRESHOLD = 18;
     /** Consecutive analyses over the threshold required to trigger (filters sensor noise). */
@@ -18,6 +17,8 @@ final class MotionDetector {
 
     private final int gridW;
     private final int gridH;
+    /** Reads every n-th pixel in both directions: about 25 samples per cell at any resolution. */
+    private final int step;
     private final int[] cur;
     private final int[] diff;
     private final int[] hist = new int[511];
@@ -27,9 +28,10 @@ final class MotionDetector {
     private int hits;
     private float lastRatio;
 
-    MotionDetector(int gridW, int gridH) {
+    MotionDetector(int gridW, int gridH, int step) {
         this.gridW = gridW;
         this.gridH = gridH;
+        this.step = step;
         this.cur = new int[gridW * gridH];
         this.diff = new int[gridW * gridH];
         this.bg = new int[gridW * gridH];
@@ -39,7 +41,7 @@ final class MotionDetector {
     static MotionDetector forFrame(int width, int height) {
         int gw = 32;
         int gh = Math.max(1, Math.round(gw * (float) height / width));
-        return new MotionDetector(gw, gh);
+        return new MotionDetector(gw, gh, Math.max(2, width / gw / 5));
     }
 
     float lastRatio() {
@@ -78,9 +80,9 @@ final class MotionDetector {
                 int y0 = gy * cellH;
                 int sum = 0;
                 int count = 0;
-                for (int y = y0 + SAMPLE_STEP / 2; y < y0 + cellH; y += SAMPLE_STEP) {
+                for (int y = y0 + step / 2; y < y0 + cellH; y += step) {
                     int row = y * width;
-                    for (int x = x0 + SAMPLE_STEP / 2; x < x0 + cellW; x += SAMPLE_STEP) {
+                    for (int x = x0 + step / 2; x < x0 + cellW; x += step) {
                         sum += nv21[row + x] & 0xFF;
                         count++;
                     }

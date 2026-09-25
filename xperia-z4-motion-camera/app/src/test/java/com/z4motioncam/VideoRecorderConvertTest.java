@@ -21,4 +21,18 @@ public class VideoRecorderConvertTest {
         VideoRecorder.convert(NV21, out, 4, 2, 19 /* COLOR_FormatYUV420Planar */);
         assertArrayEquals(new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 20, 21}, out);
     }
+
+    @Test
+    public void honoursEncoderStrideAndSliceHeight() {
+        // 4x2 frame into planes of stride 6 and 4 rows (padding bytes stay 0).
+        byte[] out = new byte[6 * 4 * 3 / 2];
+        VideoRecorder.convert(NV21, out, 4, 2, 6, 4, 21);
+        assertArrayEquals(new byte[] {
+                1, 2, 3, 4, 0, 0,
+                5, 6, 7, 8, 0, 0,
+                0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0,
+                10, 20, 11, 21, 0, 0,   // UV row at stride * sliceHeight
+                0, 0, 0, 0, 0, 0}, out);
+    }
 }

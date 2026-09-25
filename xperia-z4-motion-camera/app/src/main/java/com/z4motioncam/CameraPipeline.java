@@ -26,6 +26,10 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     private static final int JPEG_QUALITY = 60;
     private static final long STORAGE_CHECK_MS = 15_000L;
     private static final long REOPEN_DELAY_MS = 3_000L;
+    /** Sensor rate while only watching for motion (nobody viewing, not recording). */
+    private static final int IDLE_FPS = 5;
+    /** Stay at the full rate this long after the last viewer / recording, to avoid flapping. */
+    private static final long ACTIVE_HOLD_MS = 5_000L;
 
     private final AppSettings settings;
     private final RecordingStore store;
@@ -40,7 +44,14 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     private MotionDetector detector;
     private VideoRecorder recorder;
     private final ByteArrayOutputStream jpegBuf = new ByteArrayOutputStream(64 * 1024);
-    private Rect frameRect;
+    /** Live JPEGs are made from a half-size copy for 1280-wide and larger frames. */
+    private int liveScale;
+    private byte[] liveFrame;
+    private Rect liveRect;
+    private int[] idleRange;
+    private int[] activeRange;
+    private int[] currentRange;
+    private long lastActiveMs;
 
     private volatile ThermalPolicy.Level level = ThermalPolicy.Level.NORMAL;
     private long lastAnalyzeMs;
@@ -130,8 +141,14 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
             Camera.Size size = chooseSize(p.getSupportedPreviewSizes(), settings.width, settings.height);
             p.setPreviewSize(size.width, size.height);
             p.setPreviewFormat(ImageFormat.NV21);
-            int[] range = chooseFpsRange(p.getSupportedPreviewFpsRange(), settings.fps * 1000);
+            List<int[]> ranges = p.getSupportedPreviewFpsRange();
+            activeRange = chooseFpsRange(ranges, settings.fps * 1000);
+            idleRange = chooseFpsRange(ranges, Math.min(IDLE_FPS, settings.fps) * 1000);
+            // Only worth switching when idle really runs the sensor slower.
+            if (activeRange == null || idleRange == null || idleRange[1] >= activeRange[1]) idleRange = null;
+            int[] range = idleRange != null ? idleRange : activeRange;
             if (range != null) p.setPreviewFpsRange(range[0], range[1]);
+            currentRange = range;
             List<String> focus = p.getSupportedFocusModes();
             if (focus != null && focus.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO)) {
                 p.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO);
@@ -145,7 +162,9 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
 
             width = size.width;
             height = size.height;
-            frameRect = new Rect(0, 0, width, height);
+            liveScale = width >= 1280 ? 2 : 1;
+            liveFrame = liveScale == 1 ? null : new byte[(width / 2) * (height / 2) * 3 / 2];
+            liveRect = new Rect(0, 0, width / liveScale, height / liveScale);
             detector = MotionDetector.forFrame(width, height);
             recorder = new VideoRecorder(width, height, settings.bitrate(), settings.fps, settings.rotation);
 
@@ -157,7 +176,8 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
             camera.startPreview();
             running = true;
             error = null;
-            Log.i(TAG, "camera started " + width + "x" + height + " fps=" + (range == null ? "?" : range[1]));
+            Log.i(TAG, "camera started " + width + "x" + height + " fps=" + (range == null ? "?" : range[1])
+                    + (idleRange != null ? " (idle " + idleRange[1] + ", active " + activeRange[1] + ")" : ""));
         } catch (Exception e) {
             Log.e(TAG, "camera open failed", e);
             error = "カメラを開けません: " + e.getMessage();
@@ -254,12 +274,63 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
             }
         }
 
-        if (hub.isWanted(System.currentTimeMillis()) && now - lastLiveMs >= ThermalPolicy.liveIntervalMs(l)) {
+        boolean wanted = hub.isWanted(System.currentTimeMillis());
+        if (wanted && now - lastLiveMs >= ThermalPolicy.liveIntervalMs(l)) {
             lastLiveMs = now;
             jpegBuf.reset();
-            new YuvImage(frame, ImageFormat.NV21, width, height, null)
-                    .compressToJpeg(frameRect, JPEG_QUALITY, jpegBuf);
+            byte[] src = frame;
+            if (liveScale == 2) {
+                downscale2x(frame, width, height, liveFrame);
+                src = liveFrame;
+            }
+            new YuvImage(src, ImageFormat.NV21, liveRect.width(), liveRect.height(), null)
+                    .compressToJpeg(liveRect, JPEG_QUALITY, jpegBuf);
             hub.publish(jpegBuf.toByteArray());
+        }
+
+        updateSensorRate(wanted || recorder.isRecording(), l, now);
+    }
+
+    /**
+     * Runs the sensor at the low idle rate while it only watches for motion, and at the configured
+     * rate while recording or while someone is watching. When hot, it stays at the idle rate.
+     */
+    private void updateSensorRate(boolean busy, ThermalPolicy.Level l, long now) {
+        if (idleRange == null) return;
+        if (busy) lastActiveMs = now;
+        boolean hot = l.ordinal() >= ThermalPolicy.Level.HOT.ordinal();
+        int[] want = !hot && now - lastActiveMs < ACTIVE_HOLD_MS ? activeRange : idleRange;
+        if (want == currentRange) return;
+        try {
+            Camera.Parameters p = camera.getParameters();
+            p.setPreviewFpsRange(want[0], want[1]);
+            camera.setParameters(p);
+            currentRange = want;
+        } catch (RuntimeException e) {
+            // Some camera drivers refuse changing the rate during preview: keep one fixed rate.
+            Log.w(TAG, "fps switch not supported", e);
+            idleRange = null;
+        }
+    }
+
+    /** Nearest-neighbour 2x downscale of an NV21 frame (even dimensions). */
+    static void downscale2x(byte[] src, int w, int h, byte[] dst) {
+        int w2 = w / 2;
+        int h2 = h / 2;
+        for (int y = 0; y < h2; y++) {
+            int s = 2 * y * w;
+            int d = y * w2;
+            for (int x = 0; x < w2; x++) dst[d + x] = src[s + 2 * x];
+        }
+        int srcUv = w * h;
+        int dstUv = w2 * h2;
+        for (int r = 0; r < h2 / 2; r++) {
+            int s = srcUv + 2 * r * w;
+            int d = dstUv + r * w2;
+            for (int c = 0; c < w2; c += 2) {
+                dst[d + c] = src[s + 2 * c];         // V
+                dst[d + c + 1] = src[s + 2 * c + 1]; // U
+            }
         }
     }
 
@@ -306,7 +377,7 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
         long bestDiff = Long.MAX_VALUE;
         for (Camera.Size s : sizes) {
             if (s.width == w && s.height == h) return s;
-            // Stay on 16-pixel aligned sizes: avoids stride padding quirks in hardware encoders.
+            // Fallbacks stay on 16-aligned, even sizes: avoids encoder padding quirks.
             if (s.width % 16 != 0 || s.height % 16 != 0) continue;
             long diff = Math.abs((long) s.width * s.height - (long) w * h);
             if (diff < bestDiff) {
@@ -318,21 +389,19 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     }
 
     /**
-     * The range whose maximum is closest to the target, preferring the lowest minimum: a low
-     * minimum lets auto exposure use longer shutter times in a dark nursery.
+     * The range with the smallest maximum that still reaches the target (the sensor then runs no
+     * faster than needed), preferring the lowest minimum so auto exposure can use long shutter
+     * times in a dark nursery. If nothing reaches the target, the fastest range.
      */
     static int[] chooseFpsRange(List<int[]> ranges, int targetMilliFps) {
         if (ranges == null || ranges.isEmpty()) return null;
         int[] best = null;
+        int[] fastest = null;
         for (int[] r : ranges) {
-            if (best == null) {
-                best = r;
-                continue;
-            }
-            long d = Math.abs(r[1] - targetMilliFps);
-            long bd = Math.abs(best[1] - targetMilliFps);
-            if (d < bd || (d == bd && r[0] < best[0])) best = r;
+            if (fastest == null || r[1] > fastest[1]) fastest = r;
+            if (r[1] < targetMilliFps) continue;
+            if (best == null || r[1] < best[1] || (r[1] == best[1] && r[0] < best[0])) best = r;
         }
-        return best;
+        return best != null ? best : fastest;
     }
 }

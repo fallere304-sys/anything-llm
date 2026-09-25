@@ -7,28 +7,27 @@ import android.util.Log;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.net.URLEncoder;
 
 import javax.net.ssl.SSLSocketFactory;
 
 /**
  * Viewing from outside the home: an HTTPS copy of the web server on its own port (password
- * mandatory, TLS 1.2+, self-signed certificate), a UPnP port mapping on the router, and an
- * optional DuckDNS record that follows the changing global IP. Everything runs on one background
- * thread and wakes up only every few minutes, so it adds no measurable heat.
+ * mandatory, TLS 1.2+, self-signed certificate) plus, optionally, a UPnP port mapping on the router
+ * and a DuckDNS record. The router's own WAN address (via UPnP) is the global IP, so no outside
+ * IP-lookup service is contacted. Background work runs every 30 minutes at most.
  */
 final class RemoteAccess {
     private static final String TAG = "RemoteAccess";
     static final int MIN_PASSWORD_LENGTH = 8;
-    private static final long TICK_MS = 10 * 60_000L;
-    private static final long DDNS_FORCE_MS = 6 * 3600_000L;
+    private static final long TICK_MS = 30 * 60_000L;
+    /** DuckDNS is refreshed at least this often even when the address looks unchanged. */
+    private static final long DDNS_FORCE_MS = 12 * 3600_000L;
 
     private final Context context;
     private final AppSettings settings;
     private final HttpServer.Backend backend;
-    private final SSLSocketFactory clientTls;
+    private final SSLSocketFactory ddnsTls;
     private final HandlerThread thread = new HandlerThread("remote");
     private final Handler handler;
 
@@ -44,11 +43,10 @@ final class RemoteAccess {
     private volatile boolean active;
     private volatile String error;
     private volatile String fingerprint;
-    private volatile String publicV4;
-    private volatile String globalV6;
+    /** Global IPv4 as reported by the router, or null. */
+    private volatile String wanIp;
     private volatile String upnpResult;
     private volatile String ddnsResult;
-    private volatile Boolean selfReachable;
 
     private final Runnable tick = new Runnable() {
         @Override
@@ -58,11 +56,11 @@ final class RemoteAccess {
         }
     };
 
-    RemoteAccess(Context context, AppSettings settings, HttpServer.Backend backend, SSLSocketFactory clientTls) {
+    RemoteAccess(Context context, AppSettings settings, HttpServer.Backend backend, SSLSocketFactory ddnsTls) {
         this.context = context.getApplicationContext();
         this.settings = settings;
         this.backend = backend;
-        this.clientTls = clientTls;
+        this.ddnsTls = ddnsTls;
         thread.start();
         handler = new Handler(thread.getLooper());
     }
@@ -92,10 +90,15 @@ final class RemoteAccess {
         }
     }
 
-    /** Re-checks IP, port mapping and DDNS now (e.g. after the network came back). */
+    /** Re-checks the port mapping and DDNS now (e.g. after Wi-Fi reconnected). */
     void refreshSoon() {
+        if (!active || !hasBackgroundWork()) return;
         handler.removeCallbacks(tick);
         handler.post(tick);
+    }
+
+    private boolean hasBackgroundWork() {
+        return settings.upnp || settings.ddnsConfigured();
     }
 
     private void open() {
@@ -122,7 +125,7 @@ final class RemoteAccess {
             active = true;
             state = "公開中";
             error = null;
-            handler.post(tick);
+            if (hasBackgroundWork()) handler.post(tick);
         } catch (Exception e) {
             Log.e(TAG, "https start failed", e);
             state = "停止中";
@@ -146,41 +149,44 @@ final class RemoteAccess {
     }
 
     private void refresh() {
-        String local = NetUtil.localIpv4();
-        publicV4 = NetUtil.publicIpv4(clientTls);
-        globalV6 = NetUtil.globalIpv6();
-
-        if (settings.upnp && local != null) {
-            try {
-                if (gateway == null || !local.equals(mappedClient)) gateway = Upnp.discover(3000);
-                if (gateway == null) {
-                    upnpResult = "UPnP対応ルーターが見つかりません（手動でポート転送してください）";
-                } else {
-                    // Re-adding refreshes the lease and repairs the mapping after a router reboot.
-                    Upnp.openPort(gateway, settings.remotePort, local);
-                    mapped = true;
-                    mappedClient = local;
-                    upnpResult = "ルーターの TCP " + settings.remotePort + " 番を開放済み";
+        if (settings.upnp) {
+            String local = NetUtil.localIpv4();
+            if (local == null) {
+                upnpResult = "Wi-Fiに接続されていません";
+            } else {
+                try {
+                    if (gateway == null || !local.equals(mappedClient)) gateway = Upnp.discover(3000);
+                    if (gateway == null) {
+                        upnpResult = "UPnP対応ルーターが見つかりません（ルーターで手動転送してください）";
+                    } else {
+                        // Re-adding refreshes the lease and repairs the mapping after a router reboot.
+                        Upnp.openPort(gateway, settings.remotePort, local);
+                        mapped = true;
+                        mappedClient = local;
+                        upnpResult = "ルーターの TCP " + settings.remotePort + " 番を開放済み";
+                        String ip = Upnp.externalIp(gateway);
+                        wanIp = NetUtil.isPublicV4(ip) ? ip : null;
+                    }
+                } catch (IOException e) {
+                    gateway = null;
+                    upnpResult = "ポート開放に失敗: " + Upnp.describe(e);
                 }
-            } catch (IOException e) {
-                gateway = null;
-                upnpResult = "ポート開放に失敗: " + Upnp.describe(e);
             }
-        } else if (!settings.upnp) {
-            upnpResult = "自動開放オフ（ルーターで手動転送が必要）";
+        } else {
+            upnpResult = "自動開放オフ（ルーターで手動転送）";
         }
 
-        if (!settings.ddnsDomain.isEmpty() && !settings.ddnsToken.isEmpty()) {
-            String ipKey = publicV4 + "/" + globalV6;
-            if (!ipKey.equals(ddnsIp) || System.currentTimeMillis() - ddnsAt > DDNS_FORCE_MS) {
+        if (settings.ddnsConfigured()) {
+            String key = String.valueOf(wanIp);
+            // Unknown address: update every tick; known: only when it changed (or every 12 h).
+            if (wanIp == null || !key.equals(ddnsIp) || System.currentTimeMillis() - ddnsAt > DDNS_FORCE_MS) {
                 try {
+                    // An empty ip= makes DuckDNS use the address this request comes from.
                     String url = "https://www.duckdns.org/update?domains=" + enc(settings.ddnsDomain)
-                            + "&token=" + enc(settings.ddnsToken)
-                            + (publicV4 != null ? "&ip=" + enc(publicV4) : "")
-                            + (globalV6 != null ? "&ipv6=" + enc(globalV6) : "");
-                    String r = NetUtil.httpGet(url, 8000, clientTls).trim();
+                            + "&token=" + enc(settings.ddnsToken) + "&ip=" + (wanIp == null ? "" : wanIp);
+                    String r = NetUtil.httpGet(url, 8000, ddnsTls).trim();
                     if (r.startsWith("OK")) {
-                        ddnsIp = ipKey;
+                        ddnsIp = key;
                         ddnsAt = System.currentTimeMillis();
                         ddnsResult = "DuckDNS 更新済み";
                     } else {
@@ -193,26 +199,6 @@ final class RemoteAccess {
         } else {
             ddnsResult = null;
         }
-
-        selfReachable = publicV4 == null ? null : canConnect(publicV4, settings.remotePort);
-    }
-
-    /** Hairpin check: connecting to our own public address works only if the port is open. */
-    private static Boolean canConnect(String host, int port) {
-        Socket s = new Socket();
-        try {
-            s.connect(new InetSocketAddress(host, port), 3000);
-            return Boolean.TRUE;
-        } catch (IOException e) {
-            // Many routers do not support NAT loopback, so a failure here is inconclusive.
-            return null;
-        } finally {
-            try {
-                s.close();
-            } catch (IOException ignored) {
-                // ignore
-            }
-        }
     }
 
     private static String enc(String s) {
@@ -223,13 +209,26 @@ final class RemoteAccess {
         }
     }
 
-    /** Best URL to open from outside, or null. */
+    /** Host for the outside URL: DuckDNS name, then the configured address, then the router's WAN IP. */
+    private String host() {
+        if (settings.ddnsConfigured()) return settings.ddnsDomain + ".duckdns.org";
+        if (!settings.externalHost.isEmpty()) return settings.externalHost;
+        return wanIp;
+    }
+
     String url() {
-        if (!active) return null;
-        if (!settings.ddnsDomain.isEmpty()) return "https://" + settings.ddnsDomain + ".duckdns.org:" + settings.remotePort + "/";
-        if (publicV4 != null) return "https://" + publicV4 + ":" + settings.remotePort + "/";
-        if (globalV6 != null) return "https://[" + globalV6 + "]:" + settings.remotePort + "/";
-        return null;
+        String h = host();
+        return active && h != null ? "https://" + h + ":" + settings.remotePort + "/" : null;
+    }
+
+    /** Warns when the router now reports a different global IP than the configured one. */
+    private String ipWarning() {
+        String w = wanIp;
+        if (w == null || settings.externalHost.isEmpty() || settings.ddnsConfigured()
+                || w.equals(settings.externalHost) || NetUtil.parseV4(settings.externalHost) == null) {
+            return null;
+        }
+        return "グローバルIPが " + w + " に変わっています（設定の外部アドレスを更新してください）";
     }
 
     String statusLine() {
@@ -237,7 +236,9 @@ final class RemoteAccess {
         StringBuilder sb = new StringBuilder("外出先: ").append(state);
         String u = url();
         if (u != null) sb.append(' ').append(u);
+        String warn = ipWarning();
         if (error != null) sb.append('\n').append(error);
+        else if (warn != null) sb.append('\n').append(warn);
         else if (upnpResult != null) sb.append('\n').append(upnpResult);
         if (fingerprint != null) sb.append("\n証明書 ").append(fingerprint.substring(0, 23)).append('…');
         return sb.toString();
@@ -246,10 +247,8 @@ final class RemoteAccess {
     String statusJson() {
         return "{\"enabled\":" + settings.remoteEnabled + ",\"active\":" + active
                 + ",\"state\":" + s(state) + ",\"url\":" + s(url()) + ",\"port\":" + settings.remotePort
-                + ",\"error\":" + s(error) + ",\"fingerprint\":" + s(fingerprint)
-                + ",\"publicV4\":" + s(publicV4) + ",\"globalV6\":" + s(globalV6)
-                + ",\"upnp\":" + s(upnpResult) + ",\"ddns\":" + s(ddnsResult)
-                + ",\"selfReachable\":" + (selfReachable == null ? "null" : selfReachable.toString()) + "}";
+                + ",\"error\":" + s(error != null ? error : ipWarning()) + ",\"fingerprint\":" + s(fingerprint)
+                + ",\"wanIp\":" + s(wanIp) + ",\"upnp\":" + s(upnpResult) + ",\"ddns\":" + s(ddnsResult) + "}";
     }
 
     private static String s(String v) {

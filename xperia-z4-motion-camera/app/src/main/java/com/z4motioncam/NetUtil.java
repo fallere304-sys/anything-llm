@@ -5,7 +5,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
-import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.URL;
@@ -101,25 +100,6 @@ final class NetUtil {
         return null;
     }
 
-    /**
-     * A global IPv6 (2000::/3) of the Wi-Fi / Ethernet interface, preferring a stable (EUI-64)
-     * address over short-lived privacy addresses. Null when there is none.
-     */
-    static String globalIpv6() {
-        String fallback = null;
-        for (InetAddress a : interfaceAddresses()) {
-            if (!(a instanceof Inet6Address)) continue;
-            byte[] b = a.getAddress();
-            if ((b[0] & 0xE0) != 0x20) continue;
-            String s = a.getHostAddress();
-            int pct = s.indexOf('%');
-            if (pct >= 0) s = s.substring(0, pct);
-            if ((b[11] & 0xFF) == 0xFF && (b[12] & 0xFF) == 0xFE) return s;
-            if (fallback == null) fallback = s;
-        }
-        return fallback;
-    }
-
     private static List<InetAddress> interfaceAddresses() {
         List<InetAddress> out = new ArrayList<>();
         try {
@@ -168,20 +148,6 @@ final class NetUtil {
         }
     }
 
-    /** The public IPv4 seen from the Internet, or null. */
-    static String publicIpv4(SSLSocketFactory tls) {
-        String[] services = {"https://api.ipify.org", "https://checkip.amazonaws.com", "http://checkip.amazonaws.com"};
-        for (String u : services) {
-            try {
-                String ip = httpGet(u, 5000, tls).trim();
-                if (parseV4(ip) != null) return ip;
-            } catch (IOException ignored) {
-                // try the next service
-            }
-        }
-        return null;
-    }
-
     /** Parses concatenated PEM certificates. */
     static List<X509Certificate> parsePem(String pem) throws CertificateException {
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
@@ -203,7 +169,7 @@ final class NetUtil {
 
     /**
      * TLS client factory trusting the system roots plus {@code extraRoots}. Android 7.0 and older
-     * lack e.g. ISRG Root X1 (Let's Encrypt), which DDNS / IP lookup services commonly use.
+     * lack e.g. ISRG Root X1 (Let's Encrypt), which DDNS services commonly use.
      */
     static SSLSocketFactory clientTls(List<X509Certificate> extraRoots) {
         try {

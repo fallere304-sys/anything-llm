@@ -27,17 +27,14 @@ final class AppSettings {
     /** DuckDNS sub-domain without ".duckdns.org"; empty when unused. */
     final String ddnsDomain;
     final String ddnsToken;
+    /** Global IP or host name to show in the outside URL; empty = use what the router reports. */
+    final String externalHost;
 
-    private AppSettings(SharedPreferences p) {
-        String res = p.getString("resolution", "640x480");
-        if ("1280x720".equals(res)) {
-            width = 1280;
-            height = 720;
-        } else {
-            width = 640;
-            height = 480;
-        }
-        fps = clamp(parseInt(p.getString("fps", "10"), 10), 5, 15);
+    private AppSettings(SharedPreferences p, String defaultExternalHost) {
+        int[] res = parseResolution(p.getString("resolution", "640x480"));
+        width = res[0];
+        height = res[1];
+        fps = clamp(parseInt(p.getString("fps", "10"), 10), 1, 30);
         rotation = (parseInt(p.getString("rotation", "0"), 0) / 90 % 4) * 90;
         sensitivity = clamp(parseInt(p.getString("sensitivity", "2"), 2), 1, 3);
         postRecordSec = clamp(parseInt(p.getString("post_record_sec", "10"), 10), 1, 600);
@@ -54,10 +51,17 @@ final class AppSettings {
         if (d.endsWith(".duckdns.org")) d = d.substring(0, d.length() - ".duckdns.org".length());
         ddnsDomain = d.matches("[a-z0-9-]{1,63}") ? d : "";
         ddnsToken = p.getString("ddns_token", "").trim();
+        String h = p.getString("external_host", defaultExternalHost).trim();
+        externalHost = h.matches("[A-Za-z0-9.:-]{1,253}") ? h : "";
     }
 
     static AppSettings load(Context context) {
-        return new AppSettings(PreferenceManager.getDefaultSharedPreferences(context));
+        return new AppSettings(PreferenceManager.getDefaultSharedPreferences(context),
+                context.getString(R.string.default_external_host));
+    }
+
+    boolean ddnsConfigured() {
+        return !ddnsDomain.isEmpty() && !ddnsToken.isEmpty();
     }
 
     /** Changed-area ratio (0..1) above which a frame counts as motion. */
@@ -69,9 +73,27 @@ final class AppSettings {
         }
     }
 
+    /** "WxH" from the resolution list; anything else falls back to 640x480. */
+    static int[] parseResolution(String s) {
+        String[] allowed = {"320x240", "640x480", "960x720", "1280x720", "1280x960", "1920x1080"};
+        for (String a : allowed) {
+            if (a.equals(s)) {
+                String[] wh = a.split("x");
+                return new int[] {Integer.parseInt(wh[0]), Integer.parseInt(wh[1])};
+            }
+        }
+        return new int[] {640, 480};
+    }
+
     int bitrate() {
         // Low bitrates keep the encoder and storage writes cheap; enough for a mostly static scene.
-        return width >= 1280 ? 2_000_000 : 1_000_000;
+        int pixels = width * height;
+        int base = pixels <= 320 * 240 ? 400_000
+                : pixels <= 640 * 480 ? 1_000_000
+                : pixels <= 1280 * 720 ? 2_000_000
+                : pixels <= 1280 * 960 ? 2_500_000 : 4_000_000;
+        float scale = Math.max(0.5f, Math.min(2f, fps / 10f));
+        return Math.round(base * scale);
     }
 
     private static int parseInt(String s, int def) {
@@ -96,7 +118,8 @@ final class AppSettings {
                 && minFreeBytes == s.minFreeBytes && port == s.port
                 && password.equals(s.password) && autostart == s.autostart
                 && remoteEnabled == s.remoteEnabled && remotePort == s.remotePort && upnp == s.upnp
-                && ddnsDomain.equals(s.ddnsDomain) && ddnsToken.equals(s.ddnsToken);
+                && ddnsDomain.equals(s.ddnsDomain) && ddnsToken.equals(s.ddnsToken)
+                && externalHost.equals(s.externalHost);
     }
 
     @Override

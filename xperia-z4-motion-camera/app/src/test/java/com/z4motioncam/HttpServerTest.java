@@ -25,7 +25,11 @@ public class HttpServerTest {
     public TemporaryFolder tmp = new TemporaryFolder();
 
     private File dir;
+    /** Configured like the app's LAN server: home network only, never asks for a password. */
     private HttpServer server;
+    /** Configured like the Internet-facing server (without TLS here): password required. */
+    private HttpServer remote;
+    private int target;
     private FrameHub hub;
     private String password = "";
     private byte[] video;
@@ -40,21 +44,29 @@ public class HttpServerTest {
         out.close();
         final RecordingStore store = new RecordingStore(dir, 0);
         hub = new FrameHub();
-        server = new HttpServer(0, new HttpServer.Backend() {
+        HttpServer.Backend backend = new HttpServer.Backend() {
             @Override public byte[] indexHtml() { return "<html>hi</html>".getBytes(StandardCharsets.UTF_8); }
             @Override public String statusJson() { return "{\"state\":\"watching\"}"; }
             @Override public RecordingStore store() { return store; }
             @Override public FrameHub frames() { return hub; }
             @Override public String password() { return password; }
-            @Override public String netDiagJson(boolean refresh) { return "{\"verdict\":\"UNKNOWN\",\"refresh\":" + refresh + "}"; }
-        });
+        };
+        server = new HttpServer(0, backend, null, true, false);
         server.start();
+        remote = new HttpServer(0, backend, null, false, true);
+        remote.start();
+        target = server.port();
+    }
+
+    private void useRemote() {
+        target = remote.port();
     }
 
     @After
     public void tearDown() {
         hub.close();
         server.stop();
+        remote.stop();
     }
 
     private static final class Resp {
@@ -71,7 +83,7 @@ public class HttpServerTest {
     }
 
     private Resp request(String method, String path, String body, String... headers) throws IOException {
-        Socket s = new Socket("127.0.0.1", server.port());
+        Socket s = new Socket("127.0.0.1", target);
         s.setSoTimeout(5000);
         byte[] bodyBytes = body == null ? new byte[0] : body.getBytes(StandardCharsets.UTF_8);
         StringBuilder req = new StringBuilder(method + " " + path + " HTTP/1.1\r\nHost: x\r\n");
@@ -138,7 +150,24 @@ public class HttpServerTest {
     }
 
     @Test
+    public void lanServerNeverAsksForPassword() throws IOException {
+        password = "secret"; // set for remote viewing
+        assertTrue(get("/api/status").head.startsWith("HTTP/1.0 200"));
+        assertTrue(get("/").head.startsWith("HTTP/1.0 200"));
+        Resp r = post("/api/delete", "20260101_120000.mp4", "X-Z4-Action: delete");
+        assertTrue(r.head, r.head.startsWith("HTTP/1.0 200"));
+        assertFalse(new File(dir, "20260101_120000.mp4").exists());
+    }
+
+    @Test
+    public void remoteServerRefusesEverythingWithoutPassword() throws IOException {
+        useRemote();
+        assertTrue(get("/api/status").head.startsWith("HTTP/1.0 403"));
+    }
+
+    @Test
     public void passwordProtection() throws IOException {
+        useRemote();
         password = "secret";
         Resp denied = get("/api/status");
         assertTrue(denied.head.startsWith("HTTP/1.0 401"));
@@ -214,7 +243,7 @@ public class HttpServerTest {
         addRecording("20260103_120000.mp4", 10);
         addRecording("20260104_120000.mp4.part", 10);
         Resp r = post("/api/delete", "20260101_120000.mp4\n20260102_120000.mp4\n../x.mp4\n20260104_120000.mp4.part",
-                "X-Requested-With: z4motioncam");
+                "X-Z4-Action: delete");
         assertTrue(r.head, r.head.startsWith("HTTP/1.0 200"));
         assertEquals("{\"deleted\":[\"20260101_120000.mp4\",\"20260102_120000.mp4\"],"
                 + "\"failed\":[\"../x.mp4\",\"20260104_120000.mp4.part\"]}",
@@ -229,13 +258,22 @@ public class HttpServerTest {
         // A cross-site form post cannot set this header, so it cannot delete anything.
         Resp r = post("/api/delete", "20260101_120000.mp4");
         assertTrue(r.head.startsWith("HTTP/1.0 403"));
+        // Android WebView-based browsers overwrite X-Requested-With with the app's package name;
+        // deletion must not depend on that header.
+        r = post("/api/delete", "20260101_120000.mp4", "X-Requested-With: jp.naver.line.android");
+        assertTrue(r.head.startsWith("HTTP/1.0 403"));
         assertTrue(new File(dir, "20260101_120000.mp4").exists());
+        r = post("/api/delete", "20260101_120000.mp4",
+                "X-Requested-With: jp.naver.line.android", "X-Z4-Action: delete");
+        assertTrue(r.head.startsWith("HTTP/1.0 200"));
+        assertFalse(new File(dir, "20260101_120000.mp4").exists());
     }
 
     @Test
-    public void deleteRequiresPasswordWhenSet() throws IOException {
+    public void remoteDeleteRequiresPassword() throws IOException {
+        useRemote();
         password = "secret";
-        Resp r = post("/api/delete", "20260101_120000.mp4", "X-Requested-With: z4motioncam");
+        Resp r = post("/api/delete", "20260101_120000.mp4", "X-Z4-Action: delete");
         assertTrue(r.head.startsWith("HTTP/1.0 401"));
         assertTrue(new File(dir, "20260101_120000.mp4").exists());
     }
@@ -287,13 +325,8 @@ public class HttpServerTest {
     }
 
     @Test
-    public void servesNetworkDiagnosis() throws IOException {
-        assertEquals("{\"verdict\":\"UNKNOWN\",\"refresh\":true}",
-                new String(get("/api/netdiag?refresh=1").body, StandardCharsets.UTF_8));
-    }
-
-    @Test
     public void locksOutAfterRepeatedWrongPasswords() throws IOException {
+        useRemote();
         password = "secret";
         String wrong = "Authorization: Basic cGFwYTp3cm9uZw=="; // papa:wrong
         for (int i = 0; i < 5; i++) assertTrue(get("/api/status", wrong).head.startsWith("HTTP/1.0 401"));
@@ -303,6 +336,7 @@ public class HttpServerTest {
 
     @Test
     public void missingCredentialsDoNotCountAsFailures() throws IOException {
+        useRemote();
         password = "secret";
         for (int i = 0; i < 8; i++) assertTrue(get("/api/status").head.startsWith("HTTP/1.0 401"));
         assertTrue(get("/api/status", "Authorization: Basic cGFwYTpzZWNyZXQ=").head.startsWith("HTTP/1.0 200"));

@@ -74,9 +74,8 @@ public class MainActivity extends Activity {
             FrameHub.Frame f = hub.latest();
             if (f != null && f.seq != shownSeq) {
                 shownSeq = f.seq;
-                BitmapFactory.Options o = new BitmapFactory.Options();
-                o.inSampleSize = service.settings().width >= 1280 ? 2 : 1;
-                Bitmap b = BitmapFactory.decodeByteArray(f.jpeg, 0, f.jpeg.length, o);
+                // Live JPEGs are at most 960 px wide (large frames are halved), so decode as is.
+                Bitmap b = BitmapFactory.decodeByteArray(f.jpeg, 0, f.jpeg.length);
                 if (b != null) preview.setImageBitmap(b);
             }
             preview.setRotation(service.settings().rotation);

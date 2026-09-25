@@ -8,7 +8,7 @@
 
     <string name="pref_cat_camera">カメラ</string>
     <string name="pref_resolution">解像度</string>
-    <string name="pref_fps">フレームレート</string>
+    <string name="pref_fps">フレームレート（録画）</string>
     <string name="pref_rotation">映像の回転</string>
     <string name="pref_cat_motion">動体検知・録画</string>
     <string name="pref_sensitivity">検知感度</string>
@@ -18,12 +18,17 @@
     <string name="pref_use_sd">SDカードを優先して保存</string>
     <string name="pref_min_free">確保する空き容量（MB）</string>
     <string name="pref_min_free_summary">これを下回ると古い録画から削除します</string>
-    <string name="pref_cat_network">ネットワーク</string>
+    <string name="pref_cat_network">ネットワーク（家の中）</string>
     <string name="pref_port">ポート番号</string>
-    <string name="pref_password">閲覧パスワード（空欄で無効・外出先視聴では8文字以上必須）</string>
+    <string name="pref_password">外出先視聴用パスワード（8文字以上）</string>
+    <string name="pref_password_summary">外出先（HTTPS）から見るときだけ使います。家の中（LAN）から見るときはパスワード不要です</string>
     <string name="pref_cat_remote">外出先からの視聴</string>
     <string name="pref_remote">外出先からの視聴を有効にする</string>
-    <string name="pref_remote_summary">HTTPS（暗号化）で公開します。先にLAN内のブラウザで「ネットワーク診断」を実行し、可能と判定されてから有効にしてください</string>
+    <string name="pref_remote_summary">HTTPS（暗号化）で公開します。ルーターにグローバルIPが割り当てられている必要があります</string>
+    <string name="pref_external_host">外部アドレス（グローバルIP）</string>
+    <string name="pref_external_host_summary">外出先URLに使います。空欄ならルーターが報告するIPを使います（UPnP）</string>
+    <!-- Overridden at build time for a personal build (build-apk.sh EXTERNAL_HOST=...); never commit a real IP. -->
+    <string name="default_external_host" translatable="false"></string>
     <string name="pref_remote_port">外出先用ポート番号（HTTPS）</string>
     <string name="pref_upnp">ルーターのポートを自動で開放（UPnP）</string>
     <string name="pref_upnp_summary">オフの場合はルーターで手動の転送設定が必要です</string>
@@ -35,22 +40,44 @@
     <string name="pref_note">設定は画面に戻ると反映されます</string>
 
     <string-array name="resolution_entries">
+        <item>320×240（最も低発熱・画質は粗い）</item>
         <item>640×480（推奨・低発熱）</item>
-        <item>1280×720</item>
+        <item>960×720</item>
+        <item>1280×720（発熱 増）</item>
+        <item>1280×960（発熱 増）</item>
+        <item>1920×1080（非推奨・発熱 大・未検証）</item>
     </string-array>
     <string-array name="resolution_values">
+        <item>320x240</item>
         <item>640x480</item>
+        <item>960x720</item>
         <item>1280x720</item>
+        <item>1280x960</item>
+        <item>1920x1080</item>
     </string-array>
     <string-array name="fps_entries">
-        <item>5 fps（最も低発熱）</item>
+        <item>1 fps（コマ送り・最も低発熱）</item>
+        <item>2 fps</item>
+        <item>3 fps</item>
+        <item>5 fps（低発熱）</item>
+        <item>7 fps</item>
         <item>10 fps（推奨）</item>
         <item>15 fps</item>
+        <item>20 fps（発熱 増）</item>
+        <item>24 fps（発熱 増）</item>
+        <item>30 fps（非推奨・発熱 大）</item>
     </string-array>
     <string-array name="fps_values">
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
         <item>5</item>
+        <item>7</item>
         <item>10</item>
         <item>15</item>
+        <item>20</item>
+        <item>24</item>
+        <item>30</item>
     </string-array>
     <string-array name="rotation_entries">
         <item>0°</item>
