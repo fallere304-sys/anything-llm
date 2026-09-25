@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BTファイル転送</string>
+    <string name="channel_name">ファイル転送</string>
+
+    <!-- サービス状態 -->
+    <string name="status_listening">受信待機中（Windows から送信できます）</string>
+    <string name="status_bt_off">Bluetooth がオフです</string>
+    <string name="status_stopped">停止しました</string>
+    <string name="status_listen_failed">受信の待ち受けを開始できません: %1$s\n（Android 標準の Bluetooth 受信は引き続き利用できます）</string>
+    <string name="status_no_bt">この端末には Bluetooth がありません</string>
+    <string name="status_need_permission">Bluetooth の権限が許可されていません</string>
+
+    <!-- 進捗 -->
+    <string name="progress_receiving">受信中: %1$s ← %2$s</string>
+    <string name="progress_sending">送信中: %1$s → %2$s</string>
+    <string name="progress_connecting">%1$s に接続中…</string>
+
+    <!-- 履歴 -->
+    <string name="log_received">受信: %1$s（%3$s）← %2$s\n保存先: %4$s</string>
+    <string name="log_receive_aborted">受信中断: %1$s ← %2$s</string>
+    <string name="log_no_space">空き容量不足のため受信を拒否: %1$s</string>
+    <string name="log_system_received">Android 標準機能で受信: %1$s\n保存先: %2$s</string>
+    <string name="log_sent">送信完了: %1$s（%3$s）→ %2$s</string>
+    <string name="log_connect_failed">%1$s に接続できません。PC の Bluetooth アイコンを右クリック →「ファイルの受信」を開いてから、もう一度送ってください。</string>
+    <string name="log_send_rejected">%1$s が受信を拒否しました: %2$s</string>
+    <string name="log_send_failed">送信失敗（%2$d/%3$d 件完了）→ %1$s: %4$s</string>
+
+    <!-- 画面 -->
+    <string name="label_device">この端末の Bluetooth 名: %1$s</string>
+    <string name="label_discoverable">PC から検出可能: 残り %1$d 秒</string>
+    <string name="label_discoverable_on">PC から検出可能: はい</string>
+    <string name="label_discoverable_off">PC から検出可能: いいえ（ペアリング済みの PC とは送受信できます）</string>
+    <string name="label_discoverable_unknown">PC から検出可能: 不明</string>
+    <string name="label_save_folder">受信ファイルの保存先: %1$s</string>
+    <string name="label_history">履歴（受信ファイルはタップで開きます）</string>
+    <string name="label_empty_history">まだ転送はありません</string>
+
+    <string name="button_discoverable">PC から見えるようにする</string>
+    <string name="button_send">ファイルを PC へ送信</string>
+    <string name="button_cancel">送信中止</string>
+    <string name="button_help">Windows 側の操作</string>
+    <string name="button_exit">終了</string>
+    <string name="action_stop">停止</string>
+
+    <string name="dialog_choose_pc">送信先の PC</string>
+    <string name="dialog_last_used">（前回）</string>
+    <string name="no_paired_devices">ペアリング済みの機器がありません。「Windows 側の操作」の手順 1 で PC とペアリングしてください。</string>
+    <string name="toast_send_hint">PC で「ファイルの受信」画面を開いておいてください</string>
+    <string name="toast_cannot_open">このファイルを開けるアプリがありません</string>
+    <string name="toast_bt_required">Bluetooth をオンにしてください</string>
+
+    <string name="help_title">Windows 10 側の操作</string>
+    <string name="help_body">■ 1. 最初に 1 回だけ: ペアリング
+\nこのアプリで「PC から見えるようにする」を押します。PC の「設定」→「デバイス」→「Bluetooth とその他のデバイス」→「Bluetooth またはその他のデバイスを追加する」→「Bluetooth」で、この端末の名前を選びます。両方の画面の番号が一致したら、両方で「ペアリング」「接続」を押します。
+\n
+\n■ 2. PC → スマホへ送る
+\nこのアプリを開いたまま、PC のタスクバーにある Bluetooth アイコンを右クリック →「ファイルの送信」→ この端末 → ファイルを選びます（エクスプローラーでファイルを右クリック →「送る」→「Bluetooth デバイス」でも可）。
+\n受信したファイルは「ダウンロード/BtFileTransfer」に保存され、履歴に表示されます。
+\n
+\n■ 3. スマホ → PC へ送る
+\n先に PC の Bluetooth アイコンを右クリック →「ファイルの受信」を開き、待機状態にします。次にこのアプリで「ファイルを PC へ送信」を押し、ファイルと PC を選びます。受信後、PC 側で保存場所を選んで「完了」を押します。
+\n他のアプリの「共有」から「BTファイル転送」を選んでも送れます。
+\n
+\n■ うまくいかないとき
+\n・PC の Bluetooth 設定でこの端末を「デバイスの削除」してから、ペアリングし直してください。
+\n・Android 標準の Bluetooth 受信機能が先に応答した場合は、「ファイルを受信しますか？」という通知が出ます。承諾すると本体の bluetooth フォルダに保存され、このアプリの履歴にも表示されます。</string>
+</resources>

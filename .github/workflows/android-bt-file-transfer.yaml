@@ -1,0 +1,43 @@
+name: Build Android BT file transfer app
+
+on:
+  push:
+    paths:
+      - "android-bt-file-transfer/**"
+      - ".github/workflows/android-bt-file-transfer.yaml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-bt-file-transfer
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests and debug APK
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bt-file-transfer-debug-apk
+          path: android-bt-file-transfer/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Lint
+        run: ./gradlew --no-daemon lintDebug
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lint-report
+          path: android-bt-file-transfer/app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore
