@@ -264,7 +264,7 @@ public class CameraService extends Service implements HttpServer.Backend {
                 state, p == null ? 0f : p.motionRatio(), p == null ? 0L : p.lastMotionWallMs(),
                 Float.isNaN(batteryTempC) ? 0f : batteryTempC, batteryPct, charging, thermal,
                 store.usableBytes(), p != null && p.storageFull(), settings.rotation, hub.clients(),
-                err == null ? "null" : jsonString(err));
+                err == null ? "null" : HttpServer.jsonString(err));
     }
 
     @Override
@@ -280,17 +280,6 @@ public class CameraService extends Service implements HttpServer.Backend {
     @Override
     public String password() {
         return settings.password;
-    }
-
-    private static String jsonString(String s) {
-        StringBuilder sb = new StringBuilder("\"");
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '"' || c == '\\') sb.append('\\').append(c);
-            else if (c < 0x20) sb.append(String.format(Locale.US, "\\u%04x", (int) c));
-            else sb.append(c);
-        }
-        return sb.append('"').toString();
     }
 
     static String localIpv4() {

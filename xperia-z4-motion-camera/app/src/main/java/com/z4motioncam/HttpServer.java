@@ -1,7 +1,9 @@
 package com.z4motioncam;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -12,6 +14,9 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.net.URLDecoder;
 import java.nio.charset.Charset;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -21,6 +26,9 @@ import java.util.Set;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.Deflater;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Minimal HTTP/1.0 server for the LAN: web page, MJPEG live view, recordings with Range support.
@@ -44,6 +52,8 @@ final class HttpServer {
     private static final int MAX_CONNECTIONS = 8;
     private static final int MAX_STREAMS = 3;
     private static final int READ_TIMEOUT_MS = 15_000;
+    private static final int MAX_BODY_BYTES = 256 * 1024;
+    private static final long MAX_ZIP_BYTES = 3_900_000_000L;
 
     private final int port;
     private final Backend backend;
@@ -152,16 +162,20 @@ final class HttpServer {
 
     private void handle(Request req, OutputStream out) throws IOException {
         boolean head = "HEAD".equals(req.method);
-        if (!"GET".equals(req.method) && !head) {
-            writeSimple(out, 405, "text/plain", "method not allowed\n".getBytes(UTF8), head);
-            return;
-        }
         String pw = backend.password();
         if (pw != null && !pw.isEmpty() && !checkBasicAuth(req.headers.get("authorization"), pw)) {
             String h = "HTTP/1.0 401 Unauthorized\r\n"
                     + "WWW-Authenticate: Basic realm=\"Z4 MotionCam\", charset=\"UTF-8\"\r\n"
                     + "Content-Length: 0\r\nConnection: close\r\n\r\n";
             out.write(h.getBytes(UTF8));
+            return;
+        }
+        if ("POST".equals(req.method)) {
+            handlePost(req, out);
+            return;
+        }
+        if (!"GET".equals(req.method) && !head) {
+            writeSimple(out, 405, "text/plain", "method not allowed\n".getBytes(UTF8), head);
             return;
         }
 
@@ -188,6 +202,128 @@ final class HttpServer {
         } else {
             writeSimple(out, 404, "text/plain", "not found\n".getBytes(UTF8), head);
         }
+    }
+
+    private void handlePost(Request req, OutputStream out) throws IOException {
+        if (req.body == null) {
+            writeSimple(out, 413, "text/plain", "request too large\n".getBytes(UTF8), false);
+        } else if (req.path.equals("/api/delete")) {
+            // A custom header cannot be sent cross-origin without a CORS preflight, which this server
+            // never approves, so other web pages cannot delete recordings through the viewer's browser.
+            if (!"z4motioncam".equals(req.headers.get("x-requested-with"))) {
+                writeSimple(out, 403, "text/plain", "forbidden\n".getBytes(UTF8), false);
+                return;
+            }
+            writeSimple(out, 200, "application/json; charset=utf-8",
+                    deleteRecordings(splitNames(new String(req.body, UTF8))).getBytes(UTF8), false);
+        } else if (req.path.equals("/api/zip")) {
+            List<String> names = new ArrayList<>();
+            for (String v : parseForm(new String(req.body, UTF8)).values()) names.addAll(splitNames(v));
+            serveZip(out, names);
+        } else {
+            writeSimple(out, 404, "text/plain", "not found\n".getBytes(UTF8), false);
+        }
+    }
+
+    /** Deletes finished recordings by name; returns {"deleted":[...],"failed":[...]}. */
+    private String deleteRecordings(List<String> names) {
+        StringBuilder deleted = new StringBuilder();
+        StringBuilder failed = new StringBuilder();
+        for (String name : names) {
+            File f = backend.store().find(name);
+            StringBuilder target = f != null && f.delete() ? deleted : failed;
+            if (target.length() > 0) target.append(',');
+            target.append(jsonString(name));
+        }
+        return "{\"deleted\":[" + deleted + "],\"failed\":[" + failed + "]}";
+    }
+
+    /**
+     * Streams the selected recordings as one ZIP. Entries are stored without compression (MP4 is
+     * already compressed), so this costs almost no CPU on the phone.
+     */
+    private void serveZip(OutputStream out, List<String> names) throws IOException {
+        List<File> files = new ArrayList<>();
+        long total = 0;
+        for (String n : names) {
+            File f = backend.store().find(n);
+            if (f != null && !files.contains(f)) {
+                files.add(f);
+                total += f.length();
+            }
+        }
+        if (files.isEmpty()) {
+            writeSimple(out, 400, "text/plain; charset=utf-8", "ファイルが選択されていません\n".getBytes(UTF8), false);
+            return;
+        }
+        if (total > MAX_ZIP_BYTES) {
+            // Android before 7.0 cannot write ZIP64, so a ZIP must stay under 4 GB.
+            writeSimple(out, 413, "text/plain; charset=utf-8",
+                    "選択したファイルの合計が大きすぎます（3.9GBまで）\n".getBytes(UTF8), false);
+            return;
+        }
+        String zipName = "z4motioncam_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".zip";
+        out.write(("HTTP/1.0 200 OK\r\nContent-Type: application/zip\r\n"
+                + "Content-Disposition: attachment; filename=\"" + zipName + "\"\r\n"
+                + "Cache-Control: no-cache\r\nConnection: close\r\n\r\n").getBytes(UTF8));
+        ZipOutputStream zip = new ZipOutputStream(new BufferedOutputStream(out, 64 * 1024));
+        zip.setLevel(Deflater.NO_COMPRESSION);
+        byte[] buf = new byte[64 * 1024];
+        for (File f : files) {
+            InputStream in;
+            try {
+                in = new FileInputStream(f);
+            } catch (IOException gone) {
+                continue; // deleted meanwhile (e.g. by the storage rotation)
+            }
+            try {
+                ZipEntry e = new ZipEntry(f.getName());
+                e.setTime(f.lastModified());
+                zip.putNextEntry(e);
+                int n;
+                while ((n = in.read(buf)) > 0) zip.write(buf, 0, n);
+                zip.closeEntry();
+            } finally {
+                in.close();
+            }
+        }
+        zip.finish();
+        zip.flush();
+    }
+
+    /** Splits a newline / comma separated list of names. */
+    static List<String> splitNames(String s) {
+        List<String> out = new ArrayList<>();
+        for (String n : s.split("[\\r\\n,]+")) {
+            String t = n.trim();
+            if (!t.isEmpty()) out.add(t);
+        }
+        return out;
+    }
+
+    /** Parses an application/x-www-form-urlencoded body (repeated keys are joined with newlines). */
+    static Map<String, String> parseForm(String body) {
+        Map<String, String> m = new HashMap<>();
+        for (String kv : body.split("&")) {
+            if (kv.isEmpty()) continue;
+            int e = kv.indexOf('=');
+            String k = Request.decode(e >= 0 ? kv.substring(0, e) : kv);
+            String v = e >= 0 ? Request.decode(kv.substring(e + 1)) : "";
+            String prev = m.get(k);
+            m.put(k, prev == null ? v : prev + "\n" + v);
+        }
+        return m;
+    }
+
+    static String jsonString(String s) {
+        StringBuilder sb = new StringBuilder("\"");
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '"' || c == '\\') sb.append('\\').append(c);
+            else if (c < 0x20) sb.append(String.format(Locale.US, "\\u%04x", (int) c));
+            else sb.append(c);
+        }
+        return sb.append('"').toString();
     }
 
     private void serveSnapshot(OutputStream out, boolean head) throws IOException {
@@ -372,8 +508,11 @@ final class HttpServer {
     private static String reason(int code) {
         switch (code) {
             case 200: return "OK";
+            case 400: return "Bad Request";
+            case 403: return "Forbidden";
             case 404: return "Not Found";
             case 405: return "Method Not Allowed";
+            case 413: return "Payload Too Large";
             case 503: return "Service Unavailable";
             default: return "Status";
         }
@@ -394,13 +533,16 @@ final class HttpServer {
         final String path;
         final Map<String, String> query;
         final Map<String, String> headers;
+        /** Request body; empty when absent, null when larger than the limit. */
+        final byte[] body;
 
         private Request(String method, String path, Map<String, String> query,
-                        Map<String, String> headers) {
+                        Map<String, String> headers, byte[] body) {
             this.method = method;
             this.path = path;
             this.query = query;
             this.headers = headers;
+            this.body = body;
         }
 
         static Request read(InputStream in) throws IOException {
@@ -426,10 +568,31 @@ final class HttpServer {
                     else if (!kv.isEmpty()) query.put(decode(kv), "");
                 }
             }
-            return new Request(parts[0].toUpperCase(Locale.US), decode(rawPath), query, headers);
+            return new Request(parts[0].toUpperCase(Locale.US), decode(rawPath), query, headers,
+                    readBody(in, headers.get("content-length")));
         }
 
-        private static String decode(String s) {
+        private static byte[] readBody(InputStream in, String contentLength) throws IOException {
+            if (contentLength == null) return new byte[0];
+            long len;
+            try {
+                len = Long.parseLong(contentLength.trim());
+            } catch (NumberFormatException e) {
+                return new byte[0];
+            }
+            if (len <= 0) return new byte[0];
+            if (len > MAX_BODY_BYTES) return null;
+            byte[] body = new byte[(int) len];
+            int off = 0;
+            while (off < body.length) {
+                int n = in.read(body, off, body.length - off);
+                if (n < 0) throw new SocketException("truncated body");
+                off += n;
+            }
+            return body;
+        }
+
+        static String decode(String s) {
             try {
                 return URLDecoder.decode(s, "UTF-8");
             } catch (Exception e) {

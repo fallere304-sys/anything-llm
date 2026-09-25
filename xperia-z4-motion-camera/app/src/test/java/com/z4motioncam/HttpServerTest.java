@@ -24,6 +24,7 @@ public class HttpServerTest {
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
 
+    private File dir;
     private HttpServer server;
     private FrameHub hub;
     private String password = "";
@@ -31,7 +32,7 @@ public class HttpServerTest {
 
     @Before
     public void setUp() throws IOException {
-        File dir = tmp.newFolder("rec");
+        dir = tmp.newFolder("rec");
         video = new byte[1000];
         for (int i = 0; i < video.length; i++) video[i] = (byte) i;
         FileOutputStream out = new FileOutputStream(new File(dir, "20260101_120000.mp4"));
@@ -61,13 +62,24 @@ public class HttpServerTest {
     }
 
     private Resp get(String path, String... headers) throws IOException {
+        return request("GET", path, null, headers);
+    }
+
+    private Resp post(String path, String body, String... headers) throws IOException {
+        return request("POST", path, body, headers);
+    }
+
+    private Resp request(String method, String path, String body, String... headers) throws IOException {
         Socket s = new Socket("127.0.0.1", server.port());
         s.setSoTimeout(5000);
-        StringBuilder req = new StringBuilder("GET " + path + " HTTP/1.1\r\nHost: x\r\n");
+        byte[] bodyBytes = body == null ? new byte[0] : body.getBytes(StandardCharsets.UTF_8);
+        StringBuilder req = new StringBuilder(method + " " + path + " HTTP/1.1\r\nHost: x\r\n");
         for (String h : headers) req.append(h).append("\r\n");
+        if (body != null) req.append("Content-Length: ").append(bodyBytes.length).append("\r\n");
         req.append("\r\n");
         OutputStream o = s.getOutputStream();
         o.write(req.toString().getBytes(StandardCharsets.UTF_8));
+        o.write(bodyBytes);
         o.flush();
         InputStream in = s.getInputStream();
         ByteArrayOutputStream all = new ByteArrayOutputStream();
@@ -187,5 +199,85 @@ public class HttpServerTest {
         producer.join();
         assertTrue(r.head.startsWith("HTTP/1.0 200"));
         assertArrayEquals(new byte[] {9, 9}, r.body);
+    }
+
+    private void addRecording(String name, int size) throws IOException {
+        FileOutputStream out = new FileOutputStream(new File(dir, name));
+        out.write(new byte[size]);
+        out.close();
+    }
+
+    @Test
+    public void deletesSelectedRecordings() throws IOException {
+        addRecording("20260102_120000.mp4", 10);
+        addRecording("20260103_120000.mp4", 10);
+        addRecording("20260104_120000.mp4.part", 10);
+        Resp r = post("/api/delete", "20260101_120000.mp4\n20260102_120000.mp4\n../x.mp4\n20260104_120000.mp4.part",
+                "X-Requested-With: z4motioncam");
+        assertTrue(r.head, r.head.startsWith("HTTP/1.0 200"));
+        assertEquals("{\"deleted\":[\"20260101_120000.mp4\",\"20260102_120000.mp4\"],"
+                + "\"failed\":[\"../x.mp4\",\"20260104_120000.mp4.part\"]}",
+                new String(r.body, StandardCharsets.UTF_8));
+        assertFalse(new File(dir, "20260101_120000.mp4").exists());
+        assertTrue(new File(dir, "20260103_120000.mp4").exists());
+        assertTrue("recording in progress is never deleted", new File(dir, "20260104_120000.mp4.part").exists());
+    }
+
+    @Test
+    public void deleteRequiresCustomHeader() throws IOException {
+        // A cross-site form post cannot set this header, so it cannot delete anything.
+        Resp r = post("/api/delete", "20260101_120000.mp4");
+        assertTrue(r.head.startsWith("HTTP/1.0 403"));
+        assertTrue(new File(dir, "20260101_120000.mp4").exists());
+    }
+
+    @Test
+    public void deleteRequiresPasswordWhenSet() throws IOException {
+        password = "secret";
+        Resp r = post("/api/delete", "20260101_120000.mp4", "X-Requested-With: z4motioncam");
+        assertTrue(r.head.startsWith("HTTP/1.0 401"));
+        assertTrue(new File(dir, "20260101_120000.mp4").exists());
+    }
+
+    @Test
+    public void zipsSelectedRecordings() throws IOException {
+        addRecording("20260102_120000.mp4", 300);
+        addRecording("20260103_120000.mp4", 5);
+        // Browser form encoding: newlines become %0D%0A.
+        Resp r = post("/api/zip", "names=20260101_120000.mp4%0D%0A20260102_120000.mp4%0D%0Anope.mp4",
+                "Content-Type: application/x-www-form-urlencoded");
+        assertTrue(r.head, r.head.startsWith("HTTP/1.0 200"));
+        assertTrue(r.head.contains("Content-Type: application/zip"));
+        assertTrue(r.head.contains("Content-Disposition: attachment; filename=\"z4motioncam_"));
+        java.util.zip.ZipInputStream zin = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(r.body));
+        java.util.zip.ZipEntry e1 = zin.getNextEntry();
+        assertEquals("20260101_120000.mp4", e1.getName());
+        ByteArrayOutputStream content = new ByteArrayOutputStream();
+        byte[] buf = new byte[512];
+        int n;
+        while ((n = zin.read(buf)) > 0) content.write(buf, 0, n);
+        assertArrayEquals(video, content.toByteArray());
+        assertEquals("20260102_120000.mp4", zin.getNextEntry().getName());
+        assertNull(zin.getNextEntry());
+    }
+
+    @Test
+    public void zipWithoutValidNamesIsRejected() throws IOException {
+        assertTrue(post("/api/zip", "names=..%2Fsecret").head.startsWith("HTTP/1.0 400"));
+    }
+
+    @Test
+    public void oversizedBodyIsRejected() throws IOException {
+        StringBuilder big = new StringBuilder();
+        while (big.length() < 300 * 1024) big.append("20260101_120000.mp4\n");
+        assertTrue(post("/api/delete", big.toString(), "X-Requested-With: z4motioncam").head.startsWith("HTTP/1.0 413"));
+        assertTrue(new File(dir, "20260101_120000.mp4").exists());
+    }
+
+    @Test
+    public void formAndNameParsing() {
+        assertEquals("a b\nc", HttpServer.parseForm("names=a+b&names=c&x").get("names"));
+        assertEquals("", HttpServer.parseForm("names=a+b&names=c&x").get("x"));
+        assertEquals(java.util.Arrays.asList("a", "b", "c"), HttpServer.splitNames(" a\r\nb,,c\n"));
     }
 }

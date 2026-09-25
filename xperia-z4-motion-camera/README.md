@@ -12,6 +12,7 @@ Xperia Z4 を常時充電のまま使う、低発熱の見守りカメラアプ�
 | --- | --- |
 | 動体検知で録画 | プレビューの輝度を 32×24 マスに縮めて背景と比較し、2回続けて変化したら録画を開始します。動きが止まって N 秒たつと録画を止めます（`MotionDetector`, `CameraPipeline`） |
 | LAN からライブ映像・録画を見る | 自前の小さな HTTP サーバーです。ライブは MJPEG、録画は Range 対応の MP4 配信で、シーク再生もできます（`HttpServer`, `assets/index.html`） |
+| 録画データの管理 | 1 件ずつ保存・削除できるほか、チェックボックスで選んだ録画をまとめて保存（ZIP）・削除できます |
 | 充電中でも熱暴走しない | 下の「発熱対策」を参照 |
 | 30 秒でバックライト OFF | 最後のタッチから 30 秒で、輝度を最低にして黒一色の画面にします。画面の更新も止めます（`MainActivity`） |
 | タッチでバックライト ON | 暗い間は、どこをタッチしても元の輝度に戻ります。復帰したときのタッチでボタンが押されることはありません |
@@ -53,7 +54,7 @@ Z4 の SoC である Snapdragon 810 は発熱しやすいことで知られて�
 
 Z4 のブラウザで次の URL を開くとダウンロードできます。
 
-https://github.com/fallere304-sys/anything-llm/raw/claude/xperia-z4-motion-camera-7x4wet/xperia-z4-motion-camera/release/z4motioncam-1.0.apk
+https://github.com/fallere304-sys/anything-llm/raw/claude/xperia-z4-motion-camera-7x4wet/xperia-z4-motion-camera/release/z4motioncam-1.1.apk
 
 1. 「設定 > セキュリティ > 提供元不明のアプリ」をオンにします。
 2. ダウンロードした APK を開いてインストールします。
@@ -80,7 +81,11 @@ Android Studio を使わずに作る場合は、Ubuntu のパッケージ（`aap
 
 1. アプリを起動し、カメラの権限を許可します。
 2. 画面左上に `http://192.168.x.x:8080/` が出るので、同じ Wi-Fi のスマホや PC のブラウザで開きます。
-   - 上がライブ映像、下が録画一覧です。タップで再生、「保存」でダウンロードできます。
+   - 上がライブ映像、下が録画一覧です。日時をタップすると再生します。
+   - 各録画の右にある「保存」でダウンロード、「削除」で削除します（確認あり）。
+   - 左のチェックボックスで録画を選び、一覧の上にある「一括保存」「一括削除」を押すと、選んだ録画だけをまとめて処理します。「すべて選択」で全件を選べます。
+   - 一括保存は、1 件なら MP4 のまま、2 件以上なら 1 つの ZIP（無圧縮で、スマホ側の負荷はほとんどありません）で保存します。ZIP は合計 3.9GB までです（Android 7 未満は 4GB を超える ZIP を作れないため）。
+   - 録画中のファイルは一覧に出ないので、削除されることはありません。
    - 状態、電池温度、空き容量、最後に動きを検知した時刻も表示されます。
 3. 30 秒たつと画面が暗くなります。タッチすると 30 秒間だけ元に戻ります。
 4. 「停止」ボタンで監視を終了します。
@@ -115,6 +120,7 @@ CameraService    フォアグラウンドサービス（カメラ、HTTP、電�
  ├─ RecordingStore   保存先、空き容量の確保、古い録画の削除
  ├─ FrameHub         最新の JPEG を見る人に渡す（見る人がいるときだけ生成）
  ├─ HttpServer       / , /stream.mjpg , /snapshot.jpg , /api/status , /api/recordings , /rec/<name>
+ │                   POST /api/delete（削除）, POST /api/zip（一括保存）
  └─ ThermalPolicy    電池温度 → 負荷レベル
 ```
 
