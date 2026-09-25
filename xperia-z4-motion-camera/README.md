@@ -136,6 +136,39 @@ Z4 は次のことを調べます（10 秒ほどかかります）。
 
 IPv6 のグローバルアドレスがあれば、ルーターの IPv6 フィルターで着信を許可すると、IPv6 回線のスマホから接続できます。
 
+### 1'. 同じネットワークの PC で調べる（Windows）
+
+Z4 を使わずに、家の Wi-Fi / LAN につないだ Windows PC でも同じ診断ができます。PC やルーターの設定は何も変えません。
+
+**方法 A: コマンド 1 行で実行する**
+
+スタートメニューで「PowerShell」を開き、次を貼り付けて Enter を押します。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/fallere304-sys/anything-llm/raw/claude/xperia-z4-motion-camera-7x4wet/xperia-z4-motion-camera/tools/netcheck.ps1 | iex"
+```
+
+**方法 B: ファイルをダウンロードして実行する**
+
+`tools/netcheck.ps1` と `tools/netcheck.bat` を同じフォルダーに保存し、`netcheck.bat` をダブルクリックします。
+
+20 秒ほどで、次の内容と判定（Z4 の診断と同じ基準）が表示されます。
+
+- 公開 IPv4 / IPv6
+- ルーターの WAN 側 IPv4 と機種名（UPnP）
+- PC の IPv6 グローバルアドレス
+- インターネットまでの最初の 4 ホップ
+
+UPnP が使えないルーターでも、2 ホップ目のアドレスから二重ルーターや CGNAT の手がかりを表示します。
+
+Windows ファイアウォールの確認画面が出た場合は、「キャンセル」を押しても診断できます。
+
+**手作業で確かめる場合**
+
+1. ブラウザで https://api.ipify.org を開き、公開 IPv4 を控えます。
+2. ルーターの管理画面（たいてい http://192.168.1.1/ などのゲートウェイのアドレス）で、「WAN 側 / インターネット側 IPv4 アドレス」を見ます。
+3. 2 つが同じならグローバル IP です。違う場合や、100.64〜100.127 で始まる場合は、グローバル IP ではありません。
+
 ### 2. 有効にする（◎ と判定されたら）
 
 1. Z4 の「設定」で**閲覧パスワードを 8 文字以上**にします。
