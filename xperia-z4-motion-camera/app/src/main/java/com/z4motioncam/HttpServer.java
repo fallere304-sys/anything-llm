@@ -49,6 +49,9 @@ final class HttpServer {
 
         /** Password for the Internet-facing (HTTPS) server. The LAN server never asks for one. */
         String password();
+
+        /** Run-time log: current session, past sessions (how they ended), battery samples. */
+        String uptimeJson();
     }
 
     private static final Charset UTF8 = Charset.forName("UTF-8");
@@ -234,6 +237,8 @@ final class HttpServer {
         } else if (path.equals("/api/status")) {
             writeSimple(out, 200, "application/json; charset=utf-8",
                     backend.statusJson().getBytes(UTF8), head);
+        } else if (path.equals("/api/uptime")) {
+            writeSimple(out, 200, "application/json; charset=utf-8", backend.uptimeJson().getBytes(UTF8), head);
         } else if (path.equals("/api/recordings")) {
             writeSimple(out, 200, "application/json; charset=utf-8",
                     recordingsJson(backend.store().list()).getBytes(UTF8), head);

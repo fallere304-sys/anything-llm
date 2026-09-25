@@ -61,6 +61,14 @@
   .kv dt { color: #999; }
   .kv dd { margin: 0; word-break: break-all; }
   .fp { font-family: ui-monospace, monospace; font-size: 12px; }
+  .sess { padding: 8px 0; border-bottom: 1px solid #2a2a2a; font-size: 14px; }
+  .sess .when { font-weight: bold; }
+  .sess.bad .how { color: #ffb74d; font-weight: bold; }
+  .scroll { overflow-x: auto; }
+  table.samples { border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+  table.samples th, table.samples td { padding: 4px 8px; border-bottom: 1px solid #2a2a2a; text-align: right; }
+  table.samples th { color: #999; font-weight: normal; }
+  details summary { cursor: pointer; margin: 10px 0 6px; color: #8ab4ff; }
 </style>
 </head>
 <body>
@@ -78,6 +86,8 @@
   </div>
   <p><button class="secondary" id="toggle">ライブ停止</button></p>
 
+  <!-- The sticky toolbar stays pinned only while this section is on screen. -->
+  <section>
   <h2>録画</h2>
   <video id="player" controls playsinline></video>
   <div class="toolbar">
@@ -88,6 +98,19 @@
   </div>
   <div id="notice" class="meta" role="status"></div>
   <ul id="list"><li class="meta">読み込み中…</li></ul>
+  </section>
+  <h2>稼働記録</h2>
+  <div class="panel">
+    <div id="upNow"></div>
+    <p class="meta">1分ごとに「動作中」を記録しています。突然電源が切れた場合も、最後の記録時刻（1分以内の誤差）を終了時刻として残します。</p>
+    <div id="sessions"></div>
+    <details>
+      <summary>電池の記録（直近24時間・5分ごと）</summary>
+      <div class="scroll"><table class="samples" id="samples"></table></div>
+    </details>
+    <p><button type="button" class="secondary" id="upReload">更新</button></p>
+  </div>
+
   <h2>外出先からの視聴</h2>
   <div class="panel">
     <dl class="kv" id="remoteKv"></dl>
@@ -428,6 +451,62 @@
       : '';
   }
 
+  // ---- uptime log ----
+  var BAD_END = { '突然の電源断（シャットダウン通知なし）': true, 'アプリだけが強制終了（端末は動作継続）': true };
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function fmtTime(ms) {
+    var d = new Date(ms);
+    return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+  function fmtDur(min) { return Math.floor(min / 60) + '時間' + pad2(min % 60) + '分'; }
+  function fmtSnap(x) {
+    var parts = [];
+    if (x.battery >= 0) parts.push('電池 ' + x.battery + '%');
+    if (x.tempC !== null) parts.push(x.tempC.toFixed(1) + '℃');
+    if (x.voltageMv > 0) parts.push((x.voltageMv / 1000).toFixed(2) + 'V');
+    if (x.power) parts.push(x.power);
+    if (x.health && x.health !== '良好') parts.push('電池状態: ' + x.health);
+    if (x.thermal) parts.push('負荷制御 ' + x.thermal);
+    return parts.join('・');
+  }
+  function loadUptime() {
+    getJson('/api/uptime', function (err, u) {
+      var now = $('upNow');
+      if (err) { now.textContent = '稼働記録を読み込めません'; return; }
+      now.textContent = '現在: ' + fmtDur(u.current.minutes) + ' 稼働中（' + fmtTime(u.current.start) + ' から）';
+      var box = $('sessions');
+      box.textContent = '';
+      if (!u.sessions.length) box.appendChild(el('div', '過去の記録はまだありません', 'meta'));
+      for (var i = 0; i < u.sessions.length && i < 30; i++) {
+        var x = u.sessions[i];
+        var d = el('div', null, 'sess' + (BAD_END[x.reason] ? ' bad' : ''));
+        d.appendChild(el('div', fmtTime(x.start) + ' → ' + fmtTime(x.end) + '（' + fmtDur(x.minutes) + '）', 'when'));
+        d.appendChild(el('div', '終わり方: ' + x.reason, 'how'));
+        d.appendChild(el('div', '直前の状態: ' + fmtSnap(x.last), 'meta'));
+        box.appendChild(d);
+      }
+      var t = $('samples');
+      t.textContent = '';
+      var head = el('tr');
+      var cols = ['時刻', '電池', '温度', '電圧', '充電', '負荷制御', '録画'];
+      for (var c = 0; c < cols.length; c++) head.appendChild(el('th', cols[c]));
+      t.appendChild(head);
+      for (var j = 0; j < u.samples.length; j++) {
+        var s = u.samples[j], tr = el('tr');
+        var cells = [fmtTime(s.t), s.battery >= 0 ? s.battery + '%' : '-', s.tempC !== null ? s.tempC.toFixed(1) + '℃' : '-',
+          s.voltageMv > 0 ? (s.voltageMv / 1000).toFixed(2) + 'V' : '-', s.power || '-', s.thermal || '-', s.recording ? '●' : ''];
+        for (var k = 0; k < cells.length; k++) tr.appendChild(el('td', cells[k]));
+        t.appendChild(tr);
+      }
+      if (!u.samples.length) {
+        var empty = el('tr');
+        empty.appendChild(el('td', '5分ごとに記録されます'));
+        t.appendChild(empty);
+      }
+    });
+  }
+  $('upReload').addEventListener('click', loadUptime);
+
   // ---- status ----
   var STATE = { recording: '● 録画中', watching: '監視中', starting: 'カメラ準備中',
                 cooling: '高温のため一時停止中', stopped: '停止中' };
@@ -455,7 +534,9 @@
   startLive();
   loadList();
   loadStatus();
+  loadUptime();
   setInterval(loadStatus, 5000);
+  setInterval(loadUptime, 5 * 60 * 1000);
 })();
 </script>
 </body>

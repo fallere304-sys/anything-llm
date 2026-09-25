@@ -50,6 +50,7 @@ public class HttpServerTest {
             @Override public RecordingStore store() { return store; }
             @Override public FrameHub frames() { return hub; }
             @Override public String password() { return password; }
+            @Override public String uptimeJson() { return "{\"current\":{}}"; }
         };
         server = new HttpServer(0, backend, null, true, false);
         server.start();

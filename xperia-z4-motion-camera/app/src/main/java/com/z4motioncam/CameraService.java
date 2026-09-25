@@ -12,13 +12,18 @@ import android.net.wifi.WifiManager;
 import android.os.BatteryManager;
 import android.os.Binder;
 import android.os.Environment;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Locale;
 
 import javax.net.ssl.SSLSocketFactory;
@@ -56,6 +61,27 @@ public class CameraService extends Service implements HttpServer.Backend {
     private volatile float batteryTempC = Float.NaN;
     private volatile int batteryPct = -1;
     private volatile boolean charging;
+    private volatile int batteryVoltageMv = -1;
+    private volatile String powerState = "";
+    private volatile String batteryHealth = "";
+    private UptimeLog uptime;
+    private final Handler main = new Handler(Looper.getMainLooper());
+
+    private final Runnable heartbeat = new Runnable() {
+        @Override
+        public void run() {
+            uptime.beat(snapshot());
+            main.postDelayed(this, UptimeLog.BEAT_MS);
+        }
+    };
+
+    private final BroadcastReceiver shutdownReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            // The OS announces a normal shutdown / reboot (also its low-battery and overheat ones).
+            uptime.end(UptimeLog.END_SHUTDOWN, snapshot());
+        }
+    };
 
     private final BroadcastReceiver networkReceiver = new BroadcastReceiver() {
         @Override
@@ -100,8 +126,24 @@ public class CameraService extends Service implements HttpServer.Backend {
 
         applySettings(AppSettings.load(this));
         registerReceiver(networkReceiver, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
-        // Sticky broadcast: delivers the current state immediately, then every change.
-        registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        // Sticky broadcast: returns the current state now, then delivers every change.
+        Intent battery = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        if (battery != null) onBattery(battery);
+
+        uptime = new UptimeLog(new File(getFilesDir(), "uptime"), new UptimeLog.Clock() {
+            @Override
+            public long wallMs() {
+                return System.currentTimeMillis();
+            }
+
+            @Override
+            public long sinceBootMs() {
+                return SystemClock.elapsedRealtime();
+            }
+        });
+        uptime.begin(snapshot());
+        registerReceiver(shutdownReceiver, new IntentFilter(Intent.ACTION_SHUTDOWN));
+        main.postDelayed(heartbeat, UptimeLog.BEAT_MS);
     }
 
     @Override
@@ -120,6 +162,9 @@ public class CameraService extends Service implements HttpServer.Backend {
 
     @Override
     public void onDestroy() {
+        main.removeCallbacks(heartbeat);
+        uptime.end(UptimeLog.END_STOP, snapshot()); // no-op after a shutdown notice
+        unregisterReceiver(shutdownReceiver);
         unregisterReceiver(batteryReceiver);
         unregisterReceiver(networkReceiver);
         stopPipeline();
@@ -180,6 +225,13 @@ public class CameraService extends Service implements HttpServer.Backend {
         int scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
         batteryPct = level < 0 || scale <= 0 ? -1 : level * 100 / scale;
         charging = i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0;
+        batteryVoltageMv = i.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1);
+        int status = i.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN);
+        if (!charging) powerState = "未接続";
+        else if (status == BatteryManager.BATTERY_STATUS_FULL) powerState = "満充電";
+        else if (status == BatteryManager.BATTERY_STATUS_CHARGING) powerState = "充電中";
+        else powerState = "接続中・充電停止"; // plugged in but the charger stopped (e.g. battery too hot)
+        batteryHealth = healthText(i.getIntExtra(BatteryManager.EXTRA_HEALTH, BatteryManager.BATTERY_HEALTH_UNKNOWN));
         if (t == Integer.MIN_VALUE) return;
         batteryTempC = t / 10f;
 
@@ -195,6 +247,31 @@ public class CameraService extends Service implements HttpServer.Backend {
             if (pipeline == null) startPipeline();
             pipeline.setThermalLevel(next);
         }
+    }
+
+    private static String healthText(int h) {
+        switch (h) {
+            case BatteryManager.BATTERY_HEALTH_GOOD: return "良好";
+            case BatteryManager.BATTERY_HEALTH_OVERHEAT: return "過熱";
+            case BatteryManager.BATTERY_HEALTH_DEAD: return "劣化";
+            case BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE: return "過電圧";
+            case BatteryManager.BATTERY_HEALTH_UNSPECIFIED_FAILURE: return "異常";
+            case BatteryManager.BATTERY_HEALTH_COLD: return "低温";
+            default: return "不明";
+        }
+    }
+
+    UptimeLog.Snapshot snapshot() {
+        UptimeLog.Snapshot s = new UptimeLog.Snapshot();
+        s.batteryPct = batteryPct;
+        s.tempC = batteryTempC;
+        s.voltageMv = batteryVoltageMv;
+        s.power = powerState;
+        s.health = batteryHealth;
+        s.thermal = thermal.name();
+        CameraPipeline p = pipeline;
+        s.recording = p != null && p.isRecording();
+        return s;
     }
 
     /** TLS for the DuckDNS update: Android 5-7 lack some current root CAs, so bundled ones are added. */
@@ -271,8 +348,12 @@ public class CameraService extends Service implements HttpServer.Backend {
             sb.append(String.format(Locale.US, "  動き %.1f%%", p.motionRatio() * 100));
         }
         sb.append('\n');
-        sb.append(String.format(Locale.US, "電池 %.1f℃ %s%s  負荷制御:%s", batteryTempC,
-                batteryPct < 0 ? "" : batteryPct + "%", charging ? "(充電中)" : "", thermal));
+        sb.append(String.format(Locale.US, "電池 %.1f℃ %s %s  負荷制御:%s", batteryTempC,
+                batteryPct < 0 ? "" : batteryPct + "%", powerState, thermal));
+        sb.append('\n');
+        long m = uptime.minutes();
+        sb.append(String.format(Locale.US, "稼働 %d時間%02d分（%s から）", m / 60, m % 60,
+                new SimpleDateFormat("M/d HH:mm", Locale.US).format(new Date(uptime.startWallMs()))));
         sb.append('\n');
         sb.append(String.format(Locale.US, "空き %.1f GB / 録画 %d 件", store.usableBytes() / 1e9, store.list().size()));
         if (p != null && p.storageFull()) sb.append("\n空き容量不足");
@@ -305,6 +386,11 @@ public class CameraService extends Service implements HttpServer.Backend {
                 store.usableBytes(), p != null && p.storageFull(), settings.rotation, hub.clients(),
                 err == null ? "null" : HttpServer.jsonString(err),
                 remote == null ? "null" : remote.statusJson());
+    }
+
+    @Override
+    public String uptimeJson() {
+        return uptime.json();
     }
 
     @Override

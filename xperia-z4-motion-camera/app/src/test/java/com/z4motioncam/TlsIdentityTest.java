@@ -95,6 +95,7 @@ public class TlsIdentityTest {
             public RecordingStore store() { return store; }
             public FrameHub frames() { return hub; }
             public String password() { return password; }
+            public String uptimeJson() { return "{}"; }
         }, id.serverSocketFactory(), false, true);
         server.start();
         try {
