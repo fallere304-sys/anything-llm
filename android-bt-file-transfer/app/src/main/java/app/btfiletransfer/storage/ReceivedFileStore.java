@@ -1,6 +1,7 @@
 package app.btfiletransfer.storage;
 
 import android.Manifest;
+import android.annotation.TargetApi;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
@@ -59,6 +60,7 @@ public final class ReceivedFileStore {
 
     // ---- Android 10+ ----
 
+    @TargetApi(29) // 呼び出し元 create() で SDK_INT >= 29 を確認済み
     private Pending createMediaStore(String name, String mimeType) throws IOException {
         final ContentResolver cr = context.getContentResolver();
         ContentValues v = new ContentValues();
