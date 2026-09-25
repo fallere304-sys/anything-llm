@@ -49,6 +49,17 @@ Z4 の SoC である Snapdragon 810 は発熱しやすいことで知られて�
 - 画面ロックを「なし」にします。停電などで再起動したとき、ロック解除なしで監視を再開するためです。
 - 自動アップデートと不要なアプリを止め、裏で動く処理を減らします。
 
+## ダウンロード（ビルド済み APK）
+
+Z4 のブラウザで次の URL を開くとダウンロードできます。
+
+https://github.com/fallere304-sys/anything-llm/raw/claude/xperia-z4-motion-camera-7x4wet/xperia-z4-motion-camera/release/z4motioncam-1.0.apk
+
+1. 「設定 > セキュリティ > 提供元不明のアプリ」をオンにします。
+2. ダウンロードした APK を開いてインストールします。
+
+注意: このAPKは開発環境で作った署名鍵で署名しています。**別の鍵で署名されたAPKでは上書き更新できません。** その場合は一度アンインストールが必要で、アンインストールすると保存済みの録画（`Android/data/com.z4motioncam/`）も消えます。更新するときは先に録画を退避してください。
+
 ## ビルドとインストール
 
 Android Studio（JDK 17 以上）でこのフォルダ `xperia-z4-motion-camera/` を開き、そのままビルドします。
@@ -62,6 +73,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 `./gradlew test` で PC 上の単体テストを実行できます。対象は動体検知、温度制御、ストレージ削除、HTTP（Range と認証）、色変換です。
 
 Z4 に入れるには、「設定 > セキュリティ > 提供元不明のアプリ」を許可してから APK を入れてください。
+
+Android Studio を使わずに作る場合は、Ubuntu のパッケージ（`aapt` `apksigner` `zipalign` `dalvik-exchange` `android-sdk-platform-23`）を入れて `./build-apk.sh` を実行します。`release/` に署名済み APK ができます。
 
 ## 使い方
 
