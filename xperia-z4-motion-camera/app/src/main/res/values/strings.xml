@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Z4 MotionCam</string>
+    <string name="settings">設定</string>
+    <string name="stop">停止</string>
+    <string name="notif_title">動体検知カメラ 稼働中</string>
+    <string name="permission_denied">カメラの権限がないため起動できません</string>
+
+    <string name="pref_cat_camera">カメラ</string>
+    <string name="pref_resolution">解像度</string>
+    <string name="pref_fps">フレームレート</string>
+    <string name="pref_rotation">映像の回転</string>
+    <string name="pref_cat_motion">動体検知・録画</string>
+    <string name="pref_sensitivity">検知感度</string>
+    <string name="pref_post_record">動きが止まってから録画を続ける秒数</string>
+    <string name="pref_segment">1ファイルの最大長（分）</string>
+    <string name="pref_cat_storage">ストレージ</string>
+    <string name="pref_use_sd">SDカードを優先して保存</string>
+    <string name="pref_min_free">確保する空き容量（MB）</string>
+    <string name="pref_min_free_summary">これを下回ると古い録画から削除します</string>
+    <string name="pref_cat_network">ネットワーク</string>
+    <string name="pref_port">ポート番号</string>
+    <string name="pref_password">閲覧パスワード（空欄で無効）</string>
+    <string name="pref_cat_system">システム</string>
+    <string name="pref_autostart">端末起動時に自動で開始</string>
+    <string name="pref_note">設定は画面に戻ると反映されます</string>
+
+    <string-array name="resolution_entries">
+        <item>640×480（推奨・低発熱）</item>
+        <item>1280×720</item>
+    </string-array>
+    <string-array name="resolution_values">
+        <item>640x480</item>
+        <item>1280x720</item>
+    </string-array>
+    <string-array name="fps_entries">
+        <item>5 fps（最も低発熱）</item>
+        <item>10 fps（推奨）</item>
+        <item>15 fps</item>
+    </string-array>
+    <string-array name="fps_values">
+        <item>5</item>
+        <item>10</item>
+        <item>15</item>
+    </string-array>
+    <string-array name="rotation_entries">
+        <item>0°</item>
+        <item>90°</item>
+        <item>180°</item>
+        <item>270°</item>
+    </string-array>
+    <string-array name="rotation_values">
+        <item>0</item>
+        <item>90</item>
+        <item>180</item>
+        <item>270</item>
+    </string-array>
+    <string-array name="sensitivity_entries">
+        <item>低（大きな動きのみ）</item>
+        <item>中</item>
+        <item>高（寝返りなど小さな動き）</item>
+    </string-array>
+    <string-array name="sensitivity_values">
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+    <string-array name="post_record_entries">
+        <item>5秒</item>
+        <item>10秒</item>
+        <item>20秒</item>
+        <item>30秒</item>
+    </string-array>
+    <string-array name="post_record_values">
+        <item>5</item>
+        <item>10</item>
+        <item>20</item>
+        <item>30</item>
+    </string-array>
+    <string-array name="segment_entries">
+        <item>1分</item>
+        <item>5分</item>
+        <item>10分</item>
+    </string-array>
+    <string-array name="segment_values">
+        <item>1</item>
+        <item>5</item>
+        <item>10</item>
+    </string-array>
+</resources>

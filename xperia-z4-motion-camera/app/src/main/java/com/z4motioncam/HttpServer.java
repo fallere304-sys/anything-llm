@@ -1,0 +1,496 @@
+package com.z4motioncam;
+
+import java.io.BufferedInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.RandomAccessFile;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketException;
+import java.net.URLDecoder;
+import java.nio.charset.Charset;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Minimal HTTP/1.0 server for the LAN: web page, MJPEG live view, recordings with Range support.
+ * Plain java.net so it has no dependencies; one short-lived thread per connection, capped.
+ */
+final class HttpServer {
+    interface Backend {
+        byte[] indexHtml();
+
+        String statusJson();
+
+        RecordingStore store();
+
+        FrameHub frames();
+
+        /** Empty string disables authentication. */
+        String password();
+    }
+
+    private static final Charset UTF8 = Charset.forName("UTF-8");
+    private static final int MAX_CONNECTIONS = 8;
+    private static final int MAX_STREAMS = 3;
+    private static final int READ_TIMEOUT_MS = 15_000;
+
+    private final int port;
+    private final Backend backend;
+    private final Set<Socket> sockets = new HashSet<>();
+    private ServerSocket server;
+    private ThreadPoolExecutor pool;
+    private Thread acceptThread;
+    private volatile boolean running;
+    private int streams;
+
+    HttpServer(int port, Backend backend) {
+        this.port = port;
+        this.backend = backend;
+    }
+
+    int port() {
+        return server != null ? server.getLocalPort() : port;
+    }
+
+    void start() throws IOException {
+        server = new ServerSocket();
+        server.setReuseAddress(true);
+        server.bind(new InetSocketAddress(port));
+        pool = new ThreadPoolExecutor(0, MAX_CONNECTIONS, 30, TimeUnit.SECONDS,
+                new SynchronousQueue<Runnable>());
+        running = true;
+        acceptThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                acceptLoop();
+            }
+        }, "http-accept");
+        acceptThread.start();
+    }
+
+    void stop() {
+        running = false;
+        closeQuietly(server);
+        synchronized (sockets) {
+            for (Socket s : sockets) closeQuietly(s);
+            sockets.clear();
+        }
+        if (pool != null) pool.shutdownNow();
+        if (acceptThread != null) {
+            try {
+                acceptThread.join(2000);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private void acceptLoop() {
+        while (running) {
+            final Socket s;
+            try {
+                s = server.accept();
+            } catch (IOException e) {
+                if (running) continue;
+                return;
+            }
+            synchronized (sockets) {
+                sockets.add(s);
+            }
+            try {
+                pool.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        serve(s);
+                    }
+                });
+            } catch (RuntimeException rejected) {
+                try {
+                    writeSimple(s.getOutputStream(), 503, "text/plain", "busy\n".getBytes(UTF8), false);
+                } catch (IOException ignored) {
+                    // client gone
+                }
+                release(s);
+            }
+        }
+    }
+
+    private void release(Socket s) {
+        closeQuietly(s);
+        synchronized (sockets) {
+            sockets.remove(s);
+        }
+    }
+
+    private void serve(Socket s) {
+        try {
+            s.setSoTimeout(READ_TIMEOUT_MS);
+            s.setTcpNoDelay(true);
+            InputStream in = new BufferedInputStream(s.getInputStream());
+            OutputStream out = s.getOutputStream();
+            Request req = Request.read(in);
+            if (req == null) return;
+            handle(req, out);
+            out.flush();
+        } catch (IOException ignored) {
+            // client disconnected or timed out
+        } finally {
+            release(s);
+        }
+    }
+
+    private void handle(Request req, OutputStream out) throws IOException {
+        boolean head = "HEAD".equals(req.method);
+        if (!"GET".equals(req.method) && !head) {
+            writeSimple(out, 405, "text/plain", "method not allowed\n".getBytes(UTF8), head);
+            return;
+        }
+        String pw = backend.password();
+        if (pw != null && !pw.isEmpty() && !checkBasicAuth(req.headers.get("authorization"), pw)) {
+            String h = "HTTP/1.0 401 Unauthorized\r\n"
+                    + "WWW-Authenticate: Basic realm=\"Z4 MotionCam\", charset=\"UTF-8\"\r\n"
+                    + "Content-Length: 0\r\nConnection: close\r\n\r\n";
+            out.write(h.getBytes(UTF8));
+            return;
+        }
+
+        String path = req.path;
+        if (path.equals("/") || path.equals("/index.html")) {
+            writeSimple(out, 200, "text/html; charset=utf-8", backend.indexHtml(), head);
+        } else if (path.equals("/api/status")) {
+            writeSimple(out, 200, "application/json; charset=utf-8",
+                    backend.statusJson().getBytes(UTF8), head);
+        } else if (path.equals("/api/recordings")) {
+            writeSimple(out, 200, "application/json; charset=utf-8",
+                    recordingsJson(backend.store().list()).getBytes(UTF8), head);
+        } else if (path.equals("/snapshot.jpg")) {
+            serveSnapshot(out, head);
+        } else if (path.equals("/stream.mjpg")) {
+            serveMjpeg(out, head);
+        } else if (path.startsWith("/rec/")) {
+            File f = backend.store().find(path.substring("/rec/".length()));
+            if (f == null) {
+                writeSimple(out, 404, "text/plain", "not found\n".getBytes(UTF8), head);
+            } else {
+                serveFile(out, f, req.headers.get("range"), "download".equals(req.query.get("dl")), head);
+            }
+        } else {
+            writeSimple(out, 404, "text/plain", "not found\n".getBytes(UTF8), head);
+        }
+    }
+
+    private void serveSnapshot(OutputStream out, boolean head) throws IOException {
+        FrameHub hub = backend.frames();
+        hub.request(System.currentTimeMillis());
+        FrameHub.Frame f;
+        try {
+            FrameHub.Frame cached = hub.latest();
+            f = hub.await(cached == null ? -1 : cached.seq, 3000);
+        } catch (InterruptedException e) {
+            return;
+        }
+        if (f == null) {
+            writeSimple(out, 503, "text/plain", "camera not ready\n".getBytes(UTF8), head);
+        } else {
+            writeSimple(out, 200, "image/jpeg", f.jpeg, head);
+        }
+    }
+
+    private void serveMjpeg(OutputStream out, boolean head) throws IOException {
+        synchronized (this) {
+            if (streams >= MAX_STREAMS) {
+                writeSimple(out, 503, "text/plain", "too many viewers\n".getBytes(UTF8), head);
+                return;
+            }
+            streams++;
+        }
+        FrameHub hub = backend.frames();
+        hub.addClient();
+        try {
+            out.write(("HTTP/1.0 200 OK\r\n"
+                    + "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+                    + "Cache-Control: no-cache, no-store\r\nPragma: no-cache\r\n"
+                    + "Connection: close\r\n\r\n").getBytes(UTF8));
+            out.flush();
+            if (head) return;
+            long seq = -1;
+            while (running) {
+                FrameHub.Frame f = hub.await(seq, 5000);
+                if (f == null) {
+                    if (!running) break;
+                    continue;
+                }
+                seq = f.seq;
+                out.write(("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                        + f.jpeg.length + "\r\n\r\n").getBytes(UTF8));
+                out.write(f.jpeg);
+                out.write("\r\n".getBytes(UTF8));
+                out.flush();
+            }
+        } catch (InterruptedException ignored) {
+            // shutting down
+        } finally {
+            hub.removeClient();
+            synchronized (this) {
+                streams--;
+            }
+        }
+    }
+
+    private static void serveFile(OutputStream out, File f, String range, boolean download,
+                                  boolean head) throws IOException {
+        long len = f.length();
+        long[] r = parseRange(range, len);
+        StringBuilder h = new StringBuilder();
+        if (r == null) {
+            h.append("HTTP/1.0 416 Range Not Satisfiable\r\nContent-Range: bytes */").append(len)
+                    .append("\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            out.write(h.toString().getBytes(UTF8));
+            return;
+        }
+        long start = r[0];
+        long end = r[1];
+        boolean partial = r[2] == 1;
+        long count = len == 0 ? 0 : end - start + 1;
+        h.append(partial ? "HTTP/1.0 206 Partial Content\r\n" : "HTTP/1.0 200 OK\r\n")
+                .append("Content-Type: video/mp4\r\n")
+                .append("Accept-Ranges: bytes\r\n")
+                .append("Content-Length: ").append(count).append("\r\n");
+        if (partial) {
+            h.append("Content-Range: bytes ").append(start).append('-').append(end).append('/')
+                    .append(len).append("\r\n");
+        }
+        if (download) {
+            h.append("Content-Disposition: attachment; filename=\"").append(f.getName()).append("\"\r\n");
+        }
+        h.append("Connection: close\r\n\r\n");
+        out.write(h.toString().getBytes(UTF8));
+        if (head || count == 0) return;
+
+        RandomAccessFile raf = new RandomAccessFile(f, "r");
+        try {
+            raf.seek(start);
+            byte[] buf = new byte[64 * 1024];
+            long left = count;
+            while (left > 0) {
+                int n = raf.read(buf, 0, (int) Math.min(buf.length, left));
+                if (n < 0) break;
+                out.write(buf, 0, n);
+                left -= n;
+            }
+        } finally {
+            raf.close();
+        }
+    }
+
+    /**
+     * Parses a single {@code bytes=} range. Returns {start, end, explicit} where explicit is 1 if a
+     * valid range header was given; the whole file when absent or unparseable; null if unsatisfiable.
+     */
+    static long[] parseRange(String header, long len) {
+        long[] whole = {0, Math.max(0, len - 1), 0};
+        if (header == null) return whole;
+        String h = header.trim().toLowerCase(Locale.US);
+        if (!h.startsWith("bytes=") || h.indexOf(',') >= 0) return whole;
+        String spec = h.substring(6).trim();
+        int dash = spec.indexOf('-');
+        if (dash < 0) return whole;
+        try {
+            String a = spec.substring(0, dash).trim();
+            String b = spec.substring(dash + 1).trim();
+            long start;
+            long end;
+            if (a.isEmpty()) {
+                if (b.isEmpty()) return whole;
+                long suffix = Long.parseLong(b);
+                if (suffix <= 0) return null;
+                start = Math.max(0, len - suffix);
+                end = len - 1;
+            } else {
+                start = Long.parseLong(a);
+                end = b.isEmpty() ? len - 1 : Math.min(Long.parseLong(b), len - 1);
+            }
+            if (start >= len || start > end) return null;
+            return new long[] {start, end, 1};
+        } catch (NumberFormatException e) {
+            return whole;
+        }
+    }
+
+    static boolean checkBasicAuth(String header, String password) {
+        if (header == null) return false;
+        String h = header.trim();
+        if (!h.regionMatches(true, 0, "Basic ", 0, 6)) return false;
+        byte[] decoded = Base64.decode(h.substring(6).trim());
+        if (decoded == null) return false;
+        String cred = new String(decoded, UTF8);
+        int colon = cred.indexOf(':');
+        if (colon < 0) return false;
+        // Any user name is accepted; only the password matters. Constant-time compare.
+        byte[] given = cred.substring(colon + 1).getBytes(UTF8);
+        byte[] expected = password.getBytes(UTF8);
+        int diff = given.length ^ expected.length;
+        for (int i = 0; i < given.length; i++) {
+            diff |= given[i] ^ expected[i % Math.max(1, expected.length)];
+        }
+        return diff == 0 && expected.length > 0;
+    }
+
+    static String recordingsJson(List<File> files) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < files.size(); i++) {
+            File f = files.get(i);
+            if (i > 0) sb.append(',');
+            sb.append("{\"name\":\"").append(f.getName()).append("\",\"size\":").append(f.length())
+                    .append(",\"modified\":").append(f.lastModified()).append('}');
+        }
+        return sb.append(']').toString();
+    }
+
+    private static void writeSimple(OutputStream out, int code, String type, byte[] body,
+                                    boolean head) throws IOException {
+        String h = "HTTP/1.0 " + code + " " + reason(code) + "\r\n"
+                + "Content-Type: " + type + "\r\n"
+                + "Content-Length: " + body.length + "\r\n"
+                + "Cache-Control: no-cache\r\n"
+                + "Connection: close\r\n\r\n";
+        out.write(h.getBytes(UTF8));
+        if (!head) out.write(body);
+    }
+
+    private static String reason(int code) {
+        switch (code) {
+            case 200: return "OK";
+            case 404: return "Not Found";
+            case 405: return "Method Not Allowed";
+            case 503: return "Service Unavailable";
+            default: return "Status";
+        }
+    }
+
+    private static void closeQuietly(java.io.Closeable c) {
+        if (c == null) return;
+        try {
+            c.close();
+        } catch (IOException ignored) {
+            // ignore
+        }
+    }
+
+    /** Parsed request line and headers (header names lower-cased). */
+    static final class Request {
+        final String method;
+        final String path;
+        final Map<String, String> query;
+        final Map<String, String> headers;
+
+        private Request(String method, String path, Map<String, String> query,
+                        Map<String, String> headers) {
+            this.method = method;
+            this.path = path;
+            this.query = query;
+            this.headers = headers;
+        }
+
+        static Request read(InputStream in) throws IOException {
+            String line = readLine(in);
+            if (line == null || line.isEmpty()) return null;
+            String[] parts = line.split(" ");
+            if (parts.length < 2) return null;
+            Map<String, String> headers = new HashMap<>();
+            for (int i = 0; i < 64; i++) {
+                String h = readLine(in);
+                if (h == null || h.isEmpty()) break;
+                int c = h.indexOf(':');
+                if (c > 0) headers.put(h.substring(0, c).trim().toLowerCase(Locale.US), h.substring(c + 1).trim());
+            }
+            String target = parts[1];
+            Map<String, String> query = new HashMap<>();
+            int q = target.indexOf('?');
+            String rawPath = q >= 0 ? target.substring(0, q) : target;
+            if (q >= 0) {
+                for (String kv : target.substring(q + 1).split("&")) {
+                    int e = kv.indexOf('=');
+                    if (e > 0) query.put(decode(kv.substring(0, e)), decode(kv.substring(e + 1)));
+                    else if (!kv.isEmpty()) query.put(decode(kv), "");
+                }
+            }
+            return new Request(parts[0].toUpperCase(Locale.US), decode(rawPath), query, headers);
+        }
+
+        private static String decode(String s) {
+            try {
+                return URLDecoder.decode(s, "UTF-8");
+            } catch (Exception e) {
+                return s;
+            }
+        }
+
+        /** Reads a CRLF/LF terminated ASCII line, max 4 KB. */
+        private static String readLine(InputStream in) throws IOException {
+            StringBuilder sb = new StringBuilder();
+            while (true) {
+                int c = in.read();
+                if (c < 0) return sb.length() == 0 ? null : sb.toString();
+                if (c == '\n') break;
+                if (c != '\r') sb.append((char) c);
+                if (sb.length() > 4096) throw new SocketException("header too long");
+            }
+            return sb.toString();
+        }
+    }
+
+    /** Tiny Base64 decoder (java.util.Base64 needs API 26; android.util.Base64 is not unit-testable). */
+    static final class Base64 {
+        private Base64() {}
+
+        static byte[] decode(String s) {
+            String t = s.replace("=", "");
+            int outLen = t.length() * 3 / 4;
+            byte[] out = new byte[outLen];
+            int buf = 0;
+            int bits = 0;
+            int o = 0;
+            for (int i = 0; i < t.length(); i++) {
+                int v = value(t.charAt(i));
+                if (v < 0) return null;
+                buf = (buf << 6) | v;
+                bits += 6;
+                if (bits >= 8) {
+                    bits -= 8;
+                    if (o < outLen) out[o++] = (byte) (buf >> bits);
+                }
+            }
+            return out;
+        }
+
+        private static int value(char c) {
+            if (c >= 'A' && c <= 'Z') return c - 'A';
+            if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+            if (c >= '0' && c <= '9') return c - '0' + 52;
+            if (c == '+' || c == '-') return 62;
+            if (c == '/' || c == '_') return 63;
+            return -1;
+        }
+    }
+
+    /** Reads a whole stream (used for the bundled web page). */
+    static byte[] readAll(InputStream in) throws IOException {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+        return bos.toByteArray();
+    }
+}

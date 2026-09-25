@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Z4 MotionCam</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee; }
+  header { padding: 10px 16px; background: #1d1d1d; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; }
+  #state { font-size: 14px; color: #bbb; }
+  #state.rec { color: #ff5a5a; font-weight: bold; }
+  main { max-width: 960px; margin: 0 auto; padding: 12px 16px 40px; }
+  .view { position: relative; background: #000; border-radius: 8px; overflow: hidden;
+          aspect-ratio: 4 / 3; display: flex; align-items: center; justify-content: center; }
+  .view img { max-width: 100%; max-height: 100%; }
+  .view .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+               flex-direction: column; gap: 10px; background: rgba(0,0,0,.6); text-align: center; padding: 16px; }
+  button { font-size: 15px; padding: 8px 16px; border-radius: 6px; border: 0; background: #3a6df0; color: #fff; }
+  button.secondary { background: #333; }
+  h2 { font-size: 16px; margin: 24px 0 8px; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+       padding: 10px 4px; border-bottom: 1px solid #2a2a2a; }
+  li a { color: #8ab4ff; }
+  .meta { color: #999; font-size: 13px; }
+  video { width: 100%; max-height: 70vh; background: #000; border-radius: 8px; margin-top: 8px; display: none; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Z4 MotionCam</h1>
+  <span id="state">接続中…</span>
+</header>
+<main>
+  <div class="view">
+    <img id="live" alt="ライブ映像">
+    <div id="paused" class="msg hidden">
+      <div>発熱を抑えるため、ライブ映像は10分で自動停止します</div>
+      <button id="resume">ライブ再開</button>
+    </div>
+  </div>
+  <p><button class="secondary" id="toggle">ライブ停止</button></p>
+
+  <h2>録画</h2>
+  <video id="player" controls playsinline></video>
+  <ul id="list"><li class="meta">読み込み中…</li></ul>
+</main>
+<script>
+(function () {
+  var LIVE_LIMIT_MS = 10 * 60 * 1000;
+  var live = document.getElementById('live');
+  var paused = document.getElementById('paused');
+  var toggle = document.getElementById('toggle');
+  var stateEl = document.getElementById('state');
+  var player = document.getElementById('player');
+  var liveTimer = null;
+  var rotation = 0;
+
+  function startLive() {
+    live.src = '/stream.mjpg?t=' + Date.now();
+    paused.classList.add('hidden');
+    toggle.textContent = 'ライブ停止';
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(stopLive, LIVE_LIMIT_MS);
+  }
+  function stopLive() {
+    live.removeAttribute('src');
+    live.src = '';
+    paused.classList.remove('hidden');
+    toggle.textContent = 'ライブ再開';
+    clearTimeout(liveTimer);
+  }
+  toggle.onclick = function () { live.getAttribute('src') ? stopLive() : startLive(); };
+  document.getElementById('resume').onclick = startLive;
+  // Stop streaming when the tab is hidden: the phone only encodes JPEGs while someone watches.
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) stopLive(); else startLive();
+  });
+
+  function fmtSize(b) { return b > 1e9 ? (b / 1e9).toFixed(2) + ' GB' : (b / 1e6).toFixed(1) + ' MB'; }
+  function fmtName(n) {
+    var m = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(n);
+    return m ? m[1] + '/' + m[2] + '/' + m[3] + ' ' + m[4] + ':' + m[5] + ':' + m[6] : n;
+  }
+  function el(tag, text, cls) {
+    var e = document.createElement(tag);
+    if (text) e.textContent = text;
+    if (cls) e.className = cls;
+    return e;
+  }
+
+  function loadList() {
+    fetch('/api/recordings').then(function (r) { return r.json(); }).then(function (items) {
+      var list = document.getElementById('list');
+      list.textContent = '';
+      if (!items.length) { list.appendChild(el('li', 'まだ録画はありません', 'meta')); return; }
+      items.forEach(function (it) {
+        var li = el('li');
+        var left = el('div');
+        var play = el('a', fmtName(it.name));
+        play.href = '#';
+        play.onclick = function (ev) {
+          ev.preventDefault();
+          player.style.display = 'block';
+          player.src = '/rec/' + encodeURIComponent(it.name);
+          player.play();
+          player.scrollIntoView({ behavior: 'smooth' });
+        };
+        left.appendChild(play);
+        left.appendChild(el('div', fmtSize(it.size), 'meta'));
+        var dl = el('a', '保存');
+        dl.href = '/rec/' + encodeURIComponent(it.name) + '?dl=download';
+        li.appendChild(left);
+        li.appendChild(dl);
+        list.appendChild(li);
+      });
+    }).catch(function () {});
+  }
+
+  var STATE = { recording: '● 録画中', watching: '監視中', starting: 'カメラ準備中',
+                cooling: '高温のため一時停止中', stopped: '停止中' };
+  var lastState = '';
+  function loadStatus() {
+    fetch('/api/status').then(function (r) { return r.json(); }).then(function (s) {
+      var txt = (STATE[s.state] || s.state) + '  電池 ' + s.tempC.toFixed(1) + '℃'
+        + (s.charging ? '（充電中）' : '') + '  空き ' + (s.freeBytes / 1e9).toFixed(1) + ' GB';
+      if (s.lastMotion) txt += '  最終検知 ' + new Date(s.lastMotion).toLocaleTimeString();
+      if (s.error) txt += '  ⚠ ' + s.error;
+      stateEl.textContent = txt;
+      stateEl.className = s.state === 'recording' ? 'rec' : '';
+      if (s.rotation !== rotation) {
+        rotation = s.rotation;
+        live.style.transform = 'rotate(' + rotation + 'deg)';
+      }
+      // Refresh the list when a recording has just finished.
+      if (lastState === 'recording' && s.state !== 'recording') loadList();
+      lastState = s.state;
+    }).catch(function () { stateEl.textContent = '接続できません'; stateEl.className = ''; });
+  }
+
+  startLive();
+  loadList();
+  loadStatus();
+  setInterval(loadStatus, 5000);
+})();
+</script>
+</body>
+</html>

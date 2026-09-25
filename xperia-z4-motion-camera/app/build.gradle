@@ -1,0 +1,43 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.z4motioncam'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.z4motioncam'
+        // Xperia Z4 (SO-03G / SOV31 / 402SO) ships Android 5.0 and updates up to 7.0.
+        minSdk 21
+        // 7.x target: runtime permission is handled, but no Android 8+ background limits apply.
+        targetSdk 25
+        versionCode 1
+        versionName '1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // Sideload-only app: sign with the debug key so `assembleRelease` yields an installable APK.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        // The target is intentionally old (the device never gets Android 8+).
+        disable 'ExpiredTargetSdkVersion', 'OldTargetApi'
+        abortOnError false
+    }
+}
+
+dependencies {
+    // No runtime dependencies on purpose: framework APIs only, to keep the app small and light.
+    testImplementation 'junit:junit:4.13.2'
+}

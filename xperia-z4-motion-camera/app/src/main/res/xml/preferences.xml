@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <Preference
+        android:selectable="false"
+        android:summary="@string/pref_note" />
+
+    <PreferenceCategory android:title="@string/pref_cat_camera">
+        <ListPreference
+            android:defaultValue="640x480"
+            android:entries="@array/resolution_entries"
+            android:entryValues="@array/resolution_values"
+            android:key="resolution"
+            android:summary="%s"
+            android:title="@string/pref_resolution" />
+        <ListPreference
+            android:defaultValue="10"
+            android:entries="@array/fps_entries"
+            android:entryValues="@array/fps_values"
+            android:key="fps"
+            android:summary="%s"
+            android:title="@string/pref_fps" />
+        <ListPreference
+            android:defaultValue="0"
+            android:entries="@array/rotation_entries"
+            android:entryValues="@array/rotation_values"
+            android:key="rotation"
+            android:summary="%s"
+            android:title="@string/pref_rotation" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/pref_cat_motion">
+        <ListPreference
+            android:defaultValue="2"
+            android:entries="@array/sensitivity_entries"
+            android:entryValues="@array/sensitivity_values"
+            android:key="sensitivity"
+            android:summary="%s"
+            android:title="@string/pref_sensitivity" />
+        <ListPreference
+            android:defaultValue="10"
+            android:entries="@array/post_record_entries"
+            android:entryValues="@array/post_record_values"
+            android:key="post_record_sec"
+            android:summary="%s"
+            android:title="@string/pref_post_record" />
+        <ListPreference
+            android:defaultValue="5"
+            android:entries="@array/segment_entries"
+            android:entryValues="@array/segment_values"
+            android:key="segment_min"
+            android:summary="%s"
+            android:title="@string/pref_segment" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/pref_cat_storage">
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="use_sd"
+            android:title="@string/pref_use_sd" />
+        <EditTextPreference
+            android:defaultValue="500"
+            android:inputType="number"
+            android:key="min_free_mb"
+            android:summary="@string/pref_min_free_summary"
+            android:title="@string/pref_min_free" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/pref_cat_network">
+        <EditTextPreference
+            android:defaultValue="8080"
+            android:inputType="number"
+            android:key="port"
+            android:title="@string/pref_port" />
+        <EditTextPreference
+            android:defaultValue=""
+            android:inputType="textPassword"
+            android:key="password"
+            android:title="@string/pref_password" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/pref_cat_system">
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="autostart"
+            android:title="@string/pref_autostart" />
+    </PreferenceCategory>
+</PreferenceScreen>
