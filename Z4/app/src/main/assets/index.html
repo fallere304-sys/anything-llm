@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Z4 Share</title>
+<style>
+  :root {
+    --bg: #f2f2f7; --card: #fff; --text: #1c1c1e; --sub: #6c6c70;
+    --accent: #007aff; --ok: #34c759; --ng: #ff3b30; --line: #e5e5ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #000; --card: #1c1c1e; --text: #f2f2f7; --sub: #98989f;
+            --accent: #0a84ff; --ok: #30d158; --ng: #ff453a; --line: #38383a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px 16px calc(24px + env(safe-area-inset-bottom));
+         background: var(--bg); color: var(--text);
+         font: 16px/1.45 -apple-system, "Hiragino Sans", system-ui, sans-serif; }
+  h1 { font-size: 22px; margin: 4px 0 2px; }
+  .device { color: var(--sub); font-size: 14px; margin-bottom: 16px; }
+  section { background: var(--card); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 17px; margin: 0 0 10px; }
+  .pick { display: block; width: 100%; padding: 14px; border: 0; border-radius: 12px;
+          background: var(--accent); color: #fff; font-size: 17px; font-weight: 600; text-align: center; }
+  .pick input { display: none; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { padding: 10px 0; border-top: 1px solid var(--line); }
+  li:first-child { border-top: 0; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .meta { color: var(--sub); font-size: 13px; }
+  .btn { flex: none; padding: 7px 12px; border-radius: 9px; background: var(--bg);
+         color: var(--accent); text-decoration: none; font-size: 15px; font-weight: 600; }
+  progress { width: 100%; height: 6px; margin-top: 6px; accent-color: var(--accent); }
+  .ok { color: var(--ok); } .ng { color: var(--ng); }
+  .empty, .hint { color: var(--sub); font-size: 14px; }
+  .hint { margin: 10px 0 0; }
+  #offline { display: none; background: var(--ng); color: #fff; padding: 10px 14px;
+             border-radius: 10px; margin-bottom: 16px; font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>Z4 Share</h1>
+<div class="device" id="device">接続中…</div>
+<div id="offline">Z4 に接続できません。Z4 側でアプリが起動しているか、同じ Wi-Fi にいるか確認してください。</div>
+
+<section>
+  <h2>iPhone → Z4 に送る</h2>
+  <label class="pick">ファイル・写真を選んで送る
+    <input type="file" id="picker" multiple>
+  </label>
+  <ul id="uploads"></ul>
+  <p class="hint">選ぶとすぐに送信が始まります。送信中はこの画面を閉じないでください。</p>
+</section>
+
+<section>
+  <h2>Z4 → iPhone で受け取る</h2>
+  <ul id="outbox"><li class="empty">Z4 で「iPhone に送るファイルを追加」するとここに表示されます。</li></ul>
+  <p class="hint">「保存」で「ファイル」App のダウンロードに保存されます。写真・動画は「開く」→ 共有ボタン →「画像を保存」/「ビデオを保存」で写真 App に入ります。</p>
+</section>
+
+<section>
+  <h2>Z4 が受信したファイル</h2>
+  <ul id="received"><li class="empty">まだありません。</li></ul>
+</section>
+
+<script>
+(function () {
+  "use strict";
+  var token = new URLSearchParams(location.search).get("k") || "";
+  function withKey(path, extra) {
+    return path + "?k=" + encodeURIComponent(token) + (extra || "");
+  }
+  function $(id) { return document.getElementById(id); }
+  function fmtSize(n) {
+    if (n < 1024) return n + " B";
+    var u = ["KB", "MB", "GB"], i = -1;
+    do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
+    return n.toFixed(n < 10 ? 1 : 0) + " " + u[i];
+  }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  // ---- Z4 のファイル一覧 (3 秒ごとに更新)
+  var lastJson = "";
+  function renderList(ul, files, emptyText, withLinks) {
+    ul.textContent = "";
+    if (!files.length) { ul.appendChild(el("li", "empty", emptyText)); return; }
+    files.forEach(function (f) {
+      var li = el("li"), row = el("div", "row"), info = el("div", "name");
+      info.appendChild(el("div", null, f.name));
+      info.appendChild(el("div", "meta", fmtSize(f.size)));
+      row.appendChild(info);
+      if (withLinks) {
+        var open = el("a", "btn", "開く");
+        open.href = withKey(f.url, "&inline=1");
+        open.target = "_blank";
+        var save = el("a", "btn", "保存");
+        save.href = withKey(f.url);
+        save.setAttribute("download", f.name);
+        row.appendChild(open);
+        row.appendChild(save);
+      }
+      li.appendChild(row);
+      ul.appendChild(li);
+    });
+  }
+  function refresh() {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", withKey("/api/files"));
+    xhr.timeout = 5000;
+    xhr.onload = function () {
+      if (xhr.status !== 200) { $("offline").style.display = "block"; return; }
+      $("offline").style.display = "none";
+      if (xhr.responseText === lastJson) return;
+      lastJson = xhr.responseText;
+      var data = JSON.parse(xhr.responseText);
+      $("device").textContent = data.device + " に接続しています";
+      renderList($("outbox"), data.outbox,
+        "Z4 で「iPhone に送るファイルを追加」するとここに表示されます。", true);
+      renderList($("received"), data.received, "まだありません。", false);
+    };
+    xhr.onerror = xhr.ontimeout = function () { $("offline").style.display = "block"; };
+    xhr.send();
+  }
+  refresh();
+  setInterval(refresh, 3000);
+
+  // ---- iPhone → Z4 (1 ファイルずつ順番に送る)
+  var queue = [], busy = false;
+  $("picker").addEventListener("change", function (ev) {
+    Array.prototype.forEach.call(ev.target.files, function (file) {
+      var li = el("li"), name = el("div", "name", file.name),
+          meta = el("div", "meta", fmtSize(file.size) + " ・ 待機中"), bar = el("progress");
+      bar.max = 1; bar.value = 0;
+      li.appendChild(name); li.appendChild(meta); li.appendChild(bar);
+      $("uploads").appendChild(li);
+      queue.push({ file: file, meta: meta, bar: bar });
+    });
+    ev.target.value = "";
+    next();
+  });
+  function next() {
+    if (busy || !queue.length) return;
+    busy = true;
+    var job = queue.shift(), file = job.file;
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", withKey("/api/upload", "&name=" + encodeURIComponent(file.name)));
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = function (e) {
+      if (!e.lengthComputable) return;
+      job.bar.value = e.loaded / e.total;
+      job.meta.textContent = fmtSize(file.size) + " ・ " + Math.floor(e.loaded / e.total * 100) + "%";
+    };
+    function done(ok, msg) {
+      job.bar.value = ok ? 1 : job.bar.value;
+      job.meta.textContent = fmtSize(file.size) + " ・ " + msg;
+      job.meta.className = "meta " + (ok ? "ok" : "ng");
+      busy = false;
+      refresh();
+      next();
+    }
+    xhr.onload = function () {
+      if (xhr.status === 200) done(true, "送信完了");
+      else done(false, "失敗 (" + xhr.status + "): " + xhr.responseText);
+    };
+    xhr.onerror = function () { done(false, "失敗: 接続が切れました"); };
+    job.meta.textContent = fmtSize(file.size) + " ・ 送信中";
+    xhr.send(file);
+  }
+})();
+</script>
+</body>
+</html>

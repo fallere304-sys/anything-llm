@@ -1,0 +1,36 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'app.z4share'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'app.z4share'
+        // Xperia Z4 (Z3+) は Android 5.0 で出荷、Android 7.1 まで更新された
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // 自分の端末にサイドロードするだけなので debug 鍵で署名する
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    // 3.4 以降は Android 7.0 未満に無い Java 8 API を使うため 3.3.3 に固定
+    implementation 'com.google.zxing:core:3.3.3'
+    testImplementation 'junit:junit:4.13.2'
+}
