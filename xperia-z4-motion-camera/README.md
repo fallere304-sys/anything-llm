@@ -142,10 +142,10 @@ Z4 を使わずに、家の Wi-Fi / LAN につないだ Windows PC でも同じ�
 
 **方法 A: コマンド 1 行で実行する**
 
-スタートメニューで「PowerShell」を開き、次を貼り付けて Enter を押します。
+スタートメニューで「PowerShell」を開き、次の 1 行を貼り付けて Enter を押します。実行ポリシーの変更は不要です。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/fallere304-sys/anything-llm/raw/claude/xperia-z4-motion-camera-7x4wet/xperia-z4-motion-camera/tools/netcheck.ps1 | iex"
+iex ((irm https://github.com/fallere304-sys/anything-llm/raw/claude/xperia-z4-motion-camera-7x4wet/xperia-z4-motion-camera/tools/netcheck.ps1).TrimStart([char]0xFEFF))
 ```
 
 **方法 B: ファイルをダウンロードして実行する**

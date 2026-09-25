@@ -8,8 +8,12 @@
     - PC の IPv6 グローバルアドレス
     - インターネットまでの最初の数ホップ（二重ルーター / CGNAT の手がかり）
 
-  実行方法:
+  実行方法（どちらか）:
+    netcheck.bat をダブルクリック
     powershell -ExecutionPolicy Bypass -File .\netcheck.ps1
+
+  このファイルは Windows PowerShell 5.1 が日本語を正しく読めるよう BOM 付き UTF-8 です。
+  iex で実行する場合は先頭の BOM を取り除いてください: iex ((irm <URL>).TrimStart([char]0xFEFF))
 #>
 
 $ErrorActionPreference = 'Continue'
