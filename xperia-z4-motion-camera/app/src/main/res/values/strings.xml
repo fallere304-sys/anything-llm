@@ -20,7 +20,16 @@
     <string name="pref_min_free_summary">これを下回ると古い録画から削除します</string>
     <string name="pref_cat_network">ネットワーク</string>
     <string name="pref_port">ポート番号</string>
-    <string name="pref_password">閲覧パスワード（空欄で無効）</string>
+    <string name="pref_password">閲覧パスワード（空欄で無効・外出先視聴では8文字以上必須）</string>
+    <string name="pref_cat_remote">外出先からの視聴</string>
+    <string name="pref_remote">外出先からの視聴を有効にする</string>
+    <string name="pref_remote_summary">HTTPS（暗号化）で公開します。先にLAN内のブラウザで「ネットワーク診断」を実行し、可能と判定されてから有効にしてください</string>
+    <string name="pref_remote_port">外出先用ポート番号（HTTPS）</string>
+    <string name="pref_upnp">ルーターのポートを自動で開放（UPnP）</string>
+    <string name="pref_upnp_summary">オフの場合はルーターで手動の転送設定が必要です</string>
+    <string name="pref_ddns_domain">DuckDNS ドメイン名（任意）</string>
+    <string name="pref_ddns_domain_summary">例: mybaby（mybaby.duckdns.org）。IPが変わっても同じURLで接続できます</string>
+    <string name="pref_ddns_token">DuckDNS トークン</string>
     <string name="pref_cat_system">システム</string>
     <string name="pref_autostart">端末起動時に自動で開始</string>
     <string name="pref_note">設定は画面に戻ると反映されます</string>

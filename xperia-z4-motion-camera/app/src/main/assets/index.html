@@ -42,6 +42,16 @@
   .meta { color: #999; font-size: 13px; }
   video { width: 100%; max-height: 70vh; background: #000; border-radius: 8px; margin-top: 8px; display: none; }
   .hidden { display: none !important; }
+  .panel { background: #1a1a1a; border-radius: 8px; padding: 12px; margin-top: 8px; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; font-size: 14px; }
+  .kv dt { color: #999; }
+  .kv dd { margin: 0; word-break: break-all; }
+  .verdict { margin: 12px 0 6px; font-weight: bold; }
+  .verdict.ok { color: #7bd88f; }
+  .verdict.ng { color: #ffb74d; }
+  ol.advice { padding-left: 20px; margin: 6px 0; font-size: 14px; }
+  ol.advice li { display: list-item; border: 0; padding: 3px 0; }
+  .fp { font-family: ui-monospace, monospace; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -69,6 +79,18 @@
   </div>
   <div id="notice" class="meta" role="status"></div>
   <ul id="list"><li class="meta">読み込み中…</li></ul>
+  <h2>外出先からの視聴</h2>
+  <div class="panel">
+    <dl class="kv" id="remoteKv"></dl>
+    <p class="meta" id="remoteHint"></p>
+    <button class="secondary" id="diagBtn">ネットワーク診断を実行</button>
+    <div id="diag" class="hidden">
+      <div class="verdict" id="diagVerdict"></div>
+      <dl class="kv" id="diagKv"></dl>
+      <ol class="advice" id="diagAdvice"></ol>
+    </div>
+  </div>
+
   <!-- Bulk save posts the names so the browser streams the ZIP straight to a download. -->
   <form id="zipForm" method="post" action="/api/zip" class="hidden">
     <input type="hidden" name="names">
@@ -279,6 +301,81 @@
     deleteFiles(selectedItems().map(function (it) { return it.name; }));
   };
 
+  // ---- remote access & network diagnosis ----
+  var remoteKv = document.getElementById('remoteKv');
+  var remoteHint = document.getElementById('remoteHint');
+  var diagBtn = document.getElementById('diagBtn');
+
+  function fillKv(dl, rows) {
+    dl.textContent = '';
+    rows.forEach(function (r) {
+      if (r[1] === null || r[1] === undefined || r[1] === '') return;
+      dl.appendChild(el('dt', r[0]));
+      var dd = el('dd', null, r[2] || '');
+      if (/^https:\/\//.test(r[1])) {
+        var a = el('a', r[1]);
+        a.href = r[1];
+        a.style.color = '#8ab4ff';
+        dd.appendChild(a);
+      } else {
+        dd.textContent = r[1];
+      }
+      dl.appendChild(dd);
+    });
+  }
+
+  function showRemote(r) {
+    if (!r || !r.enabled) {
+      fillKv(remoteKv, [['状態', '無効']]);
+      remoteHint.textContent = 'ネットワーク診断で「外出先から視聴できます」と判定されたら、Z4の「設定 > 外出先からの視聴」を有効にしてください。';
+      return;
+    }
+    fillKv(remoteKv, [
+      ['状態', r.state + (r.error ? '（' + r.error + '）' : '')],
+      ['外出先URL', r.url],
+      ['ポート開放', r.upnp],
+      ['DDNS', r.ddns],
+      ['公開IPv4', r.publicV4],
+      ['IPv6', r.globalV6],
+      ['自己接続テスト', r.selfReachable === true ? '外部ポートへ接続できました' : null],
+      ['証明書の指紋', r.fingerprint, 'fp']
+    ]);
+    remoteHint.textContent = r.active
+      ? '外出先では上のURLをモバイル回線で開きます。初回は「保護されていない通信」と警告が出るので、証明書の指紋（SHA-256）が上と一致することを確かめてから進んでください。'
+      : '';
+  }
+
+  var VERDICT_OK = { GLOBAL_ON_ROUTER: true };
+  diagBtn.onclick = function () {
+    diagBtn.disabled = true;
+    diagBtn.textContent = '診断中…（10秒ほどかかります）';
+    fetch('/api/netdiag?refresh=1').then(function (r) { return r.json(); }).then(function (d) {
+      document.getElementById('diag').classList.remove('hidden');
+      var v = document.getElementById('diagVerdict');
+      var v6 = d.globalV6 ? ' IPv6なら接続できる可能性があります。' : '';
+      v.textContent = (VERDICT_OK[d.verdict] ? '◎ ' : '△ ') + d.summary + (VERDICT_OK[d.verdict] ? '' : v6);
+      v.className = 'verdict ' + (VERDICT_OK[d.verdict] ? 'ok' : 'ng');
+      fillKv(document.getElementById('diagKv'), [
+        ['Z4のLAN IP', d.localV4],
+        ['ルーター', d.gateway],
+        ['公開IPv4（外から見たIP）', d.publicV4 || '取得できません'],
+        ['ルーターのWAN側IPv4', d.upnp ? (d.routerWanV4 || '（なし）') : null],
+        ['UPnP', d.upnp ? '応答あり' : (d.upnpError || '応答なし')],
+        ['IPv6グローバル', d.globalV6 || 'なし'],
+        ['診断時刻', new Date(d.checkedAt).toLocaleString()]
+      ]);
+      var ol = document.getElementById('diagAdvice');
+      ol.textContent = '';
+      d.advice.forEach(function (t) { ol.appendChild(el('li', t)); });
+    }).catch(function () {
+      document.getElementById('diag').classList.remove('hidden');
+      document.getElementById('diagVerdict').textContent = 'ネットワーク診断に失敗しました';
+    }).then(function () {
+      diagBtn.disabled = false;
+      diagBtn.textContent = 'ネットワーク診断を実行';
+    });
+  };
+
   var STATE = { recording: '● 録画中', watching: '監視中', starting: 'カメラ準備中',
                 cooling: '高温のため一時停止中', stopped: '停止中' };
   var lastState = '';
@@ -294,6 +391,7 @@
         rotation = s.rotation;
         live.style.transform = 'rotate(' + rotation + 'deg)';
       }
+      showRemote(s.remote);
       // Refresh the list when a recording has just finished.
       if (lastState === 'recording' && s.state !== 'recording') loadList();
       lastState = s.state;

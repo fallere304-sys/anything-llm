@@ -7,6 +7,8 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.net.ConnectivityManager;
+import android.net.DhcpInfo;
 import android.net.wifi.WifiManager;
 import android.os.BatteryManager;
 import android.os.Binder;
@@ -18,11 +20,9 @@ import android.util.Log;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.Inet4Address;
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.util.Collections;
 import java.util.Locale;
+
+import javax.net.ssl.SSLSocketFactory;
 
 /**
  * Foreground service that owns the camera pipeline and the web server, so monitoring continues
@@ -45,6 +45,9 @@ public class CameraService extends Service implements HttpServer.Backend {
     private volatile AppSettings settings;
     private volatile RecordingStore store;
     private volatile CameraPipeline pipeline;
+    private volatile RemoteAccess remote;
+    private volatile NetworkDiagnostics.Result diag;
+    private SSLSocketFactory clientTls;
     private HttpServer http;
     private String httpError;
     private byte[] indexHtml;
@@ -55,6 +58,15 @@ public class CameraService extends Service implements HttpServer.Backend {
     private volatile float batteryTempC = Float.NaN;
     private volatile int batteryPct = -1;
     private volatile boolean charging;
+
+    private final BroadcastReceiver networkReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            // The global IP may have changed after a reconnect: re-check mapping and DDNS.
+            RemoteAccess r = remote;
+            if (r != null) r.refreshSoon();
+        }
+    };
 
     private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
         @Override
@@ -88,7 +100,19 @@ public class CameraService extends Service implements HttpServer.Backend {
             indexHtml = "<h1>index.html missing</h1>".getBytes();
         }
 
+        try {
+            InputStream in = getAssets().open("cacerts.pem");
+            try {
+                clientTls = NetUtil.clientTls(NetUtil.parsePem(new String(HttpServer.readAll(in), "UTF-8")));
+            } finally {
+                in.close();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "extra roots unavailable", e);
+        }
+
         applySettings(AppSettings.load(this));
+        registerReceiver(networkReceiver, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
         // Sticky broadcast: delivers the current state immediately, then every change.
         registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
     }
@@ -110,7 +134,9 @@ public class CameraService extends Service implements HttpServer.Backend {
     @Override
     public void onDestroy() {
         unregisterReceiver(batteryReceiver);
+        unregisterReceiver(networkReceiver);
         stopPipeline();
+        if (remote != null) remote.shutdown();
         if (http != null) http.stop();
         hub.close();
         if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
@@ -123,11 +149,16 @@ public class CameraService extends Service implements HttpServer.Backend {
         AppSettings old = settings;
         settings = s;
         stopPipeline();
+        if (remote != null) {
+            remote.shutdown();
+            remote = null;
+        }
         store = new RecordingStore(recordingsDir(s.useSdCard), s.minFreeBytes);
         store.deleteStaleParts();
         if (http == null || old == null || old.port != s.port) {
             if (http != null) http.stop();
-            http = new HttpServer(s.port, this);
+            // LAN server: plain HTTP, refuses connections from outside the home network.
+            http = new HttpServer(s.port, this, null, true, false);
             try {
                 http.start();
                 httpError = null;
@@ -138,6 +169,8 @@ public class CameraService extends Service implements HttpServer.Backend {
             }
         }
         if (thermal != ThermalPolicy.Level.CRITICAL) startPipeline();
+        remote = new RemoteAccess(this, s, this, clientTls);
+        remote.start();
     }
 
     private void startPipeline() {
@@ -216,7 +249,7 @@ public class CameraService extends Service implements HttpServer.Backend {
     }
 
     String url() {
-        String ip = localIpv4();
+        String ip = NetUtil.localIpv4();
         return "http://" + (ip == null ? "(未接続)" : ip) + ":" + settings.port + "/";
     }
 
@@ -241,6 +274,9 @@ public class CameraService extends Service implements HttpServer.Backend {
         sb.append(String.format(Locale.US, "空き %.1f GB / 録画 %d 件", store.usableBytes() / 1e9, store.list().size()));
         if (p != null && p.storageFull()) sb.append("\n空き容量不足");
         if (p != null && p.error() != null) sb.append('\n').append(p.error());
+        RemoteAccess r = remote;
+        String rl = r == null ? null : r.statusLine();
+        if (rl != null) sb.append('\n').append(rl);
         return sb.toString();
     }
 
@@ -260,11 +296,30 @@ public class CameraService extends Service implements HttpServer.Backend {
         return String.format(Locale.US,
                 "{\"state\":\"%s\",\"motion\":%.4f,\"lastMotion\":%d,\"tempC\":%.1f,\"battery\":%d,"
                         + "\"charging\":%b,\"thermal\":\"%s\",\"freeBytes\":%d,\"storageFull\":%b,"
-                        + "\"rotation\":%d,\"viewers\":%d,\"error\":%s}",
+                        + "\"rotation\":%d,\"viewers\":%d,\"error\":%s,\"remote\":%s}",
                 state, p == null ? 0f : p.motionRatio(), p == null ? 0L : p.lastMotionWallMs(),
                 Float.isNaN(batteryTempC) ? 0f : batteryTempC, batteryPct, charging, thermal,
                 store.usableBytes(), p != null && p.storageFull(), settings.rotation, hub.clients(),
-                err == null ? "null" : HttpServer.jsonString(err));
+                err == null ? "null" : HttpServer.jsonString(err),
+                remote == null ? "null" : remote.statusJson());
+    }
+
+    @Override
+    public synchronized String netDiagJson(boolean refresh) {
+        NetworkDiagnostics.Result d = diag;
+        if (refresh || d == null || System.currentTimeMillis() - d.checkedAt > 5 * 60_000L) {
+            d = NetworkDiagnostics.run(gatewayIpv4(), clientTls);
+            diag = d;
+        }
+        return d.toJson(settings.remotePort);
+    }
+
+    private String gatewayIpv4() {
+        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+        DhcpInfo dhcp = wm == null ? null : wm.getDhcpInfo();
+        if (dhcp == null || dhcp.gateway == 0) return null;
+        int g = dhcp.gateway; // little-endian
+        return (g & 0xFF) + "." + ((g >> 8) & 0xFF) + "." + ((g >> 16) & 0xFF) + "." + ((g >> 24) & 0xFF);
     }
 
     @Override
@@ -280,23 +335,5 @@ public class CameraService extends Service implements HttpServer.Backend {
     @Override
     public String password() {
         return settings.password;
-    }
-
-    static String localIpv4() {
-        try {
-            for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
-                if (!ni.isUp() || ni.isLoopback()) continue;
-                for (InetAddress a : Collections.list(ni.getInetAddresses())) {
-                    if (a instanceof Inet4Address && !a.isLoopbackAddress()) {
-                        String name = ni.getName();
-                        // Prefer Wi-Fi (wlan*) over mobile data interfaces (rmnet*).
-                        if (name.startsWith("wlan") || name.startsWith("eth")) return a.getHostAddress();
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-            // no network
-        }
-        return null;
     }
 }

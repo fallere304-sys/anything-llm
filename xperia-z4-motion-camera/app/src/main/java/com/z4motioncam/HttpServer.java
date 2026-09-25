@@ -30,6 +30,9 @@ import java.util.zip.Deflater;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+import javax.net.ServerSocketFactory;
+import javax.net.ssl.SSLServerSocket;
+
 /**
  * Minimal HTTP/1.0 server for the LAN: web page, MJPEG live view, recordings with Range support.
  * Plain java.net so it has no dependencies; one short-lived thread per connection, capped.
@@ -46,6 +49,9 @@ final class HttpServer {
 
         /** Empty string disables authentication. */
         String password();
+
+        /** Network diagnosis as JSON; {@code refresh} forces a new run instead of the cached one. */
+        String netDiagJson(boolean refresh);
     }
 
     private static final Charset UTF8 = Charset.forName("UTF-8");
@@ -55,8 +61,19 @@ final class HttpServer {
     private static final int MAX_BODY_BYTES = 256 * 1024;
     private static final long MAX_ZIP_BYTES = 3_900_000_000L;
 
+    private static final int MAX_AUTH_FAILURES = 5;
+    private static final long AUTH_WINDOW_MS = 10 * 60_000L;
+    private static final long AUTH_BLOCK_MS = 15 * 60_000L;
+
     private final int port;
     private final Backend backend;
+    private final ServerSocketFactory factory;
+    /** LAN server: refuse connections that do not come from the home network. */
+    private final boolean localOnly;
+    /** Internet-facing server: never serve anything without a password. */
+    private final boolean requirePassword;
+    /** ip -> {failures, windowStart, blockedUntil} */
+    private final Map<String, long[]> authFailures = new HashMap<>();
     private final Set<Socket> sockets = new HashSet<>();
     private ServerSocket server;
     private ThreadPoolExecutor pool;
@@ -65,8 +82,15 @@ final class HttpServer {
     private int streams;
 
     HttpServer(int port, Backend backend) {
+        this(port, backend, null, false, false);
+    }
+
+    HttpServer(int port, Backend backend, ServerSocketFactory factory, boolean localOnly, boolean requirePassword) {
         this.port = port;
         this.backend = backend;
+        this.factory = factory;
+        this.localOnly = localOnly;
+        this.requirePassword = requirePassword;
     }
 
     int port() {
@@ -74,7 +98,16 @@ final class HttpServer {
     }
 
     void start() throws IOException {
-        server = new ServerSocket();
+        server = factory == null ? new ServerSocket() : factory.createServerSocket();
+        if (server instanceof SSLServerSocket) {
+            // TLS 1.2+ only (Android 5-7 would otherwise also offer TLS 1.0/1.1).
+            SSLServerSocket ssl = (SSLServerSocket) server;
+            List<String> modern = new ArrayList<>();
+            for (String p : ssl.getSupportedProtocols()) {
+                if (p.equals("TLSv1.2") || p.equals("TLSv1.3")) modern.add(p);
+            }
+            if (!modern.isEmpty()) ssl.setEnabledProtocols(modern.toArray(new String[0]));
+        }
         server.setReuseAddress(true);
         server.bind(new InetSocketAddress(port));
         pool = new ThreadPoolExecutor(0, MAX_CONNECTIONS, 30, TimeUnit.SECONDS,
@@ -145,13 +178,14 @@ final class HttpServer {
 
     private void serve(Socket s) {
         try {
+            if (localOnly && !NetUtil.isLocalAddress(s.getInetAddress())) return;
             s.setSoTimeout(READ_TIMEOUT_MS);
             s.setTcpNoDelay(true);
             InputStream in = new BufferedInputStream(s.getInputStream());
             OutputStream out = s.getOutputStream();
             Request req = Request.read(in);
             if (req == null) return;
-            handle(req, out);
+            handle(req, out, s.getInetAddress().getHostAddress());
             out.flush();
         } catch (IOException ignored) {
             // client disconnected or timed out
@@ -160,15 +194,31 @@ final class HttpServer {
         }
     }
 
-    private void handle(Request req, OutputStream out) throws IOException {
+    private void handle(Request req, OutputStream out, String clientIp) throws IOException {
         boolean head = "HEAD".equals(req.method);
         String pw = backend.password();
-        if (pw != null && !pw.isEmpty() && !checkBasicAuth(req.headers.get("authorization"), pw)) {
-            String h = "HTTP/1.0 401 Unauthorized\r\n"
-                    + "WWW-Authenticate: Basic realm=\"Z4 MotionCam\", charset=\"UTF-8\"\r\n"
-                    + "Content-Length: 0\r\nConnection: close\r\n\r\n";
-            out.write(h.getBytes(UTF8));
+        boolean hasPassword = pw != null && !pw.isEmpty();
+        if (requirePassword && !hasPassword) {
+            writeSimple(out, 403, "text/plain; charset=utf-8",
+                    "パスワードが未設定のため外部からの接続を停止しています\n".getBytes(UTF8), head);
             return;
+        }
+        if (hasPassword) {
+            if (isBlocked(clientIp)) {
+                writeSimple(out, 429, "text/plain; charset=utf-8",
+                        "パスワードの誤りが続いたため一時的にブロックしています。15分後に再試行してください\n".getBytes(UTF8), head);
+                return;
+            }
+            String auth = req.headers.get("authorization");
+            if (!checkBasicAuth(auth, pw)) {
+                if (auth != null) recordAuthFailure(clientIp);
+                String h = "HTTP/1.0 401 Unauthorized\r\n"
+                        + "WWW-Authenticate: Basic realm=\"Z4 MotionCam\", charset=\"UTF-8\"\r\n"
+                        + "Content-Length: 0\r\nConnection: close\r\n\r\n";
+                out.write(h.getBytes(UTF8));
+                return;
+            }
+            clearAuthFailures(clientIp);
         }
         if ("POST".equals(req.method)) {
             handlePost(req, out);
@@ -185,6 +235,9 @@ final class HttpServer {
         } else if (path.equals("/api/status")) {
             writeSimple(out, 200, "application/json; charset=utf-8",
                     backend.statusJson().getBytes(UTF8), head);
+        } else if (path.equals("/api/netdiag")) {
+            writeSimple(out, 200, "application/json; charset=utf-8",
+                    backend.netDiagJson("1".equals(req.query.get("refresh"))).getBytes(UTF8), head);
         } else if (path.equals("/api/recordings")) {
             writeSimple(out, 200, "application/json; charset=utf-8",
                     recordingsJson(backend.store().list()).getBytes(UTF8), head);
@@ -222,6 +275,32 @@ final class HttpServer {
             serveZip(out, names);
         } else {
             writeSimple(out, 404, "text/plain", "not found\n".getBytes(UTF8), false);
+        }
+    }
+
+    private boolean isBlocked(String ip) {
+        synchronized (authFailures) {
+            long[] f = authFailures.get(ip);
+            return f != null && f[2] > System.currentTimeMillis();
+        }
+    }
+
+    private void recordAuthFailure(String ip) {
+        long now = System.currentTimeMillis();
+        synchronized (authFailures) {
+            if (authFailures.size() > 1000) authFailures.clear(); // bound memory under a flood
+            long[] f = authFailures.get(ip);
+            if (f == null || now - f[1] > AUTH_WINDOW_MS) {
+                f = new long[] {0, now, 0};
+                authFailures.put(ip, f);
+            }
+            if (++f[0] >= MAX_AUTH_FAILURES) f[2] = now + AUTH_BLOCK_MS;
+        }
+    }
+
+    private void clearAuthFailures(String ip) {
+        synchronized (authFailures) {
+            authFailures.remove(ip);
         }
     }
 
@@ -513,6 +592,7 @@ final class HttpServer {
             case 404: return "Not Found";
             case 405: return "Method Not Allowed";
             case 413: return "Payload Too Large";
+            case 429: return "Too Many Requests";
             case 503: return "Service Unavailable";
             default: return "Status";
         }

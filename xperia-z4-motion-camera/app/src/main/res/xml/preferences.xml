@@ -79,6 +79,35 @@
             android:title="@string/pref_password" />
     </PreferenceCategory>
 
+    <PreferenceCategory android:title="@string/pref_cat_remote">
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="remote_enabled"
+            android:summary="@string/pref_remote_summary"
+            android:title="@string/pref_remote" />
+        <EditTextPreference
+            android:defaultValue="8443"
+            android:inputType="number"
+            android:key="remote_port"
+            android:title="@string/pref_remote_port" />
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="upnp"
+            android:summary="@string/pref_upnp_summary"
+            android:title="@string/pref_upnp" />
+        <EditTextPreference
+            android:defaultValue=""
+            android:inputType="textUri"
+            android:key="ddns_domain"
+            android:summary="@string/pref_ddns_domain_summary"
+            android:title="@string/pref_ddns_domain" />
+        <EditTextPreference
+            android:defaultValue=""
+            android:inputType="textPassword"
+            android:key="ddns_token"
+            android:title="@string/pref_ddns_token" />
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="@string/pref_cat_system">
         <CheckBoxPreference
             android:defaultValue="true"

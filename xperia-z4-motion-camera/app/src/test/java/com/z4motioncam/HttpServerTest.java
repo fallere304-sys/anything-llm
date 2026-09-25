@@ -46,6 +46,7 @@ public class HttpServerTest {
             @Override public RecordingStore store() { return store; }
             @Override public FrameHub frames() { return hub; }
             @Override public String password() { return password; }
+            @Override public String netDiagJson(boolean refresh) { return "{\"verdict\":\"UNKNOWN\",\"refresh\":" + refresh + "}"; }
         });
         server.start();
     }
@@ -267,11 +268,15 @@ public class HttpServerTest {
     }
 
     @Test
-    public void oversizedBodyIsRejected() throws IOException {
-        StringBuilder big = new StringBuilder();
-        while (big.length() < 300 * 1024) big.append("20260101_120000.mp4\n");
-        assertTrue(post("/api/delete", big.toString(), "X-Requested-With: z4motioncam").head.startsWith("HTTP/1.0 413"));
-        assertTrue(new File(dir, "20260101_120000.mp4").exists());
+    public void oversizedBodyIsNotRead() throws IOException {
+        // The server answers 413 and closes without reading a body over the 256 KB limit.
+        String head = "POST /api/delete HTTP/1.1\r\nContent-Length: 300000\r\n\r\n";
+        HttpServer.Request big = HttpServer.Request.read(
+                new java.io.ByteArrayInputStream(head.getBytes(StandardCharsets.UTF_8)));
+        assertNull(big.body);
+        HttpServer.Request small = HttpServer.Request.read(new java.io.ByteArrayInputStream(
+                "POST /x HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc".getBytes(StandardCharsets.UTF_8)));
+        assertEquals("abc", new String(small.body, StandardCharsets.UTF_8));
     }
 
     @Test
@@ -279,5 +284,27 @@ public class HttpServerTest {
         assertEquals("a b\nc", HttpServer.parseForm("names=a+b&names=c&x").get("names"));
         assertEquals("", HttpServer.parseForm("names=a+b&names=c&x").get("x"));
         assertEquals(java.util.Arrays.asList("a", "b", "c"), HttpServer.splitNames(" a\r\nb,,c\n"));
+    }
+
+    @Test
+    public void servesNetworkDiagnosis() throws IOException {
+        assertEquals("{\"verdict\":\"UNKNOWN\",\"refresh\":true}",
+                new String(get("/api/netdiag?refresh=1").body, StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void locksOutAfterRepeatedWrongPasswords() throws IOException {
+        password = "secret";
+        String wrong = "Authorization: Basic cGFwYTp3cm9uZw=="; // papa:wrong
+        for (int i = 0; i < 5; i++) assertTrue(get("/api/status", wrong).head.startsWith("HTTP/1.0 401"));
+        // Even the right password is refused while blocked.
+        assertTrue(get("/api/status", "Authorization: Basic cGFwYTpzZWNyZXQ=").head.startsWith("HTTP/1.0 429"));
+    }
+
+    @Test
+    public void missingCredentialsDoNotCountAsFailures() throws IOException {
+        password = "secret";
+        for (int i = 0; i < 8; i++) assertTrue(get("/api/status").head.startsWith("HTTP/1.0 401"));
+        assertTrue(get("/api/status", "Authorization: Basic cGFwYTpzZWNyZXQ=").head.startsWith("HTTP/1.0 200"));
     }
 }

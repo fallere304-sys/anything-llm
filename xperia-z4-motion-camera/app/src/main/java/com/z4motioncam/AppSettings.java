@@ -21,6 +21,12 @@ final class AppSettings {
     final int port;
     final String password;
     final boolean autostart;
+    final boolean remoteEnabled;
+    final int remotePort;
+    final boolean upnp;
+    /** DuckDNS sub-domain without ".duckdns.org"; empty when unused. */
+    final String ddnsDomain;
+    final String ddnsToken;
 
     private AppSettings(SharedPreferences p) {
         String res = p.getString("resolution", "640x480");
@@ -41,6 +47,13 @@ final class AppSettings {
         port = clamp(parseInt(p.getString("port", "8080"), 8080), 1024, 65535);
         password = p.getString("password", "");
         autostart = p.getBoolean("autostart", true);
+        remoteEnabled = p.getBoolean("remote_enabled", false);
+        remotePort = clamp(parseInt(p.getString("remote_port", "8443"), 8443), 1024, 65535);
+        upnp = p.getBoolean("upnp", true);
+        String d = p.getString("ddns_domain", "").trim().toLowerCase(java.util.Locale.US);
+        if (d.endsWith(".duckdns.org")) d = d.substring(0, d.length() - ".duckdns.org".length());
+        ddnsDomain = d.matches("[a-z0-9-]{1,63}") ? d : "";
+        ddnsToken = p.getString("ddns_token", "").trim();
     }
 
     static AppSettings load(Context context) {
@@ -81,7 +94,9 @@ final class AppSettings {
                 && sensitivity == s.sensitivity && postRecordSec == s.postRecordSec
                 && segmentMin == s.segmentMin && useSdCard == s.useSdCard
                 && minFreeBytes == s.minFreeBytes && port == s.port
-                && password.equals(s.password) && autostart == s.autostart;
+                && password.equals(s.password) && autostart == s.autostart
+                && remoteEnabled == s.remoteEnabled && remotePort == s.remotePort && upnp == s.upnp
+                && ddnsDomain.equals(s.ddnsDomain) && ddnsToken.equals(s.ddnsToken);
     }
 
     @Override
