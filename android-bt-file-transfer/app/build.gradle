@@ -1,0 +1,37 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'app.btfiletransfer'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'app.btfiletransfer'
+        // Xperia Z4 (SO-03G / SOV31 / 402SO) は Android 5.0 で出荷、7.0 まで更新
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        // Xperia Z4 向けに旧 API のフォールバックを意図的に使っている
+        disable 'ObsoleteSdkInt'
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}
