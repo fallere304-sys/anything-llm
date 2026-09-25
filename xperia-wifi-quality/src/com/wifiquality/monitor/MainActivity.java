@@ -105,7 +105,8 @@ public class MainActivity extends Activity {
         TextView legend = new TextView(this);
         legend.setTextColor(COLOR_SUB);
         legend.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        legend.setText("電波の強い順 / 推定品質 = 信号係数 × 混線係数（至近距離・混線なし = 100%）");
+        legend.setText("電波の強い順 / 推定品質 = 信号係数 × 混線係数（至近距離・混線なし = 100%）\n"
+                + "混線係数 ≈ 1 − ch使用率（AP実測値。無ければビーコン計算値と実測統計の典型値）");
         header.addView(legend);
         root.addView(header);
 
@@ -194,7 +195,41 @@ public class MainActivity extends Activity {
             width = widthFromConstant(r.channelWidth);
             center0 = r.centerFreq0;
         }
-        return new QualityEstimator.Ap(r.SSID, r.BSSID, r.frequency, center0, width, r.level);
+        QualityEstimator.Ap ap = new QualityEstimator.Ap(r.SSID, r.BSSID, r.frequency, center0, width, r.level);
+        readInformationElements(r, ap);
+        return ap;
+    }
+
+    /**
+     * ScanResult の非公開フィールド informationElements をリフレクションで読む。
+     * Android 7.x では wpa_supplicant から受け取った全情報要素が入る（5.x / 6.x は null）。
+     * Android 8 以前は非公開 API の制限が無いため読み取れる。
+     */
+    private static void readInformationElements(ScanResult r, QualityEstimator.Ap ap) {
+        try {
+            Object arr = ScanResult.class.getField("informationElements").get(r);
+            if (arr == null) return;
+            int n = java.lang.reflect.Array.getLength(arr);
+            if (n == 0) return;
+            int total = 0;
+            double basic = -1;
+            for (int i = 0; i < n; i++) {
+                Object ie = java.lang.reflect.Array.get(arr, i);
+                int id = ie.getClass().getField("id").getInt(ie);
+                byte[] body = (byte[]) ie.getClass().getField("bytes").get(ie);
+                int len = body != null ? body.length : 0;
+                total += 2 + len;
+                if (id == 11) {
+                    ap.bssLoadUtilization = QualityEstimator.parseBssLoadUtilization(body);
+                } else if (id == 1 || id == 50) {
+                    basic = QualityEstimator.lowestBasicRate(body, basic);
+                }
+            }
+            ap.beaconBytes = QualityEstimator.beaconLengthFromIeBytes(total);
+            ap.basicRateMbps = basic;
+        } catch (Throwable t) {
+            // 取得できない端末では推定値にフォールバック
+        }
     }
 
     private static int widthFromConstant(int c) {
@@ -414,10 +449,14 @@ public class MainActivity extends Activity {
 
             h.bar.setRssi(ap.rssi);
 
+            String busy = ap.measured
+                    ? String.format(Locale.JAPAN, "ch使用率 %d%%(AP実測)", Math.round(ap.primaryBusy * 100))
+                    : String.format(Locale.JAPAN, "ch使用率 %d%%(推定)", Math.round(ap.primaryBusy * 100));
+            String secondary = ap.secondaryCount > 0 ? " / 副ch " + ap.secondaryCount : "";
             h.interference.setText(String.format(Locale.JAPAN,
-                    "%s（同ch %d / 重複 %d）  信号 %d%% × 混線 %d%%",
-                    QualityEstimator.congestionLabel(ap.interferenceLoad),
-                    ap.coChannelCount, ap.overlapCount,
+                    "%s（同ch %d / 重複 %d%s） %s\n信号 %d%% × 混線 %d%%",
+                    QualityEstimator.congestionLabel(ap.interferenceFactor),
+                    ap.coChannelCount, ap.overlapCount, secondary, busy,
                     Math.round(ap.signalFactor * 100), Math.round(ap.interferenceFactor * 100)));
         }
     }

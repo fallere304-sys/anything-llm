@@ -40,32 +40,76 @@ public class QualityEstimatorTest {
         check(mono, "信号係数は単調減少");
         check(QualityEstimator.signalFactor(-95, 20) == 0.0, "-95dBm は 0%");
 
-        // 同一チャネル強電波 1 つ → 混線係数 2/3
+        // ビーコン占有時間（PHY 規格の式）
+        double t1 = QualityEstimator.beaconAirtimeUs(200, 1, true);
+        check(Math.abs(t1 - 1792) < 1e-9, "200B @1Mbps = 1792us (" + t1 + ")");
+        double t6 = QualityEstimator.beaconAirtimeUs(200, 6, false);
+        check(Math.abs(t6 - (20 + 4 * 68)) < 1e-9, "200B @6Mbps OFDM = 292us (" + t6 + ")");
+
+        // 同一 ch に強い電波 1 つ（情報要素なし）→ 2.4GHz 典型使用率 20% → 混線係数 80%
         List<Ap> co = QualityEstimator.evaluate(Arrays.asList(ap("a", 2437, -40), ap("b", 2437, -50)));
         Ap a = find(co, "a");
-        check(Math.abs(a.interferenceFactor - 2.0 / 3) < 1e-9, "同ch 強電波1つ -> 混線係数 67%");
-        check(a.coChannelCount == 1 && a.overlapCount == 0, "同ch カウント");
+        check(Math.abs(a.interferenceFactor - 0.80) < 1e-9, "2.4GHz 同ch 1つ -> 混線係数 80% (" + a.interferenceFactor + ")");
+        check(a.coChannelCount == 1 && a.overlapCount == 0 && !a.measured, "同ch カウント・推定扱い");
 
-        // 2.4GHz ch1 と ch6 は重ならない / ch1 と ch3 は部分的に重なる
+        // 電波の数を増やしても典型値は増えない。ビーコン合計が典型値を超えたらビーコン合計
+        List<Ap> many24 = new ArrayList<Ap>();
+        many24.add(ap("a", 2437, -40));
+        for (int i = 0; i < 15; i++) many24.add(ap("n" + i, 2437, -60));
+        Ap dense = find(QualityEstimator.evaluate(many24), "a");
+        double expectBeacons = 15 * 1792 / 102400.0;
+        check(Math.abs(dense.primaryBusy - expectBeacons) < 1e-9,
+                "同ch 15個 -> ビーコン合計 " + Math.round(expectBeacons * 100) + "% を採用");
+
+        // 5GHz 同 ch → 典型使用率 2%
+        Ap a5 = find(QualityEstimator.evaluate(Arrays.asList(ap("a", 5180, -40), ap("b", 5180, -50))), "a");
+        check(Math.abs(a5.primaryBusy - 0.02) < 1e-9, "5GHz 同ch -> 使用率 2%");
+
+        // BSS Load 実測値があればそれを使う（128/255 ≒ 50%）
+        Ap m = ap("a", 2437, -40);
+        m.bssLoadUtilization = 128;
+        Ap mm = find(QualityEstimator.evaluate(Arrays.asList(m, ap("b", 2437, -50))), "a");
+        check(mm.measured && Math.abs(mm.interferenceFactor - (1 - 128 / 255.0)) < 1e-9, "BSS Load 実測値を採用");
+
+        // 対象 AP が BSS Load を出さなくても、同じ ch の別 AP の実測値を使う
+        Ap rep = ap("b", 2437, -55);
+        rep.bssLoadUtilization = 51;
+        Ap viaRep = find(QualityEstimator.evaluate(Arrays.asList(ap("a", 2437, -40), rep)), "a");
+        check(viaRep.measured && Math.abs(viaRep.primaryBusy - 51 / 255.0) < 1e-9, "同ch の他 AP の実測値を採用");
+
+        // -82dBm 未満の同 ch 電波は送信を待たせない
+        List<Ap> weak = QualityEstimator.evaluate(Arrays.asList(ap("a", 2437, -40), ap("b", 2437, -83)));
+        check(find(weak, "a").qualityPercent == 100, "-83dBm の同ch は影響なし");
+        List<Ap> cca = QualityEstimator.evaluate(Arrays.asList(ap("a", 2437, -40), ap("b", 2437, -82)));
+        check(find(cca, "a").coChannelCount == 1, "-82dBm の同ch は検知");
+
+        // 2.4GHz ch1 と ch6 は重ならない
         List<Ap> sep = QualityEstimator.evaluate(Arrays.asList(ap("a", 2412, -40), ap("b", 2437, -40)));
         check(find(sep, "a").qualityPercent == 100, "ch1 と ch6 は干渉なし");
-        List<Ap> adj = QualityEstimator.evaluate(Arrays.asList(ap("a", 2412, -40), ap("b", 2422, -40)));
-        Ap adjA = find(adj, "a");
-        check(adjA.overlapCount == 1 && adjA.qualityPercent < 100 && adjA.qualityPercent > 67,
-                "ch1 と ch3 は部分干渉 (" + adjA.qualityPercent + "%)");
+
+        // ch1 と ch3（重なり 12/22 → -2.6dB）: -58dBm なら帯域内 -60.6dBm >= -62 → 検知、-62dBm なら -64.6 → 非検知
+        Ap adjA = find(QualityEstimator.evaluate(Arrays.asList(ap("a", 2412, -40), ap("b", 2422, -58))), "a");
+        check(adjA.overlapCount == 1 && adjA.qualityPercent == 80, "ch1/ch3 強い隣接 -> 検知 (" + adjA.qualityPercent + "%)");
+        Ap adjB = find(QualityEstimator.evaluate(Arrays.asList(ap("a", 2412, -40), ap("b", 2422, -62))), "a");
+        check(adjB.overlapCount == 0 && adjB.qualityPercent == 100, "ch1/ch3 弱い隣接 -> 非検知");
 
         // 2.4GHz と 5GHz は干渉しない
         List<Ap> bands = QualityEstimator.evaluate(Arrays.asList(ap("a", 2462, -40), ap("b", 5180, -40)));
         check(find(bands, "a").qualityPercent == 100, "異なるバンドは干渉なし");
 
-        // 80MHz 幅の AP に対し、その帯域内の 20MHz 電波は干渉する
+        // 80MHz (ch36-48, primary 36) の AP: ch44 の 20MHz 電波はセカンダリ → 20MHz 縮退分だけ低下
         Ap wide = new Ap("w", "w", 5180, 5210, 80, -40);
-        List<Ap> w = QualityEstimator.evaluate(Arrays.asList(wide, ap("n", 5240, -50)));
-        check(find(w, "w").overlapCount == 1 && find(w, "w").qualityPercent < 100, "80MHz 帯域内の電波を検出");
+        Ap w = find(QualityEstimator.evaluate(Arrays.asList(wide, ap("n", 5220, -50))), "w");
+        double expectW = 1 - 0.02 * (1 - 20.0 / 80);
+        check(w.secondaryCount == 1 && Math.abs(w.interferenceFactor - expectW) < 1e-9, "80MHz のセカンダリ干渉");
+        // 逆に 20MHz ch44 の AP から見ると 80MHz AP はプライマリにかかる（復調可能）
+        Ap n = find(QualityEstimator.evaluate(Arrays.asList(new Ap("w", "w", 5180, 5210, 80, -50), ap("n", 5220, -40))), "n");
+        check(n.overlapCount == 1 && Math.abs(n.primaryBusy - 0.02) < 1e-9, "80MHz AP は ch44 のプライマリ干渉");
 
-        // 弱い電波 (-92dBm) は混線に数えない
-        List<Ap> weak = QualityEstimator.evaluate(Arrays.asList(ap("a", 2437, -40), ap("b", 2437, -92)));
-        check(find(weak, "a").qualityPercent == 100, "-92dBm は混線に影響しない");
+        // 情報要素の解析
+        check(QualityEstimator.parseBssLoadUtilization(new byte[] {3, 0, (byte) 200, 0, 0}) == 200, "BSS Load 解析");
+        double br = QualityEstimator.lowestBasicRate(new byte[] {(byte) 0x82, (byte) 0x84, 0x0c, 0x12}, -1);
+        check(br == 1.0, "最低ベーシックレート 1Mbps");
 
         // 電波の強い順にソート
         List<Ap> many = new ArrayList<Ap>(Arrays.asList(
