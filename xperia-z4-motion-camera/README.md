@@ -58,7 +58,7 @@ Z4 の SoC である Snapdragon 810 は発熱しやすいことで知られて�
 
 Z4 のブラウザで次の URL を開くとダウンロードできます。
 
-https://github.com/fallere304-sys/anything-llm/raw/claude/xperia-z4-motion-camera-7x4wet/xperia-z4-motion-camera/release/z4motioncam-1.7.apk
+https://github.com/fallere304-sys/anything-llm/raw/claude/xperia-z4-motion-camera-7x4wet/xperia-z4-motion-camera/release/z4motioncam-1.8.apk
 
 1. 「設定 > セキュリティ > 提供元不明のアプリ」をオンにします。
 2. ダウンロードした APK を開いてインストールします。
@@ -94,7 +94,11 @@ Android Studio を使わずに作る場合は、Ubuntu のパッケージ（`aap
    - 状態、電池温度、空き容量、最後に動きを検知した時刻も表示されます。
    - 一番下の「設定」で、Z4 の設定画面と同じ項目をブラウザから変更できます（保存すると数秒で Z4 に反映）。パスワードなどの秘密の値は表示されず、変更するときだけ入力します。
 3. 30 秒たつと画面が暗くなります。タッチすると 30 秒間だけ元に戻ります。
-4. 「停止」ボタンで監視を終了します。
+4. **監視のオン・オフ**: ブラウザ上部の「監視オフ／監視オン」ボタン、または Z4 画面の同じボタンで切り替えます。
+   - オフの間はカメラを止めます（動体検知・録画・ライブ映像なし。発熱が最も少ない状態）。録画中だったファイルは正しく保存してから止めます。
+   - オフの間も閲覧用のサーバーは動き続け、Z4 の画面は暗いまま眠らないので、家の中・外出先のどちらからでもいつでもオンに戻せます。
+   - オン・オフの状態は再起動しても保たれます。
+5. Z4 画面の「終了」はアプリ自体を終了します（確認あり）。終了するとブラウザからは再開できないので、カメラだけ止めたいときは「監視オフ」を使ってください。
 
 ### 設定（画面の「設定」ボタン）
 
@@ -210,7 +214,7 @@ CameraService    フォアグラウンドサービス（カメラ、HTTP、電�
  ├─ UptimeLog        稼働記録（1 分ごとのハートビート、5 分ごとの電池記録、終わり方の判定）
  ├─ RemoteAccess     HTTPS サーバー（自己署名証明書 TlsIdentity）、UPnP ポート開放（Upnp）、DuckDNS 更新
  ├─ HttpServer       / , /stream.mjpg , /snapshot.jpg , /api/status , /api/recordings , /rec/<name>
- │                   /api/uptime（稼働記録）, /api/settings（設定の取得・POST で変更）, POST /api/delete（削除）, POST /api/zip（一括保存）
+ │                   /api/uptime（稼働記録）, POST /api/monitoring（監視オン・オフ）, /api/settings（設定の取得・POST で変更）, POST /api/delete（削除）, POST /api/zip（一括保存）
  └─ ThermalPolicy    電池温度 → 負荷レベル
 ```
 

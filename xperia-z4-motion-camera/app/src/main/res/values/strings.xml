@@ -2,7 +2,13 @@
 <resources>
     <string name="app_name">Z4 MotionCam</string>
     <string name="settings">設定</string>
-    <string name="stop">停止</string>
+    <string name="stop">終了</string>
+    <string name="monitor_off">監視オフ</string>
+    <string name="monitor_on">監視オン</string>
+    <string name="quit_title">アプリを終了しますか？</string>
+    <string name="quit_message">終了すると、ブラウザからの視聴・再開もできなくなります。カメラだけ止めたいときは「監視オフ」を使ってください。</string>
+    <string name="quit_ok">終了する</string>
+    <string name="cancel">キャンセル</string>
     <string name="notif_title">動体検知カメラ 稼働中</string>
     <string name="permission_denied">カメラの権限がないため起動できません</string>
 

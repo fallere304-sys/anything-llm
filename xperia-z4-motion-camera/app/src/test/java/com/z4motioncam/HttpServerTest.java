@@ -33,6 +33,7 @@ public class HttpServerTest {
     private FrameHub hub;
     private String password = "";
     private java.util.Map<String, String> lastChanges;
+    private volatile boolean monitoringOn = true;
     private byte[] video;
 
     @Before
@@ -52,6 +53,8 @@ public class HttpServerTest {
             @Override public FrameHub frames() { return hub; }
             @Override public String password() { return password; }
             @Override public String uptimeJson() { return "{\"current\":{}}"; }
+            @Override public boolean monitoring() { return monitoringOn; }
+            @Override public void setMonitoring(boolean on) { monitoringOn = on; }
             @Override public String settingsJson() { return "{\"groups\":[]}"; }
             @Override public String updateSettings(java.util.Map<String, String> changes) {
                 lastChanges = changes;
@@ -376,5 +379,25 @@ public class HttpServerTest {
         String list = new String(get("/api/recordings").body, StandardCharsets.UTF_8);
         // The fixture is not a real MP4, so the duration is unknown (-1).
         assertTrue(list, list.contains("\"duration\":-1"));
+    }
+
+    @Test
+    public void monitoringCanBeSwitchedOffAndOn() throws IOException {
+        Resp off = post("/api/monitoring", "on=false", "X-Z4-Action: monitoring");
+        assertTrue(off.head, off.head.startsWith("HTTP/1.0 200"));
+        assertEquals("{\"ok\":true,\"monitoring\":false}", new String(off.body, StandardCharsets.UTF_8));
+        assertFalse(monitoringOn);
+        // The server keeps answering while monitoring is off, so it can be switched back on.
+        assertTrue(get("/api/status").head.startsWith("HTTP/1.0 200"));
+        Resp on = post("/api/monitoring", "on=true", "X-Z4-Action: monitoring");
+        assertEquals("{\"ok\":true,\"monitoring\":true}", new String(on.body, StandardCharsets.UTF_8));
+        assertTrue(monitoringOn);
+    }
+
+    @Test
+    public void monitoringSwitchNeedsHeaderAndValidValue() throws IOException {
+        assertTrue(post("/api/monitoring", "on=false").head.startsWith("HTTP/1.0 403"));
+        assertTrue(post("/api/monitoring", "on=maybe", "X-Z4-Action: monitoring").head.startsWith("HTTP/1.0 400"));
+        assertTrue(monitoringOn);
     }
 }

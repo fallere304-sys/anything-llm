@@ -53,6 +53,11 @@ final class HttpServer {
         /** Run-time log: current session, past sessions (how they ended), battery samples. */
         String uptimeJson();
 
+        /** Monitoring on/off (off = camera stopped, servers and dark screen kept). */
+        boolean monitoring();
+
+        void setMonitoring(boolean on);
+
         /** Settings form (groups, fields, current values; secrets only as "set"). */
         String settingsJson();
 
@@ -279,6 +284,19 @@ final class HttpServer {
             }
             writeSimple(out, 200, "application/json; charset=utf-8",
                     deleteRecordings(splitNames(new String(req.body, UTF8))).getBytes(UTF8), false);
+        } else if (req.path.equals("/api/monitoring")) {
+            if (!"monitoring".equals(req.headers.get("x-z4-action"))) {
+                writeSimple(out, 403, "text/plain", "forbidden\n".getBytes(UTF8), false);
+                return;
+            }
+            String on = parseForm(new String(req.body, UTF8)).get("on");
+            if (!"true".equals(on) && !"false".equals(on)) {
+                writeSimple(out, 400, "text/plain", "on=true|false\n".getBytes(UTF8), false);
+                return;
+            }
+            backend.setMonitoring(Boolean.parseBoolean(on));
+            writeSimple(out, 200, "application/json; charset=utf-8",
+                    ("{\"ok\":true,\"monitoring\":" + backend.monitoring() + "}").getBytes(UTF8), false);
         } else if (req.path.equals("/api/settings")) {
             if (!"settings".equals(req.headers.get("x-z4-action"))) {
                 writeSimple(out, 403, "text/plain", "forbidden\n".getBytes(UTF8), false);

@@ -17,6 +17,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
+import android.preference.PreferenceManager;
 import android.util.Log;
 
 import java.io.File;
@@ -65,6 +66,13 @@ public class CameraService extends Service implements HttpServer.Backend {
     private volatile String powerState = "";
     private volatile String batteryHealth = "";
     private UptimeLog uptime;
+    /**
+     * Monitoring on/off, switchable from the phone or a browser and kept across restarts. Off stops
+     * only the camera (no detection, recording or live view); the web servers, locks and the dark
+     * screen stay, so it can be switched back on at any time.
+     */
+    private volatile boolean monitoring = true;
+    static final String PREF_MONITORING = "monitoring";
     private SettingsApi settingsApi;
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -132,6 +140,7 @@ public class CameraService extends Service implements HttpServer.Backend {
         if (battery != null) onBattery(battery);
 
         settingsApi = new SettingsApi(this);
+        monitoring = PreferenceManager.getDefaultSharedPreferences(this).getBoolean(PREF_MONITORING, true);
         uptime = new UptimeLog(new File(getFilesDir(), "uptime"), new UptimeLog.Clock() {
             @Override
             public long wallMs() {
@@ -212,7 +221,7 @@ public class CameraService extends Service implements HttpServer.Backend {
                 http = null;
             }
         }
-        if (thermal != ThermalPolicy.Level.CRITICAL) startPipeline();
+        if (thermal != ThermalPolicy.Level.CRITICAL && monitoring) startPipeline();
         if (s.ddnsConfigured() && ddnsTls == null) ddnsTls = loadDdnsTls();
         remote = new RemoteAccess(this, s, this, ddnsTls);
         remote.start();
@@ -256,8 +265,9 @@ public class CameraService extends Service implements HttpServer.Backend {
             // Last resort: release the camera entirely until the phone cools down.
             stopPipeline();
         } else {
-            if (pipeline == null) startPipeline();
-            pipeline.setThermalLevel(next);
+            if (pipeline == null && monitoring) startPipeline();
+            CameraPipeline p = pipeline;
+            if (p != null) p.setThermalLevel(next);
         }
     }
 
@@ -351,7 +361,9 @@ public class CameraService extends Service implements HttpServer.Backend {
         StringBuilder sb = new StringBuilder();
         sb.append(url()).append('\n');
         if (httpError != null) sb.append(httpError).append('\n');
-        if (p == null) {
+        if (!monitoring) {
+            sb.append("■ 監視オフ（カメラ停止中。ブラウザまたはこの画面から再開できます）");
+        } else if (p == null) {
             sb.append(thermal == ThermalPolicy.Level.CRITICAL ? "高温のため一時停止中（冷却待ち）" : "停止中");
         } else if (!p.isRunning()) {
             sb.append("カメラ準備中");
@@ -385,19 +397,42 @@ public class CameraService extends Service implements HttpServer.Backend {
     public String statusJson() {
         CameraPipeline p = pipeline;
         String state;
-        if (p == null) state = thermal == ThermalPolicy.Level.CRITICAL ? "cooling" : "stopped";
+        if (!monitoring) state = "paused";
+        else if (p == null) state = thermal == ThermalPolicy.Level.CRITICAL ? "cooling" : "stopped";
         else if (!p.isRunning()) state = "starting";
         else state = p.isRecording() ? "recording" : "watching";
         String err = p == null ? null : p.error();
         return String.format(Locale.US,
                 "{\"state\":\"%s\",\"motion\":%.4f,\"lastMotion\":%d,\"tempC\":%.1f,\"battery\":%d,\"power\":%s,"
                         + "\"charging\":%b,\"thermal\":\"%s\",\"freeBytes\":%d,\"storageFull\":%b,"
-                        + "\"rotation\":%d,\"viewers\":%d,\"error\":%s,\"remote\":%s}",
+                        + "\"rotation\":%d,\"viewers\":%d,\"error\":%s,\"monitoring\":%b,\"remote\":%s}",
                 state, p == null ? 0f : p.motionRatio(), p == null ? 0L : p.lastMotionWallMs(),
                 Float.isNaN(batteryTempC) ? 0f : batteryTempC, batteryPct, HttpServer.jsonString(powerState), charging, thermal,
                 store.usableBytes(), p != null && p.storageFull(), settings.rotation, hub.clients(),
-                err == null ? "null" : HttpServer.jsonString(err),
+                err == null ? "null" : HttpServer.jsonString(err), monitoring,
                 remote == null ? "null" : remote.statusJson());
+    }
+
+    @Override
+    public boolean monitoring() {
+        return monitoring;
+    }
+
+    /** Switches monitoring; callable from any thread (the camera is started/stopped on the main thread). */
+    @Override
+    public void setMonitoring(final boolean on) {
+        monitoring = on;
+        PreferenceManager.getDefaultSharedPreferences(this).edit().putBoolean(PREF_MONITORING, on).apply();
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                if (!monitoring) {
+                    stopPipeline(); // closes the recording in progress properly
+                } else if (pipeline == null && thermal != ThermalPolicy.Level.CRITICAL) {
+                    startPipeline();
+                }
+            }
+        });
     }
 
     @Override

@@ -11,11 +11,15 @@
   header h1 { font-size: 17px; margin: 0; }
   #state { font-size: 14px; color: #bbb; }
   #state.rec { color: #ff5a5a; font-weight: bold; }
+  #state.off { color: #ffb74d; font-weight: bold; }
+  #monToggle { margin-left: auto; font-size: 14px; padding: 7px 12px; }
+  #monToggle.on { background: #b3261e; }
   main { max-width: 960px; margin: 0 auto; padding: 12px 16px 40px; }
   .view { position: relative; background: #000; border-radius: 8px; overflow: hidden;
           aspect-ratio: 4 / 3; display: flex; align-items: center; justify-content: center; }
   @supports not (aspect-ratio: 4 / 3) { .view { height: 70vw; max-height: 720px; } }
   .view img { max-width: 100%; max-height: 100%; }
+  .view img:not([src]) { visibility: hidden; } /* no broken-image icon while the stream is stopped */
   .view .msg { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center;
                flex-direction: column; gap: 10px; background: rgba(0,0,0,.6); text-align: center; padding: 16px; }
   button { font-size: 15px; padding: 8px 16px; border-radius: 6px; border: 0; background: #3a6df0; color: #fff; }
@@ -85,10 +89,15 @@
 <header>
   <h1>Z4 MotionCam</h1>
   <span id="state">接続中…</span>
+  <button type="button" id="monToggle" class="hidden">監視オフ</button>
 </header>
 <main>
   <div class="view">
     <img id="live" alt="ライブ映像">
+    <div id="offMsg" class="msg hidden">
+      <div>監視オフ中です（カメラ・動体検知・録画は停止しています）</div>
+      <button type="button" id="monOn">監視を開始</button>
+    </div>
     <div id="paused" class="msg hidden">
       <div>発熱を抑えるため、ライブ映像は10分で自動停止します</div>
       <button id="resume">ライブ再開</button>
@@ -199,7 +208,9 @@
   // ---- live view ----
   var live = $('live'), paused = $('paused'), toggle = $('toggle'), stateEl = $('state'), player = $('player');
   var liveTimer = null, liveOn = false, rotation = 0;
+  var monitoringOn = true;
   function startLive() {
+    if (!monitoringOn) return; // camera is off: nothing to stream
     live.src = '/stream.mjpg?t=' + new Date().getTime();
     liveOn = true;
     show(paused, false);
@@ -672,7 +683,38 @@
 
   // ---- status ----
   var STATE = { recording: '● 録画中', watching: '監視中', starting: 'カメラ準備中',
-                cooling: '高温のため一時停止中', stopped: '停止中' };
+                cooling: '高温のため一時停止中', stopped: '停止中', paused: '■ 監視オフ' };
+
+  // ---- monitoring on/off ----
+  var monToggle = $('monToggle'), offMsg = $('offMsg');
+  function showMonitoring(on) {
+    show(monToggle, true);
+    monToggle.textContent = on ? '監視オフ' : '監視オン';
+    monToggle.className = on ? 'on' : '';
+    if (on === monitoringOn) return;
+    monitoringOn = on;
+    show(offMsg, !on);
+    show(toggle.parentNode, on); // "live stop/resume" is meaningless while the camera is off
+    if (on) {
+      startLive();
+    } else {
+      stopLive();
+      show(paused, false); // the "live stopped" message is not relevant while off
+    }
+  }
+  function setMonitoring(on) {
+    if (!on && !window.confirm('監視をオフにしますか？\nカメラを止め、動体検知・録画・ライブ映像も止まります。\nZ4の画面は暗いまま待機し、この画面からいつでもオンに戻せます。')) return;
+    monToggle.disabled = true;
+    request('POST', '/api/monitoring', 'on=' + on, { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Z4-Action': 'monitoring' },
+      function (err) {
+        monToggle.disabled = false;
+        if (err) { window.alert('切り替えられませんでした（' + err.message + '）'); return; }
+        showMonitoring(on);
+        setTimeout(loadStatus, 1500);
+      });
+  }
+  monToggle.addEventListener('click', function () { setMonitoring(!monitoringOn); });
+  $('monOn').addEventListener('click', function () { setMonitoring(true); });
   var lastState = '';
   function loadStatus() {
     getJson('/api/status', function (err, s) {
@@ -682,7 +724,8 @@
       if (s.lastMotion) txt += '  最終検知 ' + new Date(s.lastMotion).toLocaleTimeString();
       if (s.error) txt += '  ⚠ ' + s.error;
       stateEl.textContent = txt;
-      stateEl.className = s.state === 'recording' ? 'rec' : '';
+      stateEl.className = s.state === 'recording' ? 'rec' : (s.state === 'paused' ? 'off' : '');
+      if (typeof s.monitoring === 'boolean') showMonitoring(s.monitoring);
       if (s.rotation !== rotation) {
         rotation = s.rotation;
         live.style.webkitTransform = live.style.transform = 'rotate(' + rotation + 'deg)';

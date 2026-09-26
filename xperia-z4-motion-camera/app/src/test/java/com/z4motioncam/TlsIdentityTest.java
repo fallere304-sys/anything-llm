@@ -75,6 +75,8 @@ public class TlsIdentityTest {
             public FrameHub frames() { return hub; }
             public String password() { return password; }
             public String uptimeJson() { return "{}"; }
+            public boolean monitoring() { return true; }
+            public void setMonitoring(boolean on) { }
             public String settingsJson() { return "{}"; }
             public String updateSettings(java.util.Map<String, String> c) { return null; }
         }, id.serverSocketFactory(), false, true);
@@ -159,6 +161,8 @@ public class TlsIdentityTest {
             public FrameHub frames() { return hub; }
             public String password() { return password; }
             public String uptimeJson() { return "{}"; }
+            public boolean monitoring() { return true; }
+            public void setMonitoring(boolean on) { }
             public String settingsJson() { return "{}"; }
             public String updateSettings(java.util.Map<String, String> c) { return null; }
         }, id.serverSocketFactory(), false, true);

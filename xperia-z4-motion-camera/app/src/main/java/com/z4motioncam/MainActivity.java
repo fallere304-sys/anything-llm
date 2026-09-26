@@ -2,8 +2,10 @@ package com.z4motioncam;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
@@ -17,6 +19,7 @@ import android.os.Looper;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -41,6 +44,7 @@ public class MainActivity extends Activity {
     private boolean bound;
     private long shownSeq = -1;
     private int tick;
+    private Button monitorButton;
 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
@@ -68,7 +72,17 @@ public class MainActivity extends Activity {
             ui.removeCallbacks(this);
             if (dimmed || !resumed || service == null) return;
             // The status lists the recordings directory, so refresh it less often than the image.
-            if (tick++ % 4 == 0) status.setText(service.statusText());
+            if (tick++ % 4 == 0) {
+                status.setText(service.statusText());
+                updateMonitorButton(); // may have been switched from a browser
+            }
+            if (!service.monitoring()) {
+                // Camera is off: show no stale picture.
+                preview.setImageDrawable(null);
+                shownSeq = -1;
+                ui.postDelayed(this, REFRESH_MS);
+                return;
+            }
             FrameHub hub = service.frameHub();
             hub.request(System.currentTimeMillis());
             FrameHub.Frame f = hub.latest();
@@ -99,11 +113,31 @@ public class MainActivity extends Activity {
                 startActivity(new Intent(MainActivity.this, SettingsActivity.class));
             }
         });
+        monitorButton = (Button) findViewById(R.id.btn_monitor);
+        monitorButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (service == null) return;
+                service.setMonitoring(!service.monitoring());
+                updateMonitorButton();
+            }
+        });
         findViewById(R.id.btn_stop).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                stopService(new Intent(MainActivity.this, CameraService.class));
-                finish();
+                // Quitting also stops the web server, so it cannot be restarted from a browser.
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle(R.string.quit_title)
+                        .setMessage(R.string.quit_message)
+                        .setPositiveButton(R.string.quit_ok, new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface d, int which) {
+                                stopService(new Intent(MainActivity.this, CameraService.class));
+                                finish();
+                            }
+                        })
+                        .setNegativeButton(R.string.cancel, null)
+                        .show();
             }
         });
 
@@ -204,6 +238,10 @@ public class MainActivity extends Activity {
             tick = 0;
             refresh.run();
         }
+    }
+
+    private void updateMonitorButton() {
+        if (service != null) monitorButton.setText(service.monitoring() ? R.string.monitor_off : R.string.monitor_on);
     }
 
     private void hideSystemBars() {
