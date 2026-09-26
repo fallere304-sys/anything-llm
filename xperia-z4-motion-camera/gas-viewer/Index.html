@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Z4 MotionCam</title>
+<style>
+  body { margin: 0; font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; background: #111; color: #eee; }
+  header { position: sticky; top: 0; z-index: 2; padding: 10px 16px; background: #1d1d1d; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+  header h1 { font-size: 16px; margin: 0; }
+  #cam { flex: 1 1 12em; font-size: 16px; padding: 6px 8px; border-radius: 6px; background: #2a2a2a; color: #fff; border: 1px solid #444; }
+  #state { flex-basis: 100%; font-size: 13px; color: #bbb; }
+  #state.rec { color: #ff5a5a; font-weight: bold; }
+  #state.off { color: #ffb74d; font-weight: bold; }
+  main { max-width: 960px; margin: 0 auto; padding: 12px 16px 40px; }
+  h2 { font-size: 16px; margin: 24px 0 8px; }
+  button { font-size: 14px; padding: 8px 12px; border-radius: 6px; border: 0; background: #3a6df0; color: #fff; cursor: pointer; }
+  button.secondary { background: #333; }
+  button.danger { background: #b3261e; }
+  button:disabled { opacity: .4; }
+  .view { position: relative; background: #000; border-radius: 8px; overflow: hidden; min-height: 200px;
+          display: flex; align-items: center; justify-content: center; }
+  .view img { max-width: 100%; display: block; }
+  .view img:not([src]) { display: none; }
+  .view .msg { padding: 24px; text-align: center; color: #bbb; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  .meta { color: #999; font-size: 13px; }
+  .err { color: #ff8a80; }
+  .hidden { display: none !important; }
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 4px; border-bottom: 1px solid #2a2a2a; }
+  .toolbar .all { margin-right: auto; font-size: 14px; }
+  #selInfo { width: 100%; }
+  #selInfo:empty { display: none; }
+  .cb { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; padding: 8px; margin: -8px; }
+  .cb input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+  .cb .box { width: 24px; height: 24px; flex: none; box-sizing: border-box; border: 2px solid #8a8a8a; border-radius: 5px; background: #111; position: relative; }
+  .cb input:checked + .box, .cb input.partial + .box { background: #3a6df0; border-color: #3a6df0; }
+  .cb input:checked + .box::after { content: ''; position: absolute; left: 6px; top: 1px; width: 6px; height: 12px; border: solid #fff; border-width: 0 3px 3px 0; transform: rotate(45deg); }
+  .cb input.partial + .box::after { content: ''; position: absolute; left: 4px; top: 9px; width: 12px; height: 3px; background: #fff; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid #2a2a2a; }
+  li.checked { background: #1a2238; }
+  li .dur { flex: none; width: 4.6em; text-align: right; font-size: 14px; }
+  li .info { flex: 1; min-width: 0; }
+  li .info a { color: #8ab4ff; }
+  li .actions { display: flex; gap: 6px; flex: none; }
+  video { width: 100%; max-height: 70vh; background: #000; border-radius: 8px; margin-top: 8px; }
+  .panel { background: #1a1a1a; border-radius: 8px; padding: 12px; }
+  .form { display: grid; grid-template-columns: max-content 1fr; gap: 8px 12px; align-items: center; }
+  .form input { font-size: 16px; padding: 6px 8px; border-radius: 6px; border: 1px solid #444; background: #1f1f1f; color: #eee; min-width: 0; }
+  .cams li { justify-content: space-between; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Z4 MotionCam</h1>
+  <select id="cam" aria-label="カメラ"></select>
+  <button type="button" id="monToggle" class="hidden">監視オフ</button>
+  <div id="state">カメラを選んでください</div>
+</header>
+<main>
+  <div id="noCam" class="panel hidden">カメラが登録されていません。ページ下の「カメラの登録」から登録してください。</div>
+
+  <section id="camView">
+    <div class="view">
+      <img id="live" alt="ライブ映像">
+      <div id="liveMsg" class="msg">「ライブ開始」で映像を表示します</div>
+    </div>
+    <div class="bar">
+      <button type="button" id="liveBtn">ライブ開始</button>
+      <span id="liveInfo" class="meta"></span>
+    </div>
+    <p class="meta">ライブ映像は Google 経由で約1秒ごとに更新される静止画です。通信回数を節約するため、3分で自動停止します。</p>
+
+    <h2>録画 <button type="button" class="secondary" id="reload">更新</button></h2>
+    <video id="player" class="hidden" controls playsinline></video>
+    <div id="progress" class="meta"></div>
+    <div class="toolbar">
+      <label class="cb all"><input type="checkbox" id="selAll"><span class="box"></span>すべて選択</label>
+      <button type="button" id="bulkSave" disabled>一括保存</button>
+      <button type="button" id="bulkDel" class="danger" disabled>一括削除</button>
+      <div id="selInfo" class="meta"></div>
+    </div>
+    <div id="notice" class="meta"></div>
+    <ul id="list"></ul>
+  </section>
+
+  <h2>カメラの登録</h2>
+  <div class="panel">
+    <div class="form">
+      <label for="fName">名前</label><input id="fName" placeholder="例: 寝室">
+      <label for="fHost">IP / アドレス</label><input id="fHost" placeholder="例: 133.201.33.64" autocapitalize="off" autocomplete="off">
+      <label for="fPort">ポート</label><input id="fPort" placeholder="例: 5880" inputmode="numeric">
+      <label for="fPass">パスワード</label><input id="fPass" type="password" placeholder="Z4の外出先視聴用パスワード" autocomplete="new-password">
+    </div>
+    <p><button type="button" id="addBtn">登録</button> <span id="addMsg" class="meta"></span></p>
+    <p class="meta">登録時に実際にカメラへ接続して確かめます。パスワードはシートには保存しません。</p>
+    <ul class="cams" id="camList"></ul>
+  </div>
+</main>
+<script>
+(function () {
+  'use strict';
+  var LIVE_LIMIT_MS = 3 * 60 * 1000;
+  var LIVE_INTERVAL_MS = 1000;
+  var STATUS_INTERVAL_MS = 20 * 1000;
+  function $(id) { return document.getElementById(id); }
+  function el(tag, text, cls) {
+    var e = document.createElement(tag);
+    if (text) e.textContent = text;
+    if (cls) e.className = cls;
+    return e;
+  }
+  function show(e, on) { e.classList.toggle('hidden', !on); }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function fmtSize(b) { return b > 1e9 ? (b / 1e9).toFixed(2) + ' GB' : (b / 1e6).toFixed(1) + ' MB'; }
+  function fmtName(n) {
+    var m = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(n);
+    return m ? m[1] + '/' + m[2] + '/' + m[3] + ' ' + m[4] + ':' + m[5] + ':' + m[6] : n;
+  }
+  function fmtLen(ms) {
+    if (!(ms >= 0)) return '--';
+    var sec = Math.round(ms / 1000), m = Math.floor(sec / 60), s = sec % 60;
+    return m > 0 ? m + '分' + pad2(s) + '秒' : s + '秒';
+  }
+  function store(key, value) {
+    try { if (value === undefined) return localStorage.getItem(key); localStorage.setItem(key, value); } catch (e) { return null; }
+  }
+
+  /** google.script.run を「関数名, 引数..., コールバック(err, result)」で呼ぶ。 */
+  function gs(fn) {
+    var args = Array.prototype.slice.call(arguments, 1, -1);
+    var cb = arguments[arguments.length - 1];
+    var runner = google.script.run
+      .withSuccessHandler(function (r) { cb(null, r); })
+      .withFailureHandler(function (e) { cb(e && e.message ? e : new Error(String(e))); });
+    runner[fn].apply(runner, args);
+  }
+
+  // ---- cameras ----
+  var camSel = $('cam'), cameras = [], camId = null;
+
+  function loadCameras(selectId) {
+    gs('listCameras', function (err, list) {
+      if (err) { $('state').textContent = err.message; return; }
+      cameras = list;
+      camSel.textContent = '';
+      for (var i = 0; i < list.length; i++) {
+        var o = el('option', list[i].name);
+        o.value = list[i].id;
+        camSel.appendChild(o);
+      }
+      renderCamList();
+      show($('noCam'), !list.length);
+      show($('camView'), list.length > 0);
+      show(camSel, list.length > 0);
+      if (!list.length) { camId = null; $('state').textContent = 'カメラを登録してください'; return; }
+      var want = selectId || store('z4cam') || list[0].id;
+      var found = list.some(function (c) { return c.id === want; });
+      selectCamera(found ? want : list[0].id);
+    });
+  }
+
+  function selectCamera(id) {
+    camId = id;
+    camSel.value = id;
+    store('z4cam', id);
+    stopLive();
+    items = [];
+    selected = {};
+    blobs = {};
+    render();
+    say('');
+    $('progress').textContent = '';
+    player.pause();
+    player.removeAttribute('src');
+    show(player, false);
+    $('state').textContent = '接続しています…';
+    loadStatus();
+    loadList();
+  }
+  camSel.addEventListener('change', function () { selectCamera(camSel.value); });
+
+  // ---- status & monitoring ----
+  var STATE = { recording: '● 録画中', watching: '監視中', starting: 'カメラ準備中',
+                cooling: '高温のため一時停止中', stopped: '停止中', paused: '■ 監視オフ' };
+  var monToggle = $('monToggle'), monitoring = true;
+  function loadStatus() {
+    var id = camId;
+    if (!id) return;
+    gs('getStatus', id, function (err, s) {
+      if (id !== camId) return;
+      var st = $('state');
+      if (err) { st.textContent = err.message; st.className = 'err'; show(monToggle, false); return; }
+      var txt = (STATE[s.state] || s.state) + '  電池 ' + (s.battery >= 0 ? s.battery + '%・' : '') + s.tempC.toFixed(1) + '℃'
+        + (s.power ? '（' + s.power + '）' : '') + '  空き ' + (s.freeBytes / 1e9).toFixed(1) + ' GB';
+      if (s.lastMotion) txt += '  最終検知 ' + new Date(s.lastMotion).toLocaleTimeString();
+      st.textContent = txt;
+      st.className = s.state === 'recording' ? 'rec' : (s.state === 'paused' ? 'off' : '');
+      monitoring = s.monitoring !== false;
+      show(monToggle, true);
+      monToggle.textContent = monitoring ? '監視オフ' : '監視オン';
+      monToggle.className = monitoring ? 'danger' : '';
+    });
+  }
+  setInterval(function () { if (!document.hidden) loadStatus(); }, STATUS_INTERVAL_MS);
+
+  monToggle.addEventListener('click', function () {
+    var on = !monitoring;
+    if (!on && !confirm('監視をオフにしますか？\nカメラを止め、動体検知・録画も止まります。いつでもここからオンに戻せます。')) return;
+    monToggle.disabled = true;
+    gs('setMonitoring', camId, on, function (err) {
+      monToggle.disabled = false;
+      if (err) { alert('切り替えられませんでした: ' + err.message); return; }
+      if (!on) stopLive();
+      loadStatus();
+    });
+  });
+
+  // ---- live (still images through Google) ----
+  var live = $('live'), liveBtn = $('liveBtn'), liveOn = false, liveTimer = null, liveStarted = 0, frames = 0;
+  function startLive() {
+    if (!camId) return;
+    liveOn = true;
+    liveStarted = Date.now();
+    frames = 0;
+    liveBtn.textContent = 'ライブ停止';
+    $('liveMsg').textContent = '読み込み中…';
+    nextFrame();
+  }
+  function stopLive(reason) {
+    liveOn = false;
+    clearTimeout(liveTimer);
+    liveBtn.textContent = 'ライブ開始';
+    live.removeAttribute('src');
+    show($('liveMsg'), true);
+    $('liveMsg').textContent = reason || '「ライブ開始」で映像を表示します';
+    $('liveInfo').textContent = '';
+  }
+  function nextFrame() {
+    if (!liveOn) return;
+    if (Date.now() - liveStarted > LIVE_LIMIT_MS) { stopLive('3分たったので停止しました（通信回数の節約）'); return; }
+    var id = camId, t0 = Date.now();
+    gs('getSnapshot', id, function (err, dataUrl) {
+      if (!liveOn || id !== camId) return;
+      if (err) { stopLive('映像を取得できません: ' + err.message); return; }
+      if (dataUrl) {
+        live.src = dataUrl;
+        show($('liveMsg'), false);
+        frames++;
+        $('liveInfo').textContent = new Date().toLocaleTimeString() + ' 更新（' + frames + 'コマ）';
+      } else {
+        live.removeAttribute('src');
+        show($('liveMsg'), true);
+        $('liveMsg').textContent = monitoring ? 'カメラ準備中です…' : '監視オフ中です（カメラは停止しています）';
+      }
+      liveTimer = setTimeout(nextFrame, Math.max(0, LIVE_INTERVAL_MS - (Date.now() - t0)));
+    });
+  }
+  liveBtn.addEventListener('click', function () { if (liveOn) stopLive(); else startLive(); });
+  document.addEventListener('visibilitychange', function () { if (document.hidden && liveOn) stopLive(); });
+
+  // ---- recordings ----
+  var listEl = $('list'), selAll = $('selAll'), bulkSave = $('bulkSave'), bulkDel = $('bulkDel');
+  var player = $('player');
+  var items = [], selected = {}, busy = false, blobs = {}, playing = null;
+
+  function say(text, isError) { var n = $('notice'); n.textContent = text || ''; n.className = 'meta' + (isError ? ' err' : ''); }
+  function selectedNames() { return items.filter(function (it) { return selected[it.name]; }).map(function (it) { return it.name; }); }
+
+  function updateToolbar() {
+    var names = selectedNames(), size = 0;
+    items.forEach(function (it) { if (selected[it.name]) size += it.size; });
+    bulkSave.disabled = bulkDel.disabled = busy || !names.length;
+    bulkSave.textContent = names.length ? '一括保存（' + names.length + '）' : '一括保存';
+    bulkDel.textContent = names.length ? '一括削除（' + names.length + '）' : '一括削除';
+    selAll.disabled = busy || !items.length;
+    selAll.checked = items.length > 0 && names.length === items.length;
+    selAll.className = names.length > 0 && names.length < items.length ? 'partial' : '';
+    $('selInfo').textContent = names.length ? names.length + '件選択中（' + fmtSize(size) + '）' : '';
+    Array.prototype.forEach.call(listEl.querySelectorAll('input,button'), function (b) { b.disabled = busy; });
+  }
+
+  function render() {
+    listEl.textContent = '';
+    if (!items.length) listEl.appendChild(el('li', camId ? 'まだ録画はありません' : '', 'meta'));
+    items.forEach(function (it) {
+      var li = el('li', null, selected[it.name] ? 'checked' : '');
+      li.setAttribute('data-name', it.name);
+      var label = el('label', null, 'cb');
+      var chk = el('input');
+      chk.type = 'checkbox';
+      chk.checked = !!selected[it.name];
+      label.appendChild(chk);
+      label.appendChild(el('span', null, 'box'));
+      var info = el('div', null, 'info');
+      var a = el('a', fmtName(it.name));
+      a.href = '#';
+      a.setAttribute('data-action', 'play');
+      info.appendChild(a);
+      info.appendChild(el('div', fmtSize(it.size), 'meta'));
+      var actions = el('div', null, 'actions');
+      var save = el('button', '保存', 'secondary');
+      save.setAttribute('data-action', 'save');
+      var del = el('button', '削除', 'danger');
+      del.setAttribute('data-action', 'delete');
+      actions.appendChild(save);
+      actions.appendChild(del);
+      li.appendChild(label);
+      li.appendChild(el('div', fmtLen(it.duration), 'dur'));
+      li.appendChild(info);
+      li.appendChild(actions);
+      listEl.appendChild(li);
+    });
+    updateToolbar();
+  }
+
+  function loadList(done) {
+    var id = camId;
+    if (!id) return;
+    gs('listRecordings', id, function (err, data) {
+      if (id !== camId) return;
+      if (err) say('録画一覧を読み込めません: ' + err.message, true);
+      else {
+        items = data;
+        var present = {};
+        items.forEach(function (it) { present[it.name] = true; });
+        Object.keys(selected).forEach(function (n) { if (!present[n]) delete selected[n]; });
+      }
+      render();
+      if (done) done();
+    });
+  }
+  $('reload').addEventListener('click', function () { loadList(); loadStatus(); });
+
+  function rowName(node) {
+    while (node && node !== listEl) { if (node.getAttribute && node.getAttribute('data-name')) return node.getAttribute('data-name'); node = node.parentNode; }
+    return null;
+  }
+  listEl.addEventListener('change', function (ev) {
+    var t = ev.target;
+    if (t.type !== 'checkbox') return;
+    var name = rowName(t);
+    if (t.checked) selected[name] = true; else delete selected[name];
+    var li = t.closest('li');
+    if (li) li.className = t.checked ? 'checked' : '';
+    updateToolbar();
+  });
+  listEl.addEventListener('click', function (ev) {
+    var t = ev.target.closest('[data-action]');
+    if (!t || busy) return;
+    ev.preventDefault();
+    var name = rowName(t), action = t.getAttribute('data-action');
+    if (action === 'play') play(name);
+    else if (action === 'save') saveFiles([name]);
+    else if (action === 'delete') deleteFiles([name]);
+  });
+  selAll.addEventListener('change', function () {
+    var all = selAll.checked;
+    selected = {};
+    if (all) items.forEach(function (it) { selected[it.name] = true; });
+    render();
+  });
+
+  function itemOf(name) { for (var i = 0; i < items.length; i++) if (items[i].name === name) return items[i]; return null; }
+
+  /** 録画を 8MB ずつ Google 経由で取得し、Blob にする（MP4 は最後まで揃わないと再生できない）。 */
+  function fetchRecording(name, label, cb) {
+    if (blobs[name]) { cb(null, blobs[name]); return; }
+    var id = camId, parts = [], it = itemOf(name);
+    var total = it ? it.size : 0;
+    function step(start) {
+      gs('getRecordingChunk', id, name, start, function (err, c) {
+        if (id !== camId) return cb(new Error('カメラが切り替わりました'));
+        if (err) return cb(err);
+        var bin = atob(c.data), bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        parts.push(bytes);
+        total = c.total || total;
+        $('progress').textContent = label + ' ' + fmtName(name) + '：' + Math.min(100, Math.round(c.next * 100 / Math.max(1, total))) + '%（' + fmtSize(c.next) + ' / ' + fmtSize(total) + '）';
+        if (c.next >= total || bytes.length === 0) {
+          var blob = new Blob(parts, { type: 'video/mp4' });
+          blobs[name] = blob;
+          cb(null, blob);
+        } else {
+          step(c.next);
+        }
+      });
+    }
+    step(0);
+  }
+
+  function confirmBig(names) {
+    var size = 0;
+    names.forEach(function (n) { var it = itemOf(n); if (it) size += it.size; });
+    return size < 150e6 || confirm('合計 ' + fmtSize(size) + ' あります。Google 経由のため時間がかかります（数分以上）。続けますか？');
+  }
+
+  function play(name) {
+    if (!confirmBig([name])) return;
+    busy = true; updateToolbar();
+    playing = name;
+    fetchRecording(name, '読み込み中', function (err, blob) {
+      busy = false; updateToolbar();
+      if (err) { $('progress').textContent = ''; say('再生できません: ' + err.message, true); return; }
+      $('progress').textContent = '再生中：' + fmtName(name);
+      show(player, true);
+      if (player.src) URL.revokeObjectURL(player.src);
+      player.src = URL.createObjectURL(blob);
+      player.play().catch(function () {});
+      player.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
+
+  function download(blob, name) {
+    var a = el('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
+  }
+
+  function saveFiles(names) {
+    if (!names.length || !confirmBig(names)) return;
+    busy = true; updateToolbar();
+    var i = 0;
+    (function next() {
+      if (i >= names.length) {
+        busy = false; updateToolbar();
+        $('progress').textContent = '';
+        say(names.length + '件を保存しました');
+        return;
+      }
+      var n = names[i++];
+      fetchRecording(n, '保存中 (' + i + '/' + names.length + ')', function (err, blob) {
+        if (err) { busy = false; updateToolbar(); say('保存できません: ' + err.message, true); return; }
+        download(blob, n);
+        if (i < names.length) setTimeout(next, 800); // 連続ダウンロードの間隔（ブラウザが止めないように）
+        else next();
+      });
+    })();
+  }
+
+  function deleteFiles(names) {
+    if (!names.length) return;
+    var msg = names.length === 1 ? '「' + fmtName(names[0]) + '」を削除しますか？\n元に戻せません。' : names.length + '件の録画を削除しますか？\n元に戻せません。';
+    if (!confirm(msg)) return;
+    busy = true; updateToolbar();
+    say('削除しています…');
+    gs('deleteRecordings', camId, names, function (err, res) {
+      busy = false;
+      if (err) { say('削除できません: ' + err.message, true); updateToolbar(); return; }
+      res.deleted.forEach(function (n) {
+        delete selected[n];
+        delete blobs[n];
+        if (playing === n) { player.pause(); player.removeAttribute('src'); show(player, false); $('progress').textContent = ''; }
+      });
+      var text = res.deleted.length + '件削除しました' + (res.failed.length ? '（' + res.failed.length + '件は削除できませんでした）' : '');
+      loadList(function () { say(text, res.failed.length > 0); });
+    });
+  }
+
+  bulkSave.addEventListener('click', function () { saveFiles(selectedNames()); });
+  bulkDel.addEventListener('click', function () { deleteFiles(selectedNames()); });
+
+  // ---- registration ----
+  function renderCamList() {
+    var ul = $('camList');
+    ul.textContent = '';
+    cameras.forEach(function (c) {
+      var li = el('li');
+      li.appendChild(el('span', c.name + '（' + c.host + ':' + c.port + '）'));
+      var del = el('button', '登録解除', 'secondary');
+      del.addEventListener('click', function () {
+        if (!confirm('「' + c.name + '」の登録を解除しますか？（カメラ本体と録画はそのままです）')) return;
+        gs('removeCamera', c.id, function (err) {
+          if (err) { alert(err.message); return; }
+          loadCameras();
+        });
+      });
+      li.appendChild(del);
+      ul.appendChild(li);
+    });
+  }
+
+  $('addBtn').addEventListener('click', function () {
+    var form = { name: $('fName').value, host: $('fHost').value, port: $('fPort').value, password: $('fPass').value };
+    var btn = $('addBtn'), msg = $('addMsg');
+    btn.disabled = true;
+    msg.className = 'meta';
+    msg.textContent = 'カメラに接続して確かめています…';
+    gs('addCamera', form, function (err, cam) {
+      btn.disabled = false;
+      if (err) { msg.className = 'err'; msg.textContent = '登録できません: ' + err.message; return; }
+      msg.textContent = '「' + cam.name + '」を登録しました';
+      $('fName').value = $('fHost').value = $('fPort').value = $('fPass').value = '';
+      loadCameras(cam.id);
+    });
+  });
+
+  loadCameras();
+})();
+</script>
+</body>
+</html>
