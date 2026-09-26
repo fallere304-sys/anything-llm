@@ -8,6 +8,8 @@ import android.util.Log;
 import java.io.File;
 import java.io.IOException;
 import java.net.URLEncoder;
+import java.util.ArrayList;
+import java.util.List;
 
 import javax.net.ssl.SSLSocketFactory;
 
@@ -118,7 +120,7 @@ final class RemoteAccess {
         }
         try {
             state = "準備中";
-            TlsIdentity id = TlsIdentity.loadOrCreate(new File(context.getFilesDir(), "tls.keystore"));
+            TlsIdentity id = TlsIdentity.loadOrCreate(new File(context.getFilesDir(), "tls.keystore"), certHosts());
             fingerprint = id.fingerprint();
             https = new HttpServer(settings.remotePort, backend, id.serverSocketFactory(), false, true);
             https.start();
@@ -132,6 +134,19 @@ final class RemoteAccess {
             error = "HTTPSサーバーを起動できません: " + e.getMessage();
             https = null;
         }
+    }
+
+    /**
+     * Addresses the certificate must name: the outside address, the DuckDNS name and the LAN IP
+     * (so https://LAN-IP:port/ can be tested at home). A change produces a new certificate.
+     */
+    private List<String> certHosts() {
+        List<String> hosts = new ArrayList<>();
+        if (!settings.externalHost.isEmpty()) hosts.add(settings.externalHost);
+        if (settings.ddnsConfigured()) hosts.add(settings.ddnsDomain + ".duckdns.org");
+        String lan = NetUtil.localIpv4();
+        if (lan != null && !hosts.contains(lan)) hosts.add(lan);
+        return hosts;
     }
 
     private void close() {

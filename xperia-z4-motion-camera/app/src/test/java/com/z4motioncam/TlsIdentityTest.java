@@ -1,6 +1,7 @@
 package com.z4motioncam;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -21,10 +22,12 @@ public class TlsIdentityTest {
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
 
+    private static final java.util.List<String> HOSTS = java.util.Arrays.asList("203.0.113.5", "mybaby.duckdns.org", "127.0.0.1");
+
     @Test
-    public void createsValidSelfSignedCertificateAndReloadsIt() throws Exception {
+    public void createsIosCompliantCertificateAndReloadsIt() throws Exception {
         File f = new File(tmp.getRoot(), "tls.keystore");
-        TlsIdentity id = TlsIdentity.loadOrCreate(f);
+        TlsIdentity id = TlsIdentity.loadOrCreate(f, HOSTS);
         X509Certificate c = id.certificate;
         assertEquals(3, c.getVersion());
         assertEquals("SHA256withRSA", c.getSigAlgName());
@@ -32,8 +35,66 @@ public class TlsIdentityTest {
         c.verify(c.getPublicKey()); // self-signature is correct
         assertEquals(-1, c.getBasicConstraints()); // not a CA
         assertTrue(c.getSubjectX500Principal().getName().contains("CN=Z4 MotionCam"));
+        // Apple: serverAuth EKU, validity <= 825 days, host names in subjectAltName.
+        assertTrue(c.getExtendedKeyUsage().contains("1.3.6.1.5.5.7.3.1"));
+        assertTrue(c.getNotAfter().getTime() - c.getNotBefore().getTime() <= 825L * 86_400_000L);
+        java.util.Set<String> sans = new java.util.HashSet<>();
+        for (java.util.List<?> san : c.getSubjectAlternativeNames()) sans.add(san.get(0) + ":" + san.get(1));
+        assertEquals(new java.util.HashSet<>(java.util.Arrays.asList("7:203.0.113.5", "2:mybaby.duckdns.org", "7:127.0.0.1")), sans);
+        assertTrue(c.getKeyUsage()[0] && c.getKeyUsage()[2]); // digitalSignature, keyEncipherment
         assertEquals(95, id.fingerprint().length());
-        assertEquals("same identity after restart", id.fingerprint(), TlsIdentity.loadOrCreate(f).fingerprint());
+        assertEquals("same identity after restart", id.fingerprint(), TlsIdentity.loadOrCreate(f, HOSTS).fingerprint());
+        assertEquals("a host that is momentarily unknown keeps the certificate", id.fingerprint(),
+                TlsIdentity.loadOrCreate(f, java.util.Arrays.asList("203.0.113.5")).fingerprint());
+        assertFalse("a new outside address needs a new certificate", id.fingerprint().equals(
+                TlsIdentity.loadOrCreate(f, java.util.Arrays.asList("198.51.100.7")).fingerprint()));
+    }
+
+    @Test
+    public void replacesOldNonCompliantCertificate() throws Exception {
+        java.security.KeyPairGenerator kpg = java.security.KeyPairGenerator.getInstance("RSA");
+        kpg.initialize(2048);
+        java.security.KeyPair kp = kpg.generateKeyPair();
+        // Like v1.2-1.4: ten years, no subjectAltName.
+        X509Certificate old = TlsIdentity.selfSign(kp, "Z4 MotionCam", 3650, java.util.Collections.<String>emptyList());
+        assertFalse(TlsIdentity.isUsable(old, HOSTS, System.currentTimeMillis()));
+        assertFalse(TlsIdentity.isUsable(old, java.util.Collections.<String>emptyList(), System.currentTimeMillis()));
+    }
+
+    @Test
+    public void strictClientAcceptsItForTheListedAddress() throws Exception {
+        // A client that trusts this certificate and checks the host name, as browsers do.
+        TlsIdentity id = TlsIdentity.loadOrCreate(new File(tmp.getRoot(), "tls.keystore"), HOSTS);
+        final RecordingStore store = new RecordingStore(tmp.newFolder("rec2"), 0);
+        final FrameHub hub = new FrameHub();
+        password = "longenough";
+        HttpServer server = new HttpServer(0, new HttpServer.Backend() {
+            public byte[] indexHtml() { return new byte[0]; }
+            public String statusJson() { return "{\"ok\":true}"; }
+            public RecordingStore store() { return store; }
+            public FrameHub frames() { return hub; }
+            public String password() { return password; }
+            public String uptimeJson() { return "{}"; }
+        }, id.serverSocketFactory(), false, true);
+        server.start();
+        try {
+            java.security.KeyStore trust = java.security.KeyStore.getInstance(java.security.KeyStore.getDefaultType());
+            trust.load(null, null);
+            trust.setCertificateEntry("z4", id.certificate);
+            javax.net.ssl.TrustManagerFactory tmf = javax.net.ssl.TrustManagerFactory.getInstance(
+                    javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(trust);
+            SSLContext ctx = SSLContext.getInstance("TLS");
+            ctx.init(null, tmf.getTrustManagers(), null);
+            javax.net.ssl.HttpsURLConnection c = (javax.net.ssl.HttpsURLConnection)
+                    new java.net.URL("https://127.0.0.1:" + server.port() + "/api/status").openConnection();
+            c.setSSLSocketFactory(ctx.getSocketFactory()); // default hostname verifier stays on
+            c.setRequestProperty("Authorization", "Basic dTpsb25nZW5vdWdo");
+            assertEquals(200, c.getResponseCode());
+        } finally {
+            server.stop();
+            hub.close();
+        }
     }
 
     private String password = "";
@@ -86,7 +147,7 @@ public class TlsIdentityTest {
 
     @Test
     public void httpsServerRequiresPassword() throws Exception {
-        TlsIdentity id = TlsIdentity.loadOrCreate(new File(tmp.getRoot(), "tls.keystore"));
+        TlsIdentity id = TlsIdentity.loadOrCreate(new File(tmp.getRoot(), "tls.keystore"), HOSTS);
         final RecordingStore store = new RecordingStore(tmp.newFolder("rec"), 0);
         final FrameHub hub = new FrameHub();
         HttpServer server = new HttpServer(0, new HttpServer.Backend() {
