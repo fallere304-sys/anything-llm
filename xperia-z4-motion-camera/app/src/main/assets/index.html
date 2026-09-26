@@ -486,11 +486,13 @@
       ['ポート開放', r.upnp],
       ['DDNS', r.ddns],
       ['ルーターのグローバルIP', r.wanIp],
-      ['証明書の指紋', r.fingerprint, 'fp']
+      ['証明書', r.cert],
+      ['証明書の指紋', r.certIssued ? null : r.fingerprint, 'fp']
     ]);
-    remoteHint.textContent = r.active
-      ? '外出先では上のURLをモバイル回線で開きます。初回は「保護されていない通信」と警告が出るので、証明書の指紋（SHA-256）が上と一致することを確かめてから進んでください。'
-      : '';
+    remoteHint.textContent = !r.active ? ''
+      : r.certIssued
+      ? '外出先では上のURLをモバイル回線で開きます。正規の証明書なので警告は出ません。Google スプレッドシートのビューアにも、このドメイン名で登録します。'
+      : '外出先では上のURLをモバイル回線で開きます。初回は「保護されていない通信」と警告が出るので、証明書の指紋（SHA-256）が上と一致することを確かめてから進んでください。';
   }
 
   // ---- uptime log ----

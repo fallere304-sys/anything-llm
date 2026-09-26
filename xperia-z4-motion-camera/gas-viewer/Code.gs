@@ -97,7 +97,7 @@ function addCamera(form) {
   var port = parseInt(form.port, 10);
   var password = String(form.password || '');
   if (!name || name.length > 30) throw new Error('名前は1〜30文字で入力してください');
-  if (!HOST_RE.test(host)) throw new Error('アドレスはIPアドレスかドメイン名で入力してください（例: 203.0.113.5）');
+  if (!HOST_RE.test(host)) throw new Error('アドレスはドメイン名で入力してください（例: mybaby.duckdns.org）');
   if (!(port >= 1 && port <= 65535)) throw new Error('ポートは1〜65535の数字で入力してください');
   if (password.length < 8) throw new Error('パスワードは8文字以上です（Z4の「外出先視聴用パスワード」）');
 
@@ -127,7 +127,11 @@ function removeCamera(id) {
 
 // ---- カメラへの中継 ----
 
-/** Z4 の HTTPS サーバー（外出先視聴用ポート）へ接続する。自己署名証明書なので証明書の検証は行わない。 */
+/**
+ * Z4 の HTTPS サーバー（外出先視聴用ポート）へ接続する。
+ * Google は自己署名の証明書のサーバーには接続しない（validateHttpsCertificates:false でも同じ）ため、
+ * Z4 側で Let's Encrypt の証明書を取得し（v1.9 以降）、DuckDNS のドメイン名で接続する。証明書は正しく検証する。
+ */
 function call_(cam, path, opt) {
   opt = opt || {};
   var headers = { Authorization: 'Basic ' + Utilities.base64Encode(Utilities.newBlob('z4:' + cam.password).getBytes()) };
@@ -135,7 +139,6 @@ function call_(cam, path, opt) {
   var params = {
     method: opt.method || 'get',
     headers: headers,
-    validateHttpsCertificates: false,
     muteHttpExceptions: true,
     followRedirects: false
   };
@@ -147,6 +150,10 @@ function call_(cam, path, opt) {
   try {
     resp = UrlFetchApp.fetch('https://' + cam.host + ':' + cam.port + path, params);
   } catch (e) {
+    if (/SSL/i.test(e.message)) {
+      throw new Error('カメラの証明書を Google が受け付けません。Z4（v1.9 以降）の設定で DuckDNS と「正規の証明書を自動取得（Let\'s Encrypt）」をオンにし、'
+          + 'アドレスには IP ではなく「〇〇.duckdns.org」を登録してください: ' + e.message);
+    }
     throw new Error('カメラに接続できません（アドレス・ポート・ポートマッピング・Z4の「外出先からの視聴」を確認）: ' + e.message);
   }
   var code = resp.getResponseCode();
@@ -233,13 +240,13 @@ function setMonitoring(id, on) {
  * エディタ上部の関数の選択で diagnoseConnection を選んで「実行」する。
  */
 function diagnoseConnection() {
-  var TARGET = 'https://203.0.113.5:5880'; // ← カメラのグローバルIPと外出先用ポートに書き換える
+  var TARGET = 'https://mybaby.duckdns.org:5880'; // ← カメラのアドレス（DuckDNS のドメイン名）と外出先用ポートに書き換える
   var m = /^https:\/\/([^:\/]+):(\d+)$/.exec(TARGET);
-  if (!m) throw new Error('TARGET は https://IP:ポート の形で書いてください');
+  if (!m) throw new Error('TARGET は https://アドレス:ポート の形で書いてください');
   var tests = [
     ['1. 自己署名の証明書のサイト（Google 側の対応確認）', 'https://self-signed.badssl.com/'],
     ['2. 標準以外のポートの HTTPS サイト（Google 側の対応確認）', 'https://tls-v1-2.badssl.com:1012/'],
-    ['3. カメラへ HTTPS（HTTP 401 なら暗号化の接続は成功。診断ではパスワードを送らない）', TARGET + '/api/status'],
+    ['3. カメラへ HTTPS（HTTP 401 なら接続は成功。診断ではパスワードを送らない。SSL エラーなら Z4 の証明書が自己署名のまま）', TARGET + '/api/status'],
     ['4. カメラのポートまで届くか（暗号化なしで接続。失敗するのが正常）', 'http://' + m[1] + ':' + m[2] + '/api/status']
   ];
   var lines = [];

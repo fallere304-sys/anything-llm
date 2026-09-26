@@ -88,9 +88,14 @@ final class TlsIdentity {
         kpg.initialize(2048, new SecureRandom());
         KeyPair kp = kpg.generateKeyPair();
         X509Certificate cert = selfSign(kp, "Z4 MotionCam", VALIDITY_DAYS, hosts);
+        return save(file, kp.getPrivate(), new X509Certificate[] {cert});
+    }
+
+    private static TlsIdentity save(File file, PrivateKey key, X509Certificate[] chain)
+            throws IOException, GeneralSecurityException {
         KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
         ks.load(null, null);
-        ks.setKeyEntry(ALIAS, kp.getPrivate(), STORE_PASSWORD, new Certificate[] {cert});
+        ks.setKeyEntry(ALIAS, key, STORE_PASSWORD, chain);
         File tmp = new File(file.getPath() + ".tmp");
         OutputStream out = new FileOutputStream(tmp);
         try {
@@ -99,7 +104,79 @@ final class TlsIdentity {
             out.close();
         }
         if (!tmp.renameTo(file)) throw new IOException("cannot save " + file);
-        return new TlsIdentity(ks, cert);
+        return new TlsIdentity(ks, chain[0]);
+    }
+
+    // ---- certificate from a public CA (Let's Encrypt, see Acme) ----
+
+    /** Stores a CA-issued certificate chain (leaf first) with its key. */
+    static TlsIdentity saveIssued(File file, PrivateKey key, List<X509Certificate> chain)
+            throws IOException, GeneralSecurityException {
+        return save(file, key, chain.toArray(new X509Certificate[0]));
+    }
+
+    /** The stored CA-issued identity, or null when there is none or it cannot be read. */
+    static TlsIdentity loadIssued(File file) {
+        if (!file.isFile()) return null;
+        try {
+            KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
+            InputStream in = new FileInputStream(file);
+            try {
+                ks.load(in, STORE_PASSWORD);
+            } finally {
+                in.close();
+            }
+            Certificate c = ks.getCertificate(ALIAS);
+            return c instanceof X509Certificate && ks.isKeyEntry(ALIAS) ? new TlsIdentity(ks, (X509Certificate) c) : null;
+        } catch (IOException | GeneralSecurityException e) {
+            return null;
+        }
+    }
+
+    /** Not expired and naming {@code host}. */
+    boolean covers(String host, long now) {
+        if (now < certificate.getNotBefore().getTime() || now >= certificate.getNotAfter().getTime()) return false;
+        try {
+            Collection<List<?>> sans = certificate.getSubjectAlternativeNames();
+            if (sans == null) return false;
+            for (List<?> san : sans) {
+                if (normalize(String.valueOf(san.get(1))).equals(normalize(host))) return true;
+            }
+        } catch (GeneralSecurityException e) {
+            return false;
+        }
+        return false;
+    }
+
+    /** In the last third of its lifetime (30 of 90 days for Let's Encrypt), as the CA recommends. */
+    boolean renewalDue(long now) {
+        long start = certificate.getNotBefore().getTime();
+        long end = certificate.getNotAfter().getTime();
+        return end - now < (end - start) / 3;
+    }
+
+    /** PKCS#10 certificate request for {@code domain}, signed with {@code kp}. */
+    static byte[] csr(KeyPair kp, String domain) throws GeneralSecurityException {
+        byte[] sigAlg = seq(oid("1.2.840.113549.1.1.11"), new byte[] {0x05, 0x00}); // sha256WithRSAEncryption
+        byte[] ascii = domain.toLowerCase(Locale.US).getBytes(java.nio.charset.Charset.forName("US-ASCII"));
+        byte[] name = seq(set(seq(oid("2.5.4.3"), tlv(0x0C, ascii))));
+        byte[] san = seq(oid("2.5.29.17"), tlv(0x04, seq(tlv(0x82, ascii))));
+        // attributes [0]: extensionRequest { subjectAltName }
+        byte[] attrs = tlv(0xA0, seq(oid("1.2.840.113549.1.9.14"), set(seq(san))));
+        byte[] info = seq(tlv(0x02, new byte[] {0}), name, kp.getPublic().getEncoded(), attrs);
+        Signature s = Signature.getInstance("SHA256withRSA");
+        s.initSign(kp.getPrivate());
+        s.update(info);
+        byte[] sig = s.sign();
+        byte[] bitString = new byte[sig.length + 1];
+        System.arraycopy(sig, 0, bitString, 1, sig.length);
+        return seq(info, sigAlg, tlv(0x03, bitString));
+    }
+
+    /** "Let's Encrypt（2026/12/24まで）"-style description for the status line. */
+    String describeIssued() {
+        SimpleDateFormat f = new SimpleDateFormat("yyyy/MM/dd", Locale.US);
+        return "Let's Encrypt（" + f.format(certificate.getNotAfter()) + "まで）";
     }
 
     /**

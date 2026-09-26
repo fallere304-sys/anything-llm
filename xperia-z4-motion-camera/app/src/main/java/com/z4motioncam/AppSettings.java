@@ -29,6 +29,8 @@ final class AppSettings {
     final String ddnsToken;
     /** Global IP or host name to show in the outside URL; empty = use what the router reports. */
     final String externalHost;
+    /** Get a Let's Encrypt certificate for the DuckDNS name (agrees to the CA's terms). */
+    final boolean acme;
 
     private AppSettings(SharedPreferences p, String defaultExternalHost) {
         int[] res = parseResolution(p.getString("resolution", "640x480"));
@@ -54,6 +56,7 @@ final class AppSettings {
         ddnsToken = p.getString("ddns_token", "").trim();
         String h = p.getString("external_host", defaultExternalHost).trim();
         externalHost = h.matches("[A-Za-z0-9.:-]{1,253}") ? h : "";
+        acme = p.getBoolean("acme", false);
     }
 
     static AppSettings load(Context context) {
@@ -120,7 +123,7 @@ final class AppSettings {
                 && password.equals(s.password) && autostart == s.autostart
                 && remoteEnabled == s.remoteEnabled && remotePort == s.remotePort && upnp == s.upnp
                 && ddnsDomain.equals(s.ddnsDomain) && ddnsToken.equals(s.ddnsToken)
-                && externalHost.equals(s.externalHost);
+                && externalHost.equals(s.externalHost) && acme == s.acme;
     }
 
     @Override

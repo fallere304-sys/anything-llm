@@ -43,7 +43,7 @@ final class SettingsApi {
                 {R.string.pref_cat_storage, new String[] {"use_sd", "min_free_mb"}},
                 {R.string.pref_cat_network, new String[] {"port"}},
                 {R.string.pref_cat_remote, new String[] {"remote_enabled", "password", "external_host", "remote_port",
-                        "upnp", "ddns_domain", "ddns_token"}},
+                        "upnp", "ddns_domain", "ddns_token", "acme"}},
                 {R.string.pref_cat_system, new String[] {"autostart"}},
         };
         StringBuilder sb = new StringBuilder("{\"groups\":[");
@@ -115,6 +115,7 @@ final class SettingsApi {
             case "upnp": return R.string.pref_upnp;
             case "ddns_domain": return R.string.pref_ddns_domain;
             case "ddns_token": return R.string.pref_ddns_token;
+            case "acme": return R.string.pref_acme;
             default: return R.string.pref_autostart;
         }
     }

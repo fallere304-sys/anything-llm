@@ -53,6 +53,7 @@ final class SettingsSpec {
             new Field("upnp", Type.BOOL, "true", null, 0, 0, false),
             new Field("ddns_domain", Type.TEXT, "", null, 0, 0, false),
             new Field("ddns_token", Type.SECRET, "", null, 0, 0, false),
+            new Field("acme", Type.BOOL, "false", null, 0, 0, true),
             new Field("autostart", Type.BOOL, "true", null, 0, 0, false),
     };
 

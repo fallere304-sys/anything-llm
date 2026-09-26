@@ -7,7 +7,10 @@ import android.util.Log;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.URLEncoder;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -15,9 +18,10 @@ import javax.net.ssl.SSLSocketFactory;
 
 /**
  * Viewing from outside the home: an HTTPS copy of the web server on its own port (password
- * mandatory, TLS 1.2+, self-signed certificate) plus, optionally, a UPnP port mapping on the router
- * and a DuckDNS record. The router's own WAN address (via UPnP) is the global IP, so no outside
- * IP-lookup service is contacted. Background work runs every 30 minutes at most.
+ * mandatory, TLS 1.2+) plus, optionally, a UPnP port mapping on the router, a DuckDNS record and a
+ * Let's Encrypt certificate for the DuckDNS name (otherwise the certificate is self-signed). The
+ * router's own WAN address (via UPnP) is the global IP, so no outside IP-lookup service is
+ * contacted. Background work runs every 30 minutes at most.
  */
 final class RemoteAccess {
     private static final String TAG = "RemoteAccess";
@@ -25,6 +29,11 @@ final class RemoteAccess {
     private static final long TICK_MS = 30 * 60_000L;
     /** DuckDNS is refreshed at least this often even when the address looks unchanged. */
     private static final long DDNS_FORCE_MS = 12 * 3600_000L;
+    /** Wait after setting the TXT record before Let's Encrypt looks it up. */
+    private static final long TXT_PROPAGATION_MS = 60_000L;
+    /** Failed certificate attempts back off from 1 h to 24 h (Let's Encrypt limits failures per hour). */
+    static final long CERT_RETRY_MIN_MS = 3600_000L;
+    static final long CERT_RETRY_MAX_MS = 24 * 3600_000L;
 
     private final Context context;
     private final AppSettings settings;
@@ -39,6 +48,10 @@ final class RemoteAccess {
     private String mappedClient;
     private String ddnsIp;
     private long ddnsAt;
+    private volatile boolean servingIssued;
+    private volatile boolean closing;
+    private long certNextTry;
+    private long certBackoff = CERT_RETRY_MIN_MS;
 
     // Status, read from other threads.
     private volatile String state = "無効";
@@ -49,6 +62,8 @@ final class RemoteAccess {
     private volatile String wanIp;
     private volatile String upnpResult;
     private volatile String ddnsResult;
+    /** Which certificate is served and, for Let's Encrypt, how getting it went. */
+    private volatile String certResult;
 
     private final Runnable tick = new Runnable() {
         @Override
@@ -77,10 +92,15 @@ final class RemoteAccess {
     }
 
     void shutdown() {
+        closing = true;
         handler.removeCallbacksAndMessages(null);
+        // A certificate request can take a minute or two: cut it short (its waits are interruptible)
+        // so the port is free before the next RemoteAccess opens it.
+        thread.interrupt();
         handler.post(new Runnable() {
             @Override
             public void run() {
+                Thread.interrupted(); // clear it: the UPnP unmapping below must not be cut short
                 close();
                 thread.quit();
             }
@@ -103,6 +123,19 @@ final class RemoteAccess {
         return settings.upnp || settings.ddnsConfigured();
     }
 
+    /** A Let's Encrypt certificate is wanted: switched on, and a DuckDNS name to certify. */
+    private boolean wantsIssued() {
+        return settings.acme && settings.ddnsConfigured();
+    }
+
+    private String ddnsHost() {
+        return settings.ddnsDomain + ".duckdns.org";
+    }
+
+    private File issuedFile() {
+        return new File(context.getFilesDir(), "tls-issued.keystore");
+    }
+
     private void open() {
         if (!settings.remoteEnabled) {
             state = "無効";
@@ -118,22 +151,51 @@ final class RemoteAccess {
             error = "外出先用ポートはLAN用ポートと別の番号にしてください";
             return;
         }
+        state = "準備中";
+        if (startServer() && hasBackgroundWork()) handler.post(tick);
+    }
+
+    /** Starts the HTTPS server with the Let's Encrypt certificate when there is a usable one. */
+    private boolean startServer() {
         try {
-            state = "準備中";
-            TlsIdentity id = TlsIdentity.loadOrCreate(new File(context.getFilesDir(), "tls.keystore"), certHosts());
+            TlsIdentity id = null;
+            if (wantsIssued()) {
+                TlsIdentity issued = TlsIdentity.loadIssued(issuedFile());
+                if (issued != null && issued.covers(ddnsHost(), System.currentTimeMillis())) id = issued;
+            }
+            servingIssued = id != null;
+            if (id == null) id = TlsIdentity.loadOrCreate(new File(context.getFilesDir(), "tls.keystore"), certHosts());
+            if (servingIssued) {
+                if (certResult == null || !certResult.contains("失敗")) certResult = id.describeIssued();
+            } else if (!wantsIssued()) {
+                certResult = "自己署名";
+            } else if (certResult == null) {
+                certResult = "自己署名（Let's Encrypt の証明書を取得待ち）";
+            }
             fingerprint = id.fingerprint();
             https = new HttpServer(settings.remotePort, backend, id.serverSocketFactory(), false, true);
             https.start();
             active = true;
             state = "公開中";
             error = null;
-            if (hasBackgroundWork()) handler.post(tick);
+            return true;
         } catch (Exception e) {
             Log.e(TAG, "https start failed", e);
             state = "停止中";
             error = "HTTPSサーバーを起動できません: " + e.getMessage();
             https = null;
+            active = false;
+            return false;
         }
+    }
+
+    /** Swaps in a new certificate: a restart of about a second, once every two months or so. */
+    private void restartServer() {
+        if (https == null || closing) return;
+        https.stop();
+        https = null;
+        active = false;
+        startServer();
     }
 
     /**
@@ -196,31 +258,62 @@ final class RemoteAccess {
             // Unknown address: update every tick; known: only when it changed (or every 12 h).
             if (wanIp == null || !key.equals(ddnsIp) || System.currentTimeMillis() - ddnsAt > DDNS_FORCE_MS) {
                 try {
-                    // An empty ip= makes DuckDNS use the address this request comes from.
-                    String url = "https://www.duckdns.org/update?domains=" + enc(settings.ddnsDomain)
-                            + "&token=" + enc(settings.ddnsToken) + "&ip=" + (wanIp == null ? "" : wanIp);
-                    String r = NetUtil.httpGet(url, 8000, ddnsTls).trim();
-                    if (r.startsWith("OK")) {
+                    // No address makes DuckDNS use the one this request comes from.
+                    if (duckDns().updateIp(wanIp)) {
                         ddnsIp = key;
                         ddnsAt = System.currentTimeMillis();
                         ddnsResult = "DuckDNS 更新済み";
                     } else {
                         ddnsResult = "DuckDNS 更新失敗（ドメイン名またはトークンを確認）";
                     }
+                } catch (Acme.AcmeException e) {
+                    ddnsResult = e.userMessage;
                 } catch (IOException e) {
-                    ddnsResult = "DuckDNS に接続できません: " + e.getMessage();
+                    ddnsResult = "DuckDNS に接続できません";
                 }
             }
         } else {
             ddnsResult = null;
         }
+
+        if (wantsIssued()) renewCertificate();
     }
 
-    private static String enc(String s) {
+    private DuckDns duckDns() {
+        return new DuckDns(DuckDns.UPDATE_URL, settings.ddnsDomain, settings.ddnsToken, ddnsTls);
+    }
+
+    /** Gets a Let's Encrypt certificate when there is none for the DuckDNS name or it is due for renewal. */
+    private void renewCertificate() {
+        long now = System.currentTimeMillis();
+        TlsIdentity current = TlsIdentity.loadIssued(issuedFile());
+        boolean usable = current != null && current.covers(ddnsHost(), now);
+        if (usable && !current.renewalDue(now)) {
+            if (!servingIssued) restartServer(); // e.g. obtained while the server was not running
+            return;
+        }
+        if (now < certNextTry || closing) return;
+        certResult = "Let's Encrypt から取得中…";
         try {
-            return URLEncoder.encode(s, "UTF-8");
-        } catch (IOException e) {
-            return s;
+            KeyPair account = Acme.loadOrCreateAccountKey(new File(context.getFilesDir(), "acme-account.key"));
+            KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
+            kpg.initialize(2048, new SecureRandom());
+            KeyPair certKey = kpg.generateKeyPair();
+            List<X509Certificate> chain = new Acme(Acme.LETS_ENCRYPT, account, ddnsTls, 3000, 180_000)
+                    .issue(ddnsHost(), certKey, duckDns(), TXT_PROPAGATION_MS);
+            TlsIdentity issued = TlsIdentity.saveIssued(issuedFile(), certKey.getPrivate(), chain);
+            certBackoff = CERT_RETRY_MIN_MS;
+            certNextTry = 0;
+            certResult = issued.describeIssued();
+            restartServer();
+        } catch (Exception e) {
+            if (closing) return;
+            Log.w(TAG, "certificate request failed", e);
+            certNextTry = now + certBackoff;
+            certBackoff = Math.min(certBackoff * 2, CERT_RETRY_MAX_MS);
+            String why = e instanceof Acme.AcmeException ? ((Acme.AcmeException) e).userMessage : "証明書の取得に失敗しました";
+            certResult = (usable ? current.describeIssued() + "・更新に失敗: " : "取得に失敗: ") + why
+                    + (servingIssued ? "" : "（自己署名で公開中）");
         }
     }
 
@@ -255,7 +348,8 @@ final class RemoteAccess {
         if (error != null) sb.append('\n').append(error);
         else if (warn != null) sb.append('\n').append(warn);
         else if (upnpResult != null) sb.append('\n').append(upnpResult);
-        if (fingerprint != null) sb.append("\n証明書 ").append(fingerprint.substring(0, 23)).append('…');
+        if (certResult != null) sb.append("\n証明書: ").append(certResult);
+        if (fingerprint != null && !servingIssued) sb.append("\n証明書 ").append(fingerprint.substring(0, 23)).append('…');
         return sb.toString();
     }
 
@@ -263,7 +357,8 @@ final class RemoteAccess {
         return "{\"enabled\":" + settings.remoteEnabled + ",\"active\":" + active
                 + ",\"state\":" + s(state) + ",\"url\":" + s(url()) + ",\"port\":" + settings.remotePort
                 + ",\"error\":" + s(error != null ? error : ipWarning()) + ",\"fingerprint\":" + s(fingerprint)
-                + ",\"wanIp\":" + s(wanIp) + ",\"upnp\":" + s(upnpResult) + ",\"ddns\":" + s(ddnsResult) + "}";
+                + ",\"wanIp\":" + s(wanIp) + ",\"upnp\":" + s(upnpResult) + ",\"ddns\":" + s(ddnsResult)
+                + ",\"cert\":" + s(certResult) + ",\"certIssued\":" + servingIssued + "}";
     }
 
     private static String s(String v) {

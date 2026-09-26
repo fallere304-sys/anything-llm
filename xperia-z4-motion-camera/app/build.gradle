@@ -40,4 +40,6 @@ android {
 dependencies {
     // No runtime dependencies on purpose: framework APIs only, to keep the app small and light.
     testImplementation 'junit:junit:4.13.2'
+    // android.jar's org.json is a stub in local unit tests (Acme parses the CA's JSON with it).
+    testImplementation 'org.json:json:20231013'
 }

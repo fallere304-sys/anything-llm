@@ -113,6 +113,11 @@
             android:inputType="textPassword"
             android:key="ddns_token"
             android:title="@string/pref_ddns_token" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="acme"
+            android:summary="@string/pref_acme_summary"
+            android:title="@string/pref_acme" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="@string/pref_cat_system">
