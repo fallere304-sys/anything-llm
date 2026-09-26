@@ -42,7 +42,7 @@ final class SettingsSpec {
             list("rotation", "0", "0", "90", "180", "270"),
             list("sensitivity", "2", "1", "2", "3"),
             list("post_record_sec", "10", "5", "10", "20", "30", "60", "90", "120", "180"),
-            list("segment_min", "5", "1", "5", "10"),
+            list("segment_min", "0", "1", "5", "10", "15", "30", "60", "0"),
             new Field("use_sd", Type.BOOL, "true", null, 0, 0, false),
             new Field("min_free_mb", Type.INT, "500", null, 100, 100_000, false),
             new Field("port", Type.INT, "8080", null, 1024, 65535, true),

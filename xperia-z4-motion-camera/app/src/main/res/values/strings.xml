@@ -13,7 +13,8 @@
     <string name="pref_cat_motion">動体検知・録画</string>
     <string name="pref_sensitivity">検知感度</string>
     <string name="pref_post_record">動きが止まってから録画を続ける秒数</string>
-    <string name="pref_segment">1ファイルの最大長（分）</string>
+    <string name="pref_segment">1ファイルの最大長</string>
+    <string name="pref_segment_summary">%s（突然の電源断では録画中のファイルが失われるため、長いほど失う時間も長くなります）</string>
     <string name="pref_cat_storage">ストレージ</string>
     <string name="pref_use_sd">SDカードを優先して保存</string>
     <string name="pref_min_free">確保する空き容量（MB）</string>
@@ -125,10 +126,18 @@
         <item>1分</item>
         <item>5分</item>
         <item>10分</item>
+        <item>15分</item>
+        <item>30分</item>
+        <item>60分</item>
+        <item>区切らない（動きが止まるまで1本）</item>
     </string-array>
     <string-array name="segment_values">
         <item>1</item>
         <item>5</item>
         <item>10</item>
+        <item>15</item>
+        <item>30</item>
+        <item>60</item>
+        <item>0</item>
     </string-array>
 </resources>

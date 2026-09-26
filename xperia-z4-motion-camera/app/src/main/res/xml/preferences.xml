@@ -45,11 +45,11 @@
             android:summary="%s"
             android:title="@string/pref_post_record" />
         <ListPreference
-            android:defaultValue="5"
+            android:defaultValue="0"
             android:entries="@array/segment_entries"
             android:entryValues="@array/segment_values"
             android:key="segment_min"
-            android:summary="%s"
+            android:summary="@string/pref_segment_summary"
             android:title="@string/pref_segment" />
     </PreferenceCategory>
 

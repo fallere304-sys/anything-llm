@@ -34,11 +34,15 @@ public class SettingsSpecTest {
         assertNull(check("post_record_sec", "180", "fps", "1", "resolution", "1920x1080"));
         assertNull(check("use_sd", "false", "min_free_mb", " 800 ", "remote_port", "5880"));
         assertNull(check("password", "abcdefgh", "external_host", "203.0.113.5", "ddns_domain", "MyBaby.duckdns.org"));
+        assertNull(check("segment_min", "0"));  // no split: one file per motion event
+        assertNull(check("segment_min", "60"));
+        assertEquals("0", SettingsSpec.find("segment_min").def);
     }
 
     @Test
     public void rejectsInvalidValues() {
         assertTrue(check("post_record_sec", "181").contains("post_record_sec"));
+        assertTrue(check("segment_min", "20").contains("segment_min"));
         assertTrue(check("fps", "abc").contains("fps"));
         assertTrue(check("port", "80").contains("1024"));
         assertTrue(check("remote_port", "8080").contains("別の番号"));

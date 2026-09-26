@@ -38,7 +38,8 @@ final class AppSettings {
         rotation = (parseInt(p.getString("rotation", "0"), 0) / 90 % 4) * 90;
         sensitivity = clamp(parseInt(p.getString("sensitivity", "2"), 2), 1, 3);
         postRecordSec = clamp(parseInt(p.getString("post_record_sec", "10"), 10), 1, 600);
-        segmentMin = clamp(parseInt(p.getString("segment_min", "5"), 5), 1, 60);
+        // 0 = no split: one file per motion event (see CameraPipeline for the size safety limit).
+        segmentMin = clamp(parseInt(p.getString("segment_min", "0"), 0), 0, 60);
         useSdCard = p.getBoolean("use_sd", true);
         minFreeBytes = clamp(parseInt(p.getString("min_free_mb", "500"), 500), 100, 100_000) * 1024L * 1024L;
         port = clamp(parseInt(p.getString("port", "8080"), 8080), 1024, 65535);

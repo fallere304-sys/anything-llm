@@ -25,6 +25,11 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     private static final String TAG = "CameraPipeline";
     private static final int JPEG_QUALITY = 60;
     private static final long STORAGE_CHECK_MS = 15_000L;
+    /**
+     * A file is continued in a new one beyond this size even when splitting is off: Android's MP4
+     * writer uses 32-bit offsets, so files must stay well below 4 GB (about 7 hours at 640x480).
+     */
+    static final long MAX_FILE_BYTES = 3_500_000_000L;
     private static final long REOPEN_DELAY_MS = 3_000L;
     /** Sensor rate while only watching for motion (nobody viewing, not recording). */
     private static final int IDLE_FPS = 5;
@@ -255,7 +260,8 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
             if (now - lastMotionMs > settings.postRecordSec * 1000L) {
                 stopRecording();
             } else {
-                if (now - recorder.startedAtMs() > settings.segmentMin * 60_000L) {
+                boolean timeUp = settings.segmentMin > 0 && now - recorder.startedAtMs() > settings.segmentMin * 60_000L;
+                if (timeUp) {
                     stopRecording();
                     startRecording(now);
                 } else if (now - lastStorageCheckMs > STORAGE_CHECK_MS) {
@@ -263,6 +269,9 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
                     if (!store.ensureFreeSpace()) {
                         storageFull = true;
                         stopRecording();
+                    } else if (recorder.partFile() != null && recorder.partFile().length() > MAX_FILE_BYTES) {
+                        stopRecording();
+                        startRecording(now);
                     }
                 }
                 long frameInterval = 1000L / ThermalPolicy.recordFps(l, settings.fps);
