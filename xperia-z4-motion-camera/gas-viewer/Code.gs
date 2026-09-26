@@ -224,3 +224,36 @@ function setMonitoring(id, on) {
   });
   return JSON.parse(resp.getContentText());
 }
+
+// ---- 接続の診断（エディタで実行する） ----
+
+/**
+ * Google のサーバーからカメラへの接続を段階ごとに試し、結果を「実行ログ」に出す。
+ * 使い方: 下の TARGET をカメラのアドレスとポートに書き換えて保存し、
+ * エディタ上部の関数の選択で diagnoseConnection を選んで「実行」する。
+ */
+function diagnoseConnection() {
+  var TARGET = 'https://203.0.113.5:5880'; // ← カメラのグローバルIPと外出先用ポートに書き換える
+  var m = /^https:\/\/([^:\/]+):(\d+)$/.exec(TARGET);
+  if (!m) throw new Error('TARGET は https://IP:ポート の形で書いてください');
+  var tests = [
+    ['1. 自己署名の証明書のサイト（Google 側の対応確認）', 'https://self-signed.badssl.com/'],
+    ['2. 標準以外のポートの HTTPS サイト（Google 側の対応確認）', 'https://tls-v1-2.badssl.com:1012/'],
+    ['3. カメラへ HTTPS（HTTP 401 なら暗号化の接続は成功。診断ではパスワードを送らない）', TARGET + '/api/status'],
+    ['4. カメラのポートまで届くか（暗号化なしで接続。失敗するのが正常）', 'http://' + m[1] + ':' + m[2] + '/api/status']
+  ];
+  var lines = [];
+  tests.forEach(function (t) {
+    var start = Date.now(), result;
+    try {
+      var r = UrlFetchApp.fetch(t[1], { validateHttpsCertificates: false, muteHttpExceptions: true, followRedirects: false });
+      result = '応答あり HTTP ' + r.getResponseCode();
+    } catch (e) {
+      result = 'エラー: ' + e.message;
+    }
+    lines.push(t[0] + '\n   ' + t[1] + '\n   → ' + result + '（' + (Date.now() - start) + 'ミリ秒）');
+  });
+  var text = '=== Z4 接続診断 ' + new Date().toLocaleString() + ' ===\n' + lines.join('\n');
+  Logger.log(text);
+  return text;
+}
