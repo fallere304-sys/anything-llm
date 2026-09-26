@@ -106,12 +106,20 @@
         <item>10秒</item>
         <item>20秒</item>
         <item>30秒</item>
+        <item>60秒（1分）</item>
+        <item>90秒（1分30秒）</item>
+        <item>120秒（2分）</item>
+        <item>180秒（3分）</item>
     </string-array>
     <string-array name="post_record_values">
         <item>5</item>
         <item>10</item>
         <item>20</item>
         <item>30</item>
+        <item>60</item>
+        <item>90</item>
+        <item>120</item>
+        <item>180</item>
     </string-array>
     <string-array name="segment_entries">
         <item>1分</item>

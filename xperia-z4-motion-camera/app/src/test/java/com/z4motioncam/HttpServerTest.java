@@ -32,6 +32,7 @@ public class HttpServerTest {
     private int target;
     private FrameHub hub;
     private String password = "";
+    private java.util.Map<String, String> lastChanges;
     private byte[] video;
 
     @Before
@@ -51,6 +52,11 @@ public class HttpServerTest {
             @Override public FrameHub frames() { return hub; }
             @Override public String password() { return password; }
             @Override public String uptimeJson() { return "{\"current\":{}}"; }
+            @Override public String settingsJson() { return "{\"groups\":[]}"; }
+            @Override public String updateSettings(java.util.Map<String, String> changes) {
+                lastChanges = changes;
+                return changes.containsKey("fps") && changes.get("fps").equals("99") ? "選択できない値です: fps" : null;
+            }
         };
         server = new HttpServer(0, backend, null, true, false);
         server.start();
@@ -341,5 +347,34 @@ public class HttpServerTest {
         password = "secret";
         for (int i = 0; i < 8; i++) assertTrue(get("/api/status").head.startsWith("HTTP/1.0 401"));
         assertTrue(get("/api/status", "Authorization: Basic cGFwYTpzZWNyZXQ=").head.startsWith("HTTP/1.0 200"));
+    }
+
+    @Test
+    public void settingsCanBeReadAndChanged() throws IOException {
+        assertEquals("{\"groups\":[]}", new String(get("/api/settings").body, StandardCharsets.UTF_8));
+        Resp ok = post("/api/settings", "fps=5&post_record_sec=180&password=long%20pass%21",
+                "X-Z4-Action: settings", "Content-Type: application/x-www-form-urlencoded");
+        assertTrue(ok.head, ok.head.startsWith("HTTP/1.0 200"));
+        assertEquals("{\"ok\":true}", new String(ok.body, StandardCharsets.UTF_8));
+        assertEquals("5", lastChanges.get("fps"));
+        assertEquals("180", lastChanges.get("post_record_sec"));
+        assertEquals("long pass!", lastChanges.get("password"));
+        Resp bad = post("/api/settings", "fps=99", "X-Z4-Action: settings");
+        assertTrue(bad.head.startsWith("HTTP/1.0 400"));
+        assertTrue(new String(bad.body, StandardCharsets.UTF_8).contains("\"ok\":false"));
+    }
+
+    @Test
+    public void settingsChangeNeedsCustomHeader() throws IOException {
+        lastChanges = null;
+        assertTrue(post("/api/settings", "fps=5").head.startsWith("HTTP/1.0 403"));
+        assertTrue(lastChanges == null);
+    }
+
+    @Test
+    public void recordingListHasDuration() throws IOException {
+        String list = new String(get("/api/recordings").body, StandardCharsets.UTF_8);
+        // The fixture is not a real MP4, so the duration is unknown (-1).
+        assertTrue(list, list.contains("\"duration\":-1"));
     }
 }

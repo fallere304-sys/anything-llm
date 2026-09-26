@@ -52,6 +52,12 @@ final class HttpServer {
 
         /** Run-time log: current session, past sessions (how they ended), battery samples. */
         String uptimeJson();
+
+        /** Settings form (groups, fields, current values; secrets only as "set"). */
+        String settingsJson();
+
+        /** Validates and saves changed settings; returns an error message or null. */
+        String updateSettings(Map<String, String> changes);
     }
 
     private static final Charset UTF8 = Charset.forName("UTF-8");
@@ -237,11 +243,13 @@ final class HttpServer {
         } else if (path.equals("/api/status")) {
             writeSimple(out, 200, "application/json; charset=utf-8",
                     backend.statusJson().getBytes(UTF8), head);
+        } else if (path.equals("/api/settings")) {
+            writeSimple(out, 200, "application/json; charset=utf-8", backend.settingsJson().getBytes(UTF8), head);
         } else if (path.equals("/api/uptime")) {
             writeSimple(out, 200, "application/json; charset=utf-8", backend.uptimeJson().getBytes(UTF8), head);
         } else if (path.equals("/api/recordings")) {
             writeSimple(out, 200, "application/json; charset=utf-8",
-                    recordingsJson(backend.store().list()).getBytes(UTF8), head);
+                    recordingsJson(backend.store(), backend.store().list()).getBytes(UTF8), head);
         } else if (path.equals("/snapshot.jpg")) {
             serveSnapshot(out, head);
         } else if (path.equals("/stream.mjpg")) {
@@ -271,6 +279,14 @@ final class HttpServer {
             }
             writeSimple(out, 200, "application/json; charset=utf-8",
                     deleteRecordings(splitNames(new String(req.body, UTF8))).getBytes(UTF8), false);
+        } else if (req.path.equals("/api/settings")) {
+            if (!"settings".equals(req.headers.get("x-z4-action"))) {
+                writeSimple(out, 403, "text/plain", "forbidden\n".getBytes(UTF8), false);
+                return;
+            }
+            String error = backend.updateSettings(parseForm(new String(req.body, UTF8)));
+            String json = error == null ? "{\"ok\":true}" : "{\"ok\":false,\"error\":" + jsonString(error) + "}";
+            writeSimple(out, error == null ? 200 : 400, "application/json; charset=utf-8", json.getBytes(UTF8), false);
         } else if (req.path.equals("/api/zip")) {
             List<String> names = new ArrayList<>();
             for (String v : parseForm(new String(req.body, UTF8)).values()) names.addAll(splitNames(v));
@@ -564,12 +580,13 @@ final class HttpServer {
         return diff == 0 && expected.length > 0;
     }
 
-    static String recordingsJson(List<File> files) {
+    static String recordingsJson(RecordingStore store, List<File> files) {
         StringBuilder sb = new StringBuilder("[");
         for (int i = 0; i < files.size(); i++) {
             File f = files.get(i);
             if (i > 0) sb.append(',');
             sb.append("{\"name\":\"").append(f.getName()).append("\",\"size\":").append(f.length())
+                    .append(",\"duration\":").append(store.durationMs(f))
                     .append(",\"modified\":").append(f.lastModified()).append('}');
         }
         return sb.append(']').toString();

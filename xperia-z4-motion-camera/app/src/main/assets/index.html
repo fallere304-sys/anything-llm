@@ -49,8 +49,9 @@
   .cb input:disabled + .box { opacity: .4; }
   li { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid #2a2a2a; }
   li.checked { background: #1a2238; }
+  li .dur { flex: none; width: 4.6em; text-align: right; font-size: 14px; font-variant-numeric: tabular-nums; color: #ddd; }
   li .info { flex: 1; min-width: 0; }
-  li .info a { color: #8ab4ff; word-break: break-all; }
+  li .info a { color: #8ab4ff; }
   li.playing .info a { font-weight: bold; }
   li .actions { display: flex; gap: 6px; flex: none; }
   .meta { color: #999; font-size: 13px; }
@@ -69,6 +70,15 @@
   table.samples th, table.samples td { padding: 4px 8px; border-bottom: 1px solid #2a2a2a; text-align: right; }
   table.samples th { color: #999; font-weight: normal; }
   details summary { cursor: pointer; margin: 10px 0 6px; color: #8ab4ff; }
+  .settings h3 { font-size: 15px; margin: 18px 0 6px; color: #bbb; border-bottom: 1px solid #2a2a2a; padding-bottom: 4px; }
+  .settings .row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 8px 0; }
+  .settings .row label.name { flex: 1 1 12em; font-size: 14px; }
+  .settings select, .settings input[type=text], .settings input[type=password], .settings input[type=number] {
+    flex: 1 1 12em; max-width: 22em; font-size: 15px; padding: 6px 8px; border-radius: 6px; border: 1px solid #444;
+    background: #1f1f1f; color: #eee; box-sizing: border-box; }
+  .settings .note { flex-basis: 100%; font-size: 12px; color: #ffb74d; }
+  #settingsMsg.err { color: #ff8a80; }
+  #settingsMsg { margin-top: 8px; min-height: 1.4em; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -111,6 +121,17 @@
     <p><button type="button" class="secondary" id="upReload">更新</button></p>
   </div>
 
+  <h2>設定</h2>
+  <div class="panel">
+    <details id="settingsBox">
+      <summary>Z4の設定を開く（Z4本体の設定画面と同じ項目）</summary>
+      <p class="meta">保存すると数秒でZ4に反映されます。反映中はライブ映像が一瞬止まります。</p>
+      <div class="settings" id="settingsForm">読み込み中…</div>
+      <p><button type="button" id="saveSettings">保存</button></p>
+      <div id="settingsMsg" class="meta"></div>
+    </details>
+  </div>
+
   <h2>外出先からの視聴</h2>
   <div class="panel">
     <dl class="kv" id="remoteKv"></dl>
@@ -146,8 +167,14 @@
     return m ? m[1] + '/' + m[2] + '/' + m[3] + ' ' + m[4] + ':' + m[5] + ':' + m[6] : n;
   }
   function recUrl(name) { return '/rec/' + encodeURIComponent(name); }
+  // Recording length, e.g. "2分05秒" / "45秒"; "--" when unknown.
+  function fmtLen(ms) {
+    if (!(ms >= 0)) return '--';
+    var sec = Math.round(ms / 1000), m = Math.floor(sec / 60), s2 = sec % 60;
+    return m > 0 ? m + '分' + (s2 < 10 ? '0' : '') + s2 + '秒' : s2 + '秒';
+  }
 
-  // cb(err, text)
+  // cb(err, text) - on an HTTP error, text is still the response body (for the error message)
   function request(method, url, body, headers, cb) {
     var x = new XMLHttpRequest();
     x.open(method, url, true);
@@ -155,7 +182,7 @@
     x.onreadystatechange = function () {
       if (x.readyState !== 4) return;
       if (x.status >= 200 && x.status < 300) cb(null, x.responseText);
-      else cb(new Error(x.status ? 'HTTP ' + x.status : '通信エラー'));
+      else cb(new Error(x.status ? 'HTTP ' + x.status : '通信エラー'), x.responseText);
     };
     x.send(body === undefined ? null : body);
   }
@@ -251,6 +278,9 @@
       label.appendChild(chk);
       label.appendChild(el('span', null, 'box'));
 
+      var dur = el('div', fmtLen(it.duration), 'dur');
+      dur.title = '録画時間';
+
       var info = el('div', null, 'info');
       var play = el('a', fmtName(it.name));
       play.href = recUrl(it.name);
@@ -269,6 +299,7 @@
       actions.appendChild(del);
 
       li.appendChild(label);
+      li.appendChild(dur);
       li.appendChild(info);
       li.appendChild(actions);
       listEl.appendChild(li);
@@ -507,6 +538,138 @@
   }
   $('upReload').addEventListener('click', loadUptime);
 
+  // ---- settings (same items as the phone's settings screen) ----
+  var settingsForm = $('settingsForm'), settingsMsg = $('settingsMsg'), saveSettings = $('saveSettings');
+  var settingFields = [];   // [{f, input}]
+  var settingsLoaded = false;
+
+  function settingsSay(text, isError) {
+    settingsMsg.textContent = text || '';
+    settingsMsg.className = 'meta' + (isError ? ' err' : '');
+  }
+
+  function renderSettings(data) {
+    settingsForm.textContent = '';
+    settingFields = [];
+    for (var g = 0; g < data.groups.length; g++) {
+      var grp = data.groups[g];
+      settingsForm.appendChild(el('h3', grp.title));
+      for (var i = 0; i < grp.fields.length; i++) {
+        var f = grp.fields[i], row = el('div', null, 'row'), input, id = 'set_' + f.key;
+        var name = el('label', f.label, 'name');
+        name.setAttribute('for', id);
+        if (f.type === 'LIST') {
+          input = el('select');
+          for (var k = 0; k < f.options.length; k++) {
+            var o = el('option', f.options[k].l);
+            o.value = f.options[k].v;
+            if (f.options[k].v === f.value) o.selected = true;
+            input.appendChild(o);
+          }
+        } else if (f.type === 'BOOL') {
+          var wrap = el('label', null, 'cb');
+          input = el('input');
+          input.type = 'checkbox';
+          input.checked = f.value === 'true';
+          wrap.appendChild(input);
+          wrap.appendChild(el('span', null, 'box'));
+        } else {
+          input = el('input');
+          input.type = f.type === 'SECRET' ? 'password' : (f.type === 'INT' ? 'number' : 'text');
+          if (f.type === 'INT') { input.min = f.min; input.max = f.max; input.setAttribute('inputmode', 'numeric'); }
+          if (f.type === 'SECRET') {
+            input.placeholder = f.set ? '設定済み（変更するときだけ入力）' : '未設定';
+            input.autocomplete = 'new-password';
+          } else {
+            input.value = f.value;
+          }
+          input.setAttribute('autocapitalize', 'off');
+        }
+        input.id = id;
+        row.appendChild(name);
+        row.appendChild(f.type === 'BOOL' ? input.parentNode : input);
+        if (f.conn) row.appendChild(el('div', '※ 変更すると、今の接続が切れることがあります', 'note'));
+        settingsForm.appendChild(row);
+        settingFields.push({ f: f, input: input });
+      }
+    }
+  }
+
+  function loadSettings() {
+    getJson('/api/settings', function (err, data) {
+      if (err) { settingsForm.textContent = '設定を読み込めません（' + err.message + '）'; return; }
+      settingsLoaded = true;
+      renderSettings(data);
+    });
+  }
+
+  function changedSettings() {
+    var out = [];
+    for (var i = 0; i < settingFields.length; i++) {
+      var f = settingFields[i].f, input = settingFields[i].input, v;
+      if (f.type === 'BOOL') v = input.checked ? 'true' : 'false';
+      else v = input.value;
+      if (f.type === 'SECRET' ? v !== '' : v !== f.value) out.push({ f: f, v: v });
+    }
+    return out;
+  }
+
+  $('settingsBox').addEventListener('toggle', function () {
+    if ($('settingsBox').open && !settingsLoaded) loadSettings();
+  });
+
+  saveSettings.addEventListener('click', function () {
+    var changes = changedSettings();
+    if (!changes.length) { settingsSay('変更はありません'); return; }
+    var conn = false, body = [], newPort = null, newRemotePort = null;
+    for (var i = 0; i < changes.length; i++) {
+      if (changes[i].f.conn) conn = true;
+      if (changes[i].f.key === 'port') newPort = changes[i].v;
+      if (changes[i].f.key === 'remote_port') newRemotePort = changes[i].v;
+      body.push(encodeURIComponent(changes[i].f.key) + '=' + encodeURIComponent(changes[i].v));
+    }
+    if (conn && !window.confirm('接続に関わる設定を変更します。今の接続が切れることがあります。保存しますか？')) return;
+    saveSettings.disabled = true;
+    settingsSay('保存しています…');
+    request('POST', '/api/settings', body.join('&'),
+      { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Z4-Action': 'settings' },
+      function (err, text) {
+        saveSettings.disabled = false;
+        if (err) {
+          var msg = err.message;
+          try { msg = JSON.parse(text || '{}').error || msg; } catch (e) { /* keep */ }
+          settingsSay('保存できませんでした（' + msg + '）', true);
+          return;
+        }
+        settingsSay(changes.length + '件の設定を保存しました。数秒でZ4に反映されます。');
+        // The saved values are now the current ones (secrets are never shown again).
+        for (var c = 0; c < changes.length; c++) {
+          if (changes[c].f.type === 'SECRET') {
+            changes[c].f.set = true;
+            for (var j = 0; j < settingFields.length; j++) {
+              if (settingFields[j].f === changes[c].f) {
+                settingFields[j].input.value = '';
+                settingFields[j].input.placeholder = '設定済み（変更するときだけ入力）';
+              }
+            }
+          } else {
+            changes[c].f.value = changes[c].v;
+          }
+        }
+        // Follow a port change made on the connection this page uses.
+        var here = location.port;
+        var target = null;
+        if (newPort && location.protocol === 'http:' && here !== newPort) target = 'http://' + location.hostname + ':' + newPort + '/';
+        if (newRemotePort && location.protocol === 'https:' && here !== newRemotePort) target = 'https://' + location.hostname + ':' + newRemotePort + '/';
+        setTimeout(function () {
+          if (target) { location.href = target; return; }
+          loadSettings();
+          loadStatus();
+          if (liveOn) startLive(); // the stream restarts with the camera
+        }, 3000);
+      });
+  });
+
   // ---- status ----
   var STATE = { recording: '● 録画中', watching: '監視中', starting: 'カメラ準備中',
                 cooling: '高温のため一時停止中', stopped: '停止中' };
@@ -514,8 +677,8 @@
   function loadStatus() {
     getJson('/api/status', function (err, s) {
       if (err) { stateEl.textContent = '接続できません'; stateEl.className = ''; return; }
-      var txt = (STATE[s.state] || s.state) + '  電池 ' + s.tempC.toFixed(1) + '℃'
-        + (s.charging ? '（充電中）' : '') + '  空き ' + (s.freeBytes / 1e9).toFixed(1) + ' GB';
+      var txt = (STATE[s.state] || s.state) + '  電池 ' + (s.battery >= 0 ? s.battery + '%・' : '') + s.tempC.toFixed(1) + '℃'
+        + (s.power ? '（' + s.power + '）' : (s.charging ? '（充電中）' : '')) + '  空き ' + (s.freeBytes / 1e9).toFixed(1) + ' GB';
       if (s.lastMotion) txt += '  最終検知 ' + new Date(s.lastMotion).toLocaleTimeString();
       if (s.error) txt += '  ⚠ ' + s.error;
       stateEl.textContent = txt;

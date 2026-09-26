@@ -32,6 +32,9 @@ final class RecordingStore {
 
     private final File dir;
     private final long minFreeBytes;
+    /** Finished recordings never change, so their durations are read once. */
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> durations =
+            new java.util.concurrent.ConcurrentHashMap<>();
     private final FreeSpace freeSpace;
 
     RecordingStore(File dir, long minFreeBytes) {
@@ -86,6 +89,18 @@ final class RecordingStore {
         if (name == null || !NAME.matcher(name).matches()) return null;
         File f = new File(dir, name);
         return f.isFile() ? f : null;
+    }
+
+    /** Length of a finished recording in milliseconds, or -1. */
+    long durationMs(File f) {
+        String key = f.getName() + "/" + f.length();
+        Long d = durations.get(key);
+        if (d == null) {
+            d = Mp4Info.durationMs(f);
+            if (durations.size() > 5000) durations.clear();
+            durations.put(key, d);
+        }
+        return d;
     }
 
     /** Removes segments left behind by a crash or power loss (unfinalized MP4s are unplayable). */

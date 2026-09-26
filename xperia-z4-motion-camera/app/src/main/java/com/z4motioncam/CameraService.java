@@ -65,6 +65,7 @@ public class CameraService extends Service implements HttpServer.Backend {
     private volatile String powerState = "";
     private volatile String batteryHealth = "";
     private UptimeLog uptime;
+    private SettingsApi settingsApi;
     private final Handler main = new Handler(Looper.getMainLooper());
 
     private final Runnable heartbeat = new Runnable() {
@@ -130,6 +131,7 @@ public class CameraService extends Service implements HttpServer.Backend {
         Intent battery = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         if (battery != null) onBattery(battery);
 
+        settingsApi = new SettingsApi(this);
         uptime = new UptimeLog(new File(getFilesDir(), "uptime"), new UptimeLog.Clock() {
             @Override
             public long wallMs() {
@@ -148,12 +150,22 @@ public class CameraService extends Service implements HttpServer.Backend {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && ACTION_RELOAD.equals(intent.getAction())) {
-            AppSettings s = AppSettings.load(this);
-            if (!s.equals(settings)) applySettings(s);
-        }
+        if (intent != null && ACTION_RELOAD.equals(intent.getAction())) reloadSettings();
         return START_STICKY;
     }
+
+    /** Applies settings changed on the phone or from a browser (no-op when nothing changed). */
+    private void reloadSettings() {
+        AppSettings s = AppSettings.load(this);
+        if (!s.equals(settings)) applySettings(s);
+    }
+
+    private final Runnable reload = new Runnable() {
+        @Override
+        public void run() {
+            reloadSettings();
+        }
+    };
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -378,14 +390,30 @@ public class CameraService extends Service implements HttpServer.Backend {
         else state = p.isRecording() ? "recording" : "watching";
         String err = p == null ? null : p.error();
         return String.format(Locale.US,
-                "{\"state\":\"%s\",\"motion\":%.4f,\"lastMotion\":%d,\"tempC\":%.1f,\"battery\":%d,"
+                "{\"state\":\"%s\",\"motion\":%.4f,\"lastMotion\":%d,\"tempC\":%.1f,\"battery\":%d,\"power\":%s,"
                         + "\"charging\":%b,\"thermal\":\"%s\",\"freeBytes\":%d,\"storageFull\":%b,"
                         + "\"rotation\":%d,\"viewers\":%d,\"error\":%s,\"remote\":%s}",
                 state, p == null ? 0f : p.motionRatio(), p == null ? 0L : p.lastMotionWallMs(),
-                Float.isNaN(batteryTempC) ? 0f : batteryTempC, batteryPct, charging, thermal,
+                Float.isNaN(batteryTempC) ? 0f : batteryTempC, batteryPct, HttpServer.jsonString(powerState), charging, thermal,
                 store.usableBytes(), p != null && p.storageFull(), settings.rotation, hub.clients(),
                 err == null ? "null" : HttpServer.jsonString(err),
                 remote == null ? "null" : remote.statusJson());
+    }
+
+    @Override
+    public String settingsJson() {
+        return settingsApi.json();
+    }
+
+    @Override
+    public String updateSettings(java.util.Map<String, String> changes) {
+        String error = settingsApi.update(changes);
+        if (error == null) {
+            // Apply after the HTTP reply has gone out: a port change restarts the server.
+            main.removeCallbacks(reload);
+            main.postDelayed(reload, 800);
+        }
+        return error;
     }
 
     @Override
