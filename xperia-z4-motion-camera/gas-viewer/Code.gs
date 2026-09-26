@@ -97,7 +97,7 @@ function addCamera(form) {
   var port = parseInt(form.port, 10);
   var password = String(form.password || '');
   if (!name || name.length > 30) throw new Error('名前は1〜30文字で入力してください');
-  if (!HOST_RE.test(host)) throw new Error('アドレスはIPアドレスかドメイン名で入力してください（例: 133.201.33.64）');
+  if (!HOST_RE.test(host)) throw new Error('アドレスはIPアドレスかドメイン名で入力してください（例: 203.0.113.5）');
   if (!(port >= 1 && port <= 65535)) throw new Error('ポートは1〜65535の数字で入力してください');
   if (password.length < 8) throw new Error('パスワードは8文字以上です（Z4の「外出先視聴用パスワード」）');
 
