@@ -67,13 +67,16 @@ def entropy(p):
 # 何度「そうらしい」と確かめても相関の域を出ないので [観測事実] にはしない
 CAUSAL_CAP = 0.8
 MIGRATIONS = (("claim_type", "TEXT DEFAULT 'descriptive'"), ("causal_ok", "INTEGER DEFAULT 0"),
-              ("challenged", "INTEGER DEFAULT 0"), ("promised", "INTEGER DEFAULT 0"))
+              ("challenged", "INTEGER DEFAULT 0"), ("promised", "INTEGER DEFAULT 0"),
+              ("origin", "TEXT DEFAULT ''"))       # どの感覚器・種類の出来事から生まれた仮説か
+# priority: 拾ったときに付けた優先度 (後で役立ったかと照らして、先見の成績になる)
+EVENT_MIGRATIONS = (("priority", "REAL"),)
 
 
 class Belief:
     __slots__ = ("id", "statement", "p", "source", "relevance", "created", "updated",
                  "verified", "half_life", "attempts", "irreducible", "evidence",
-                 "claim_type", "causal_ok", "challenged", "promised", "clock")
+                 "claim_type", "causal_ok", "challenged", "promised", "origin", "clock")
 
     def __init__(self, row, clock=time.time):
         for k in self.__slots__[:-1]:
@@ -110,14 +113,18 @@ class Memory:
         for name, decl in MIGRATIONS:
             if name not in cols:
                 self.db.execute(f"ALTER TABLE beliefs ADD COLUMN {name} {decl}")
+        ecols = {r[1] for r in self.db.execute("PRAGMA table_info(events)")}
+        for name, decl in EVENT_MIGRATIONS:
+            if name not in ecols:
+                self.db.execute(f"ALTER TABLE events ADD COLUMN {name} {decl}")
         self.db.commit()
         self.clock = clock
 
     # ---------- events ----------
-    def add_event(self, source, kind, content, novelty=0.0):
+    def add_event(self, source, kind, content, novelty=0.0, priority=None):
         cur = self.db.execute(
-            "INSERT INTO events(ts, source, kind, content, novelty, appraised) VALUES (?,?,?,?,?,?)",
-            (self.clock(), source, kind, content, novelty, 1 if source == "self" else 0))
+            "INSERT INTO events(ts, source, kind, content, novelty, appraised, priority) VALUES (?,?,?,?,?,?,?)",
+            (self.clock(), source, kind, content, novelty, 1 if source == "self" else 0, priority))
         self.db.commit()
         return cur.lastrowid
 
@@ -137,7 +144,7 @@ class Memory:
 
     def pending_events(self):
         return self.db.execute(
-            "SELECT * FROM events WHERE appraised=0 ORDER BY novelty DESC, id DESC").fetchall()
+            "SELECT * FROM events WHERE appraised=0 ORDER BY COALESCE(priority, novelty) DESC, id DESC").fetchall()
 
     def mark_appraised(self, event_id, value=1):
         self.db.execute("UPDATE events SET appraised=? WHERE id=?", (value, event_id))
@@ -172,7 +179,7 @@ class Memory:
         return best
 
     def add_belief(self, statement, p, source, relevance=1.0, half_life=DEFAULT_HALF_LIFE,
-                   evidence=None):
+                   evidence=None, origin=""):
         """似た信念があれば新しい根拠として統合し、なければ追加する。"""
         same = self.find_similar(statement)
         if same:
@@ -187,9 +194,9 @@ class Memory:
         p = min(p, cap)
         cur = self.db.execute(
             "INSERT INTO beliefs(statement,p,source,relevance,created,updated,verified,half_life,evidence,"
-            "claim_type) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "claim_type,origin) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (statement, p, source, relevance, now, now, now, half_life,
-             json.dumps([evidence] if evidence else [], ensure_ascii=False), kind))
+             json.dumps([evidence] if evidence else [], ensure_ascii=False), kind, origin or ""))
         self.db.commit()
         return cur.lastrowid
 
@@ -239,6 +246,10 @@ class Memory:
             if overlap(b.statement, text) >= threshold:
                 self.db.execute("UPDATE beliefs SET relevance=MIN(1.0, relevance+?) WHERE id=?",
                                 (boost, b.id))
+        self.db.commit()
+
+    def set_relevance(self, bid, value):
+        self.db.execute("UPDATE beliefs SET relevance=? WHERE id=?", (value, bid))
         self.db.commit()
 
     def decay_relevance(self, dt, half_life):

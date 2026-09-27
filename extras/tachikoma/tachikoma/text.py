@@ -32,6 +32,19 @@ def overlap(query, text):
     return len(gq & gt) / len(gq)
 
 
+_SLD = {"co", "or", "ne", "ac", "go", "ed", "lg", "gr", "com", "net", "org", "gov", "edu"}
+
+
+def site(host):
+    """同じ報道機関を 1 つに数えるための登録ドメイン (www3.nhk.or.jp → nhk.or.jp)。"""
+    parts = (host or "").lower().split(":")[0].strip(".").split(".")
+    if all(p.isdigit() for p in parts):
+        return ".".join(parts)          # IP アドレスはそのまま
+    if len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in _SLD:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
 def clip(text, limit):
     text = text or ""
     return text if len(text) <= limit else text[: limit - 1] + "…"

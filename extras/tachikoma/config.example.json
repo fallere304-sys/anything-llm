@@ -13,6 +13,8 @@
   ],
   "clipboard": false,
   "active_window": true,
+  "web": true,
+  "news": true,
   "curiosity_threshold": 0.35,
   "speak_threshold": 0.6,
   "min_speak_interval_s": 90,

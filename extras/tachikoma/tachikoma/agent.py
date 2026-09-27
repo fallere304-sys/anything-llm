@@ -23,6 +23,15 @@
   根拠と因果          論文・政府文書を格付けし、因果の主張は因果を示せる研究デザインでしか確信しない
   自分を疑う          確信の較正 (当たり外れの記録) で初期確信を縮め、確信した推定の反証も探す (challenge)
 
+周辺への好奇心と先見 (目の前と関係なさそうな情報にも目を向ける):
+  拾った出来事にはすべて優先度を付けて記録する。一部 (peripheral_share) はあえて優先度の低い出来事を
+  考え、そこから生まれた疑問も調べる。調べて確かめると、そこからまた疑問を作る (wonder)。
+  どの出どころの情報が後で相棒の役に立ったかはカーネルが記録し (kernel/foresight.py)、
+  それが次の優先度のタネになり、優先度の付け方そのものも自己進化の対象になる。
+
+仲間の危機 (concern.py): ニュースや聞こえてきたテレビに仲間 (bonds.py) の名前が出たら、
+  悪いことが起きていないか判定 → 別の出どころで裏付けを集める → できる行動をして相棒に知らせる。
+
 GPU 推論は 1 tick に最大 1 回。ユーザーの話しかけだけは即時・最優先。
 """
 
@@ -31,6 +40,8 @@ import time
 
 from . import curiosity, expression, prompts
 from .attention import ALONE, Attention
+from .bonds import WEIGHT as BOND_WEIGHT, Bonds
+from .concern import Concerns
 from .llm import LLMError
 from .dataset import TrainingData
 from .epistemics import Calibration, shrink_p
@@ -81,6 +92,12 @@ class Tachikoma:
         self.backoff_until = 0.0
         self.last_wonder = now
         self.last_diary = now
+        self.wonder_seed = None             # 確かめたばかりの信念 (そこから次の疑問を作る)
+        # 出どころ (感覚器/種類) の情報が後で役立つ見込み。本番ではカーネルの先見の帳簿が差し込まれる
+        self.usefulness = lambda bucket, text=None: 0.5
+        self.foresight_rates = None
+        self.bonds = Bonds(memory.db, clock)
+        self.concerns = Concerns(self, self.bonds)
 
     # ------------------------------------------------------------------ loop
     def run_forever(self):
@@ -123,6 +140,8 @@ class Tachikoma:
             try:
                 if self.want_look:
                     self.look_around()
+                elif self.concerns.step():
+                    pass                     # 仲間のピンチは、独りの時間でも最優先で調べる
                 elif scheduled:
                     self.appraise_next()     # 独りの時間の調べものは、スケジューラが「読書」として選んだときだけ
                 else:
@@ -189,8 +208,14 @@ class Tachikoma:
             self.on_command(content)
             return
         novelty = self.memory.novelty(source, content)
-        eid = self.memory.add_event(source, kind, content, novelty)
+        # テレビやニュースに仲間の名前が出ていないか (目の前と関係ない話題でも見逃さない)
+        watch = kind in ("news", "overheard_speech")
+        companion = watch and bool(self.bonds.find_in(content, self.cfg["bond_min_strength"]))
+        priority = curiosity.event_priority(novelty, self.usefulness(f"{source}/{kind}", content), companion)
+        eid = self.memory.add_event(source, kind, content, novelty, priority=priority)
         self.memory.touch_relevance(content)
+        if companion:
+            self.concerns.on_news(content, meta)
         self.last_activity = now
         self.slept = False
         if kind == "user_message":
@@ -198,7 +223,7 @@ class Tachikoma:
                 self.on_user_message(content, voice=voice)
             except LLMError as e:
                 self.say(f"(推論に失敗しました: {e})")
-        elif novelty < self.cfg["novelty_threshold"]:
+        elif novelty < self.cfg["novelty_threshold"] and not companion:
             self.memory.mark_appraised(eid, 2)   # 既視感: 考えるまでもない
 
     def on_user_message(self, text, voice=False):
@@ -211,6 +236,11 @@ class Tachikoma:
                 self.say(msg or "学習を中断しました。")
         if self.study is not None:
             self.study.pause()
+        m = _FRIEND.match(text.strip())
+        if m and self.bonds.befriend(m.group(1).strip("「」『』 "), "person"):
+            # 声でも仲間を教えられる:「田中さんは仲間だよ」
+            self.say(f"{m.group(1)}は仲間！覚えたよ。ニュースに出てきたら気にかけるね。")
+            return
         if self.asked is not None:
             b = self.memory.get_belief(self.asked)
             if b is not None:
@@ -268,22 +298,29 @@ class Tachikoma:
             lines.append("- ボクがまだ知らないこと (知ったかぶりせず、調べると約束する): " + " / ".join(unknown))
         return "\n".join(lines)
 
-    def _hypothesis(self, statement, p, relevance, basis):
+    def _hypothesis(self, statement, p, relevance, basis, origin=""):
         """新しい仮説を記憶し、予測として記録する (後で当たり外れを較正に使う)。"""
         p = shrink_p(p, self.calib.shrink(self.cfg.get("persona_skepticism", 0.6)))
         bid = self.memory.add_belief(statement, p, "reflection", relevance=relevance,
-                                     half_life=SITUATION_HALF_LIFE * 12)
+                                     half_life=SITUATION_HALF_LIFE * 12, origin=origin)
         self.calib.predict(bid, self.memory.get_belief(bid).p, basis)
         return bid
 
     def wonder(self):
-        """疑問を作る: 確かめた事柄から「なぜ？」「もし違ったら？」を自分で立てる。"""
+        """疑問を作る: 確かめた事柄から「なぜ？」「もし違ったら？」を自分で立てる。
+        確かめたばかりの事柄があれば、間隔を待たずにそこから作る (調べる過程でも疑問が生まれる)。"""
         now = self.clock()
-        if now - self.last_wonder < self.cfg["wonder_interval_s"] or self.attention.conversing(now):
+        seed = self.memory.get_belief(self.wonder_seed) if self.wonder_seed else None
+        due = now - self.last_wonder >= self.cfg["wonder_interval_s"]
+        followup = seed is not None and now - self.last_wonder >= self.cfg["wonder_followup_s"]
+        if not (due or followup) or self.attention.conversing(now):
             return False
         self.last_wonder = now
+        self.wonder_seed = None
         known = [b for b in self.memory.beliefs() if b.label() in (FACT, INFERENCE)]
         known.sort(key=lambda b: -b.relevance)
+        if seed is not None and seed.label() in (FACT, INFERENCE, REFUTED):
+            known = [seed] + [b for b in known if b.id != seed.id]
         if not known:
             return False
         res = self.llm.chat(prompts.WONDER_SYSTEM, "\n".join(f"- [{b.label()}] {b.statement}" for b in known[:3]),
@@ -291,7 +328,8 @@ class Tachikoma:
         made = 0
         for h in (res.get("hypotheses") or [])[:2]:
             if (h or "").strip():
-                self._hypothesis(h.strip(), 0.5, relevance=0.6, basis="wonder")
+                self._hypothesis(h.strip(), 0.5, relevance=0.6, basis="wonder",
+                                 origin=(seed.origin if seed is not None else known[0].origin) or "")
                 made += 1
         if made:
             self.selfm.bump("questions", made)
@@ -353,6 +391,29 @@ class Tachikoma:
                 self.say("耳の学習は無効です。")
             else:
                 self.say(f"耳を {self.asr_learner.rollback()} に戻しました。")
+        elif cmd == "/friend":
+            name, _, kind = arg.partition(" ")
+            if not name:
+                self.say("`/friend 名前 [person|organization|software|place]` で仲間を教えてね。")
+            else:
+                row = self.bonds.befriend(name, kind.strip() or "person")
+                self.say(f"{name} は仲間！覚えたよ。ニュースに出てきたら気にかけるね。" if row else "その名前は覚えられないみたい。")
+        elif cmd == "/forget":
+            self.say(f"{arg} のことは忘れるね。" if arg and self.bonds.forget(arg) else "その仲間は知らないみたい。")
+        elif cmd == "/bonds":
+            rows = self.bonds.companions(self.cfg["bond_min_strength"])[:10]
+            self.say("仲間: " + (" / ".join(self.bonds.describe(r) for r, _ in rows) or "まだいないんだ。/friend で教えてね"))
+        elif cmd == "/concerns":
+            rows = self.concerns.recent()
+            self.say("仲間の心配ごと: " + (" / ".join(
+                f"#{r['id']} {r['name']} {r['state']}: {clip(r['summary'], 60)}" for r in rows) or "今のところ無いよ"))
+        elif cmd == "/foresight":
+            if self.foresight_rates is None:
+                self.say("先見の記録は無効です。")
+            else:
+                st = sorted(self.foresight_rates().items(), key=lambda x: -x[1]["rate"])[:8]
+                self.say("後で役に立った割合 (出どころ別): " + (", ".join(
+                    f"{b} {v['used']}/{v['n']}" for b, v in st) or "まだ記録が無い"))
         elif cmd == "/diary":
             self.say(self.selfm.get("last_diary") or "まだ日記を書いてないんです。今夜書きますね！")
         elif cmd == "/self":
@@ -382,19 +443,28 @@ class Tachikoma:
             self.say(" | ".join(lines))
         else:
             self.say("コマンド: /good, /bad [正しい答え], /learn, /rollback, /ear_learn, /ear_rollback, "
-                     "/eye_learn, /eye_rollback, /idle, /status, /self, /diary")
+                     "/eye_learn, /eye_rollback, /idle, /status, /self, /diary, /friend 名前, /forget 名前, "
+                     "/bonds, /concerns, /foresight")
 
     # ------------------------------------------------------------- appraise
     def appraise_next(self):
         now = self.clock()
+        fresh = []
         for ev in self.memory.pending_events():
             if now - ev["ts"] > 600:      # 推論が追いつかず古くなった出来事は評価しない
                 self.memory.mark_appraised(ev["id"], 3)
                 continue
-            break
-        else:
+            fresh.append(ev)
+        if not fresh:
             return False
+        ev, peripheral = fresh[0], False
+        if len(fresh) > 1 and self._rand() < self.cfg["peripheral_share"]:
+            # 周辺視: あえて優先度の低い (関係なさそうな) 出来事を考えてみる
+            ev, peripheral = fresh[1 + int(self._rand() * (len(fresh) - 1)) % (len(fresh) - 1)], True
+            self.log(f"周辺の出来事に目を向ける: {ev['source']}/{ev['kind']}")
         self.memory.mark_appraised(ev["id"])
+        origin = f"{ev['source']}/{ev['kind']}"
+        relevance = self.cfg["peripheral_relevance"] if peripheral else 1.0
         res = self.llm.chat(
             prompts.APPRAISE_SYSTEM,
             self.context_text() + f"\n\n# 新しい出来事 ({ev['source']}/{ev['kind']})\n{ev['content']}",
@@ -415,8 +485,8 @@ class Tachikoma:
                 p, source = BASIS_PRIOR["inferred"]
             elif source == "observation" and ev["source"] == "user":
                 source = "user"
-            bid = self.memory.add_belief(st, p, source, relevance=1.0, half_life=SITUATION_HALF_LIFE,
-                                         evidence=f"{ev['kind']}#{ev['id']}")
+            bid = self.memory.add_belief(st, p, source, relevance=relevance, half_life=SITUATION_HALF_LIFE,
+                                         evidence=f"{ev['kind']}#{ev['id']}", origin=origin)
             if source == "reflection":
                 self.calib.predict(bid, self.memory.get_belief(bid).p, c.get("basis", "guessed"))
             if source == "user":
@@ -424,6 +494,10 @@ class Tachikoma:
                 b = self.memory.get_belief(bid)
                 if b.label() == FACT:
                     self.data.on_resolved(b)
+        if ev["kind"] in BOND_WEIGHT and ev["source"] != "self":
+            # 相棒とのやり取り・一緒の作業に出てきた名前 = 仲間になっていく
+            for e in (res.get("entities") or [])[:4]:
+                self.bonds.mention((e.get("name") or "").strip(), e.get("kind", "other"), ev["kind"])
         remark, imp = (res.get("remark") or "").strip(), res.get("remark_importance")
         if remark and imp in ("low", "high"):
             self.memory.add_utterance("remark", remark, 0.85 if imp == "high" else 0.45)
@@ -438,6 +512,8 @@ class Tachikoma:
             allowed.append("web_search")
         if getattr(self.probes, "scholar", None) is not None or getattr(self.probes, "web", None) is not None:
             allowed.append("research")
+        if getattr(self.probes, "news", None) is not None:
+            allowed.append("news_search")
         if getattr(self.probes, "camera", None) is not None:
             allowed.append("look")
         if self.cfg["allow_ask_user"] and self.question_outstanding is None and self.asked is None:
@@ -449,12 +525,15 @@ class Tachikoma:
         waiting = (self.asked, self.question_outstanding)   # 回答待ちの仮説は重ねて調べない
         beliefs = [b for b in self.memory.beliefs(include_irreducible=False) if b.id not in waiting]
         can_challenge = "research" in self.allowed_probes()
-        if curiosity.drive(beliefs, max_att) < self.cfg["curiosity_threshold"]:
+        cache = {}
+        kw = {"usefulness": lambda o: cache[o] if o in cache else cache.setdefault(o, self.usefulness(o)),
+              "peripheral": self.cfg["peripheral_weight"]}
+        if curiosity.drive(beliefs, max_att, **kw) < self.cfg["curiosity_threshold"]:
             # 気になる仮説が無い = 自分の「わかったつもり」を疑う番
             return self.challenge_step(beliefs) if can_challenge else False
         if can_challenge and self._rand() < self.cfg["challenge_share"] and self.challenge_step(beliefs):
             return True
-        target, u = curiosity.pick_target(beliefs, max_att)
+        target, u = curiosity.pick_target(beliefs, max_att, **kw)
         if target is None:
             return False
         # 期待情報利得/コストの順に並べて提示し、選択肢は enum で縛る (小型モデルの迷いを減らす)
@@ -536,6 +615,8 @@ class Tachikoma:
         if after != before and gain > 0:
             # わかった! = 不確実性が減った分だけ、その話題への興味が育つ
             self.selfm.learned(nb.statement, gain)
+        if after != before and after in (FACT, INFERENCE, REFUTED):
+            self.wonder_seed = nb.id            # わかったことから、また疑問を作る
         if after != before and after in (FACT, REFUTED):
             added, dropped = self.data.on_resolved(nb)
             self.log(f"学習標本 +{added} (結論と矛盾した判定 {dropped} 件は不採用)")
@@ -543,6 +624,8 @@ class Tachikoma:
             pred = self.db_prediction(nb.id)
             if after == REFUTED and pred is not None and pred > 0.6:
                 self.selfm.remember(f"確信していたのに外れた: {clip(nb.statement, 60)}", "mistake")
+        if self.concerns.owns(nb.id):
+            return nb                           # 仲間の心配ごとは、調べ終えてから concern.py がまとめて伝える
         if nb.promised and after in (FACT, INFERENCE, REFUTED) and after != before:
             # 知らないと言ったことを、知にした → 自分から報告する
             self.memory.set_flag(nb.id, "promised", 0)
@@ -591,7 +674,9 @@ class Tachikoma:
                 idle = now - self.last_activity
             busy = idle < self.cfg["busy_idle_s"]
         for u in self.memory.pending_utterances():
-            if now - u["ts"] > 900:     # 15分前の話はもう「目の前」ではない
+            # 15分前の話はもう「目の前」ではない。ただし仲間のピンチは、相棒が戻るまで取っておく
+            ttl = self.cfg["concern_report_ttl_s"] if u["kind"] == "concern" else 900
+            if now - u["ts"] > ttl:
                 self.memory.mark_delivered(u["id"], -1)
                 if u["kind"] == "question" and u["belief_id"] == self.question_outstanding:
                     self.question_outstanding = None
@@ -728,6 +813,7 @@ class Tachikoma:
             self.out(f"  · {text}")
 
 
+_FRIEND = re.compile(r"^(.{2,20}?)(?:は|って)(?:ボクら|僕ら|私たち|俺たち|うち)?の?仲間(?:だよ|だ|です|なんだ)?[。!！]*$")
 _GOOD = re.compile(r"^(それ)?(正解|合ってる|あってる|その通り|覚えといて|覚えておいて)[。!！]*$")
 _BAD = re.compile(r"^(違う|ちがう)[よね、,。 ]*(正しくは|本当は|ほんとは)[、,: ]*(.+)$")
 

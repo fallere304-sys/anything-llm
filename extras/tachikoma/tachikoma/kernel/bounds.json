@@ -55,5 +55,17 @@
   "idle_rest_value": [
     0.05,
     1.0
+  ],
+  "peripheral_share": [
+    0.0,
+    0.5
+  ],
+  "peripheral_weight": [
+    0.0,
+    0.8
+  ],
+  "peripheral_relevance": [
+    0.1,
+    0.8
   ]
 }

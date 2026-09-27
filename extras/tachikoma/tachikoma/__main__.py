@@ -107,13 +107,19 @@ def main(argv=None):
         web = WebSearch(cfg)
         from .scholar import Scholar
         scholar = Scholar(cfg)
+    news = None
+    if cfg["news"]:
+        from .news import NewsFeed, NewsSensor
+        news = NewsFeed(cfg)
+        senses.append(NewsSensor(cfg, news, memory.db))
 
     from .activities import ReadingActivity, StudyActivity, TrainActivity
     from .idle import IdleScheduler
     from .power import PowerMeter
     power = PowerMeter(cfg)
     idle = IdleScheduler(cfg, memory, power)
-    agent = Tachikoma(cfg, llm, memory, senses, Probes(cfg, memory, web=web, camera=camera, llm=llm, scholar=scholar),
+    agent = Tachikoma(cfg, llm, memory, senses, Probes(cfg, memory, web=web, camera=camera, llm=llm, scholar=scholar,
+                                                       news=news),
                       idle_fn=sensors.idle_seconds, data=data, learner=learner,
                       tts=tts, study=study, asr_learner=asr_learner, eyes=eyes, eye_learner=eye_learner,
                       idle=idle, ui=ui, power=power)
@@ -129,8 +135,13 @@ def main(argv=None):
     from .kernel.metrics import Metrics
     from .kernel.novelty import NoveltyJudge
     from .kernel.sandbox import Sandbox
+    from .kernel.foresight import Foresight
     budget = Budget(cfg)
     metrics = Metrics(memory.db)
+    # 先見の帳簿: 拾った情報が後で役立ったか (カーネルが記録し、思考のコードには読み出しだけ渡す)
+    foresight = Foresight(cfg, memory.db)
+    agent.usefulness = foresight.usefulness
+    agent.foresight_rates = foresight.rates
     brain = CpuBrain(cfg, budget)
     evolution = None
     if cfg["evolution_enabled"] and config.frozen():
@@ -157,7 +168,7 @@ def main(argv=None):
     try:
         agent.say("起動しました。見てます。")
         code = runtime.run(agent, cfg, metrics, evolution=evolution, brain=brain if evolution else None,
-                           power=power)
+                           power=power, foresight=foresight)
         if code == runtime.RESTART_CODE:
             agent.say("自分を改良したので、少し再起動するね！")
             for lr in agent.learners():

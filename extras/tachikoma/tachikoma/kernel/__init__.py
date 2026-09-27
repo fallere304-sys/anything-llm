@@ -22,6 +22,7 @@ KERNEL_PATHS = (
     "tachikoma/config.py",      # 資源の上限と既定値
     "tachikoma/llm.py",         # 推論サーバーとの通信
     "tachikoma/web.py",         # 外に出る検索 (個人情報フィルタ)
+    "tachikoma/news.py",        # ニュースの取得と検索 (同上)
     "tachikoma/scholar.py",     # 論文・政府文書の検索 (同上)
     "tachikoma/tools.py",       # 量子化などの外部ツール実行
     "tachikoma/tts.py", "tachikoma/audio.py", "tachikoma/camera.py", "tachikoma/sensors.py",
@@ -42,6 +43,7 @@ EVOLVABLE_PATHS = (
     "tachikoma/prompts.py", "tachikoma/persona.py", "tachikoma/epistemics.py", "tachikoma/attention.py",
     "tachikoma/text.py", "tachikoma/probes.py", "tachikoma/asr.py",
     "tachikoma/idle.py", "tachikoma/expression.py",
+    "tachikoma/bonds.py", "tachikoma/concern.py",
     "evolvable/",
 )
 

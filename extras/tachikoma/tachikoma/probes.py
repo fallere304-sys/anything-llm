@@ -13,10 +13,11 @@ from .text import clip
 
 
 class Probes:
-    def __init__(self, cfg, memory, web=None, camera=None, llm=None, scholar=None):
+    def __init__(self, cfg, memory, web=None, camera=None, llm=None, scholar=None, news=None):
         self.cfg = cfg
         self.memory = memory
         self.web, self.camera, self.llm, self.scholar = web, camera, llm, scholar
+        self.news = news
 
     def _allowed_path(self, path):
         path = os.path.abspath(path)
@@ -50,7 +51,7 @@ class Probes:
     def run(self, name, query):
         """根拠テキスト (または (テキスト, メタ情報)) を返す。見つからなければ None。"""
         if name not in ("search_memory", "grep_workspace", "read_file", "wait_observe", "web_search", "look",
-                        "research", "challenge"):
+                        "research", "challenge", "news_search"):
             return None
         return getattr(self, name)(query)
 
@@ -95,6 +96,9 @@ class Probes:
 
     def web_search(self, query):
         return self.web.search(query) if self.web is not None else None
+
+    def news_search(self, query):
+        return self.news.search(query) if self.news is not None else None
 
     def look(self, query):
         """カメラの今の 1 枚を Gemma に見せ、問いに沿って説明させる (画像は保存しない)。"""

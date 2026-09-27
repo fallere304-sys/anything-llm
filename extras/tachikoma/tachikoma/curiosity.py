@@ -8,6 +8,12 @@
   (noisy-TV 問題) に好奇心を吸い尽くされないよう、試行ごとに割り引く。
 
 プローブの選択は期待情報利得 / コストで行う。
+
+周辺への好奇心 (目の前と関係なさそうな情報にも目を向ける):
+    relevance を max(relevance, peripheral × 出どころの有用性) に置き換える。
+    出どころの有用性は「その感覚器・種類の情報が、あとで相棒の行動に出てきた割合」の楽観的な
+    見込み (kernel/foresight.py が記録)。まだよく知らない出どころは高めに見積もるので、
+    ノイズに見える情報もいったん調べてみて、役に立たなかった出どころは次第に後回しになる。
 """
 
 from dataclasses import dataclass
@@ -41,6 +47,8 @@ PROBES = {
         "challenge", "反証を探す (論文・ネットで、この仮説に反する根拠を探す)", 0.8, 0.7, "research"),
     "look": ProbeSpec(
         "look", "カメラで今の様子を見る (query に見たい点)", 0.8, 0.7, "observation"),
+    "news_search": ProbeSpec(
+        "news_search", "ニュースを検索する (出来事の続報・別の報道)", 0.5, 0.7, "web"),
     "ask_user": ProbeSpec(
         "ask_user", "ユーザーに短く質問する (割り込みコストが高い)", 3.0, 1.0, "user"),
 }
@@ -52,19 +60,35 @@ def learnability(b, max_attempts):
     return max(0.0, 1.0 - b.attempts / (max_attempts + 1))
 
 
-def uncertainty(b, max_attempts, now=None):
+def attention_weight(b, usefulness=None, peripheral=0.0):
+    """目の前の関連度と、周辺 (出どころの有用性の見込み) の大きい方。"""
+    rel = b.relevance
+    origin = getattr(b, "origin", "") or ""
+    if usefulness is not None and origin and peripheral > 0:
+        rel = max(rel, peripheral * usefulness(origin))
+    return rel
+
+
+def uncertainty(b, max_attempts, now=None, usefulness=None, peripheral=0.0):
     if b.label(now) not in (SPECULATION, INFERENCE):
         return 0.0
-    return b.relevance * entropy(b.p_now(now)) * learnability(b, max_attempts)
+    return attention_weight(b, usefulness, peripheral) * entropy(b.p_now(now)) * learnability(b, max_attempts)
 
 
-def drive(beliefs, max_attempts, now=None):
+def drive(beliefs, max_attempts, now=None, usefulness=None, peripheral=0.0):
     """いま調べたい気持ちの強さ (0-1)。最も気になっている1件の不確実性。"""
-    return max((uncertainty(b, max_attempts, now) for b in beliefs), default=0.0)
+    return max((uncertainty(b, max_attempts, now, usefulness, peripheral) for b in beliefs), default=0.0)
 
 
-def pick_target(beliefs, max_attempts, now=None):
-    scored = [(uncertainty(b, max_attempts, now), b) for b in beliefs]
+def event_priority(novelty, usefulness, companion=False):
+    """出来事を考える順番。新しさ × あとで役立つ見込み。仲間の名前が出ていたら最優先。"""
+    if companion:
+        return 1.0
+    return novelty * (0.5 + 0.5 * usefulness)
+
+
+def pick_target(beliefs, max_attempts, now=None, usefulness=None, peripheral=0.0):
+    scored = [(uncertainty(b, max_attempts, now, usefulness, peripheral), b) for b in beliefs]
     scored = [s for s in scored if s[0] > 0]
     if not scored:
         return None, 0.0

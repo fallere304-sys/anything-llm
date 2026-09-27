@@ -94,7 +94,7 @@ def hotspots(profile, root=ROOT, top=5):
 
 
 def run(agent, cfg, metrics, evolution=None, sleep=time.sleep, max_steps=None, brain=None, power=None,
-        clock=time.time):
+        clock=time.time, foresight=None):
     """ループを回す。再起動が必要になったら RESTART_CODE を返す。"""
     instrument(agent, metrics)
     oversight(agent, evolution)
@@ -130,6 +130,11 @@ def run(agent, cfg, metrics, evolution=None, sleep=time.sleep, max_steps=None, b
                 metrics.record("watts", power.watts(gpu_active_guess=False))
             except Exception:  # noqa: BLE001
                 pass
+        if foresight is not None:
+            try:
+                foresight.sync()         # 拾った情報が後で役立ったかを記帳 (思考のコードの外で)
+            except Exception as e:  # noqa: BLE001
+                metrics.record_error(e, traceback.extract_tb(e.__traceback__), traceback.format_exc())
         mode = getattr(agent, "mode", None)
         if brain is not None:
             try:

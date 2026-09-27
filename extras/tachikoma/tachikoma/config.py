@@ -108,6 +108,33 @@ DEFAULTS = {
     "web_language": "ja",
     "searxng_url": "",                # 自前の SearXNG があれば優先 (無ければ Wikipedia API)
 
+    # --- 周辺への好奇心と先見 (目の前と関係なさそうな情報にも目を向ける) ---
+    "peripheral_share": 0.2,          # 考える出来事のうち、あえて優先度の低いものを選ぶ割合
+    "peripheral_relevance": 0.4,      # 周辺の出来事から生まれた仮説の初めの関連度
+    "peripheral_weight": 0.3,         # 出どころの有用性の見込みを、関連度の代わりにどれだけ使うか
+    "wonder_followup_s": 120,         # 確かめたばかりの事柄から次の疑問を作るまでの最短間隔
+    "foresight_sync_s": 60,           # 先見の帳簿 (カーネル) に記帳する間隔
+    "foresight_horizon_s": 3 * 86400,  # 拾った情報が「役に立った」とみなす期限
+    "foresight_min_gap_s": 60,        # 拾った直後の行動は「後で役立った」に数えない
+    "foresight_explore": 0.5,         # よく知らない出どころをどれだけ楽観的に見るか
+    "foresight_canary_horizon_s": 6 * 3600,   # 自己進化の試用期間で先見を測るときの期限
+
+    # --- ニュースと仲間 (ニュースを見る → 仲間のピンチを知る → 調べる → 行動する) ---
+    "news": False,                    # RSS を定期的に読む (ネットに出る。web と同じく opt-in)
+    "news_feeds": ["https://www3.nhk.or.jp/rss/news/cat0.xml"],
+    "news_interval_s": 1800,
+    "news_max_items": 20,
+    # 続報・別の報道を探すニュース検索 ({q} に検索語)。空なら検索しない
+    "news_search_url": "https://news.google.com/rss/search?q={q}&hl=ja&gl=JP&ceid=JP:ja",
+    "bond_min_strength": 0.3,         # これ以上の絆がある相手を「仲間」とみなす (/friend で教えると 0.7)
+    "concern_merge_s": 3 * 86400,     # 同じ仲間の似た報道は同じ出来事として扱う期間
+    "concern_max_searches": 3,        # 裏付けを探す回数の上限
+    "concern_timeout_s": 1800,        # 確かめきれなくても、この時間で相棒に知らせる
+    "concern_dismiss_p": 0.2,         # 反する報道で確信がここまで下がったら「違った」とみなす
+    "concern_watch_days": 7,          # 続報を見張る日数
+    "concern_remind_s": 86400,        # 「あとで様子を確かめる」までの時間
+    "concern_report_ttl_s": 3 * 86400,   # 仲間のピンチの知らせは、相棒が戻るまでこの間取っておく
+
     # --- 独りの時間 (自習と耳の学習) ---
     "absent_after_s": 300,            # 声も人影もこの秒数なければ「独り」
     "study": True,

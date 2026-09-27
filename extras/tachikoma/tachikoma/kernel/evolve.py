@@ -98,6 +98,10 @@ GOALS = {
               "params": ("idle_rest_value", "wonder_interval_s")},
     "rapport": {"label": "関係", "metric": "good_ratio", "levels": ("param",),
                 "params": ("speak_threshold", "min_speak_interval_s", "persona_playfulness", "chat_temperature")},
+    # 何を先に考えるか (情報の優先度) の当たり具合。周辺の情報をどれだけ拾うかも含めて進化させる
+    "foresight": {"label": "先見", "metric": "foresight_auc", "levels": ("param", "code"),
+                  "params": ("peripheral_share", "peripheral_weight", "peripheral_relevance", "novelty_threshold"),
+                  "files": ("tachikoma/curiosity.py",)},
 }
 MIGRATIONS = (("goal", "TEXT"), ("novelty", "REAL"), ("approach", "TEXT"))
 
@@ -247,6 +251,8 @@ class Evolution:
         n["rationality"] = 0.2 if s["brier"] is None else min(1.0, max(0.0, (s["brier"] - 0.1) / 0.2))
         n["power"] = 0.1 if s["watts_mean"] is None else min(1.0, max(0.0, (s["watts_mean"] - 40) / 80))
         n["rapport"] = 0.1 if s["good_ratio"] is None else 1.0 - s["good_ratio"]
+        auc = s.get("foresight_auc")
+        n["foresight"] = 0.0 if auc is None else min(1.0, max(0.0, (0.85 - auc) / 0.35))
         return n
 
     def feasible_levels(self, goal):

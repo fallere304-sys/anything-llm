@@ -12,8 +12,10 @@ train_samples の各表) からカーネルが直接計算する。利用者の�
     電力          watts_mean (平均消費電力)                       低いほど良い
     頑健さ        errors_per_kstep                                 低いほど良い
     関係          good_ratio (/good と /bad・訂正の比)             高いほど良い
+    先見          foresight_auc (拾ったときの優先度が、後で役立った情報ほど高かったか)  高いほど良い
 """
 
+from .foresight import window_auc
 from .metrics import summary
 
 LOWER_IS_BETTER = {"brier", "step_p90", "latency_p90", "watts_mean", "errors_per_kstep"}
@@ -88,7 +90,13 @@ def window_stats(metrics, db, start, end):
         "knowledge": knowledge,
         "knowledge_per_wh": knowledge / wh if wh > 0 else None,
         "watts_mean": _mean(watts),
+        "foresight_auc": window_auc(db, start, end, metrics_horizon(end - start)),
     }
+
+
+def metrics_horizon(span_s):
+    """先見を測る期限: 窓の半分 (最大 6 時間)。窓の前半に拾った情報が、期限内に役立ったかを見る。"""
+    return min(6 * 3600, span_s / 2)
 
 
 def compare(before, after, cfg):

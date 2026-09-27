@@ -19,7 +19,10 @@ FORBIDDEN_MODULES = {
 # 思考のコードから import してよい内部モジュール (カーネルの実行系は不可)
 FORBIDDEN_INTERNAL = {"tachikoma.kernel.evolve", "tachikoma.kernel.sandbox", "tachikoma.kernel.guard",
                       "tachikoma.kernel.runtime", "tachikoma.kernel.cpu_brain", "tachikoma.learner",
-                      "tachikoma.asr_learner", "tachikoma.eye_learner", "tachikoma.config"}
+                      "tachikoma.asr_learner", "tachikoma.eye_learner", "tachikoma.config",
+                      "tachikoma.kernel.foresight"}
+# 先見の帳簿 (後で役に立ったか) の表。思考のコードが「役に立った」を水増しできないように、名前にも触れさせない
+PROTECTED_TABLES = ("info_items", "foresight_kv")
 # 学習結果の採否・進化の停止スイッチなど、選択の環境が使う記録の名前。思考のコードからは書けない
 PROTECTED_KEYS = {"active_model", "active_asr", "active_ocr", "evolution_frozen", "evolution_last",
                   "asr_versions", "ocr_versions", "finetune_backoff_until", "asr_backoff_until", "ocr_backoff_until"}
@@ -79,6 +82,9 @@ def check_source(relpath, source, plugin=False):
                     errors.append(f"{relpath}:{node.lineno}: open のモードは定数で書くこと")
         if not plugin and isinstance(node, ast.Constant) and node.value in PROTECTED_KEYS:
             errors.append(f"{relpath}:{node.lineno}: 選択の環境の記録には触れられない: {node.value!r}")
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and \
+                any(t in node.value for t in PROTECTED_TABLES):
+            errors.append(f"{relpath}:{node.lineno}: 先見の帳簿には触れられない: {node.value[:40]!r}")
         if isinstance(node, ast.Attribute) and node.attr in ("__subclasses__", "__globals__", "__builtins__"):
             errors.append(f"{relpath}:{node.lineno}: 内部属性への接近は禁止: {node.attr}")
     return errors

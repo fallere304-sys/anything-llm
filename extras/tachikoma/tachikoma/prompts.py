@@ -16,6 +16,7 @@ APPRAISE_SYSTEM = PERSONA + (
     "\n- basis=guessed: 確かめないとわからない仮説 (後で調べる対象になる)"
     "\n命題は1文で、真偽を確かめられる形で書く。最大4つ。"
     "\nremark はユーザーに今すぐ伝える価値がある気づき (エラーの見落とし等) があるときだけ書く。無ければ空文字。"
+    "\nentities は出来事に出てくる固有の名前 (人・組織・ソフトウェア・場所)。無ければ空。"
 )
 
 APPRAISE_SCHEMA = {
@@ -35,6 +36,17 @@ APPRAISE_SCHEMA = {
         },
         "remark": {"type": "string"},
         "remark_importance": {"type": "string", "enum": ["none", "low", "high"]},
+        "entities": {
+            "type": "array", "maxItems": 4,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["person", "organization", "software", "place", "other"]},
+                },
+                "required": ["name", "kind"],
+            },
+        },
     },
     "required": ["situation", "claims", "remark", "remark_importance"],
 }
@@ -136,3 +148,45 @@ WONDER_SCHEMA = {
     "required": ["hypotheses"],
 }
 
+
+TROUBLE_SYSTEM = (
+    "ニュースが、指定した仲間 (人・組織・ソフトウェア・場所) に悪いこと (災害・事故・病気・脆弱性・障害・"
+    "訴訟・経営難・争いなど) が起きていると伝えているかだけを判定します。"
+    "\n- about_them: ニュースの対象が本当にその仲間か。同じ名前の別物かもしれなければ false"
+    "\n- summary: 『(仲間の名前)が〜』の形の1文。ニュースに書いてあることだけで書く"
+    "\n- urgent: 命・安全・今日中の対応に関わるなら true"
+    "\n書かれていないことを補わない。悪いことでなければ trouble は none。"
+)
+
+TROUBLE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "about_them": {"type": "boolean"},
+        "trouble": {"type": "string", "enum": ["none", "disaster", "accident", "health", "security", "legal",
+                                               "financial", "outage", "conflict", "other"]},
+        "summary": {"type": "string"},
+        "urgent": {"type": "boolean"},
+    },
+    "required": ["about_them", "trouble", "summary", "urgent"],
+}
+
+ACT_SYSTEM = PERSONA + (
+    "\n仲間が困っているかもしれない。調べたことをもとに、あなたにできる行動を最大3つ選びます。"
+    "\nできるのは下の一覧の行動だけ。外に何かを送る・買う・投稿する・申し込むことはできないので、"
+    "それが必要なら suggest で相棒に提案する。確かめきれていないことは、確かめきれていないと書く。"
+    "\n- summary: 何が起きていて、どこまで確かめられたかを1〜2文で"
+)
+
+
+def act_schema(allowed):
+    return {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "actions": {"type": "array", "maxItems": 3, "items": {
+                "type": "object",
+                "properties": {"type": {"type": "string", "enum": list(allowed)}, "detail": {"type": "string"}},
+                "required": ["type", "detail"]}},
+        },
+        "required": ["summary", "actions"],
+    }
