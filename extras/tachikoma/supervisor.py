@@ -20,6 +20,16 @@ from tachikoma.kernel.evolve import emergency_revert  # noqa: E402
 from tachikoma.kernel.runtime import RESTART_CODE  # noqa: E402
 
 
+def say(msg, out=None):
+    """コンソールの文字コード (英語版 Windows の cp1252 など) で日本語を出せなくても落ちない。"""
+    out = out or sys.stdout
+    try:
+        print(msg, file=out)
+    except UnicodeEncodeError:
+        enc = getattr(out, "encoding", None) or "ascii"
+        print(msg.encode(enc, "backslashreplace").decode(enc), file=out)
+
+
 def main(argv=None, popen=subprocess.call, clock=time.time, max_runs=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     cfg_path = argv[argv.index("--config") + 1] if "--config" in argv else "config.json"
@@ -32,17 +42,17 @@ def main(argv=None, popen=subprocess.call, clock=time.time, max_runs=None):
         except KeyboardInterrupt:
             return 0
         if code == RESTART_CODE:
-            print("[supervisor] 自己改良を反映して再起動します")
+            say("[supervisor] 自己改良を反映して再起動します")
             continue
         if code in (0, 130, -2, 3221225786):     # 正常終了 / Ctrl+C (Windows の STATUS_CONTROL_C_EXIT 含む)
             return 0
         now = clock()
         crashes = [t for t in crashes if now - t < 600] + [now]
-        print(f"[supervisor] 異常終了 (code={code})")
+        say(f"[supervisor] 異常終了 (code={code})")
         if len(crashes) >= 3:
             cfg = config.load(cfg_path)
             msg = emergency_revert(cfg["db_path"], cfg, HERE)
-            print(f"[supervisor] {msg or '撤回できる自己改良がありません'}")
+            say(f"[supervisor] {msg or '撤回できる自己改良がありません'}")
             crashes = []
             if msg is None:
                 time.sleep(30)

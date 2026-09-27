@@ -467,6 +467,17 @@ class SupervisorTest(unittest.TestCase):
         self.assertEqual(calls[0], "1")
         self.assertEqual(reverted, [1])                      # 3 回続けて落ちたら最新の自己改良を撤回
 
+    def test_say_survives_non_japanese_console(self):
+        # 英語版 Windows のコンソール (cp1252) で日本語を出しても見守り役が落ちない
+        import io
+        sys.path.insert(0, ROOT)
+        import supervisor
+        buf = io.BytesIO()
+        out = io.TextIOWrapper(buf, encoding="cp1252")
+        supervisor.say("[supervisor] 自己改良を反映して再起動します", out=out)
+        out.flush()
+        self.assertTrue(buf.getvalue().startswith(b"[supervisor] \\u81ea"))
+
 
 if __name__ == "__main__":
     unittest.main()
