@@ -1,2 +1,3 @@
 config.json
 *.db
+finetune_runs/

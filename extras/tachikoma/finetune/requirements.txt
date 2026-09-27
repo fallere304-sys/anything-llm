@@ -1,0 +1,9 @@
+# 学習用 (Tachikoma 本体は標準ライブラリのみ。学習だけ別 venv にこれを入れる)
+# Windows + CUDA: torch は https://pytorch.org の手順で CUDA 版を入れること
+# (GTX 1060 = Pascal / sm_61。対応する CUDA 版の torch を選ぶ)
+torch
+transformers
+peft
+accelerate
+safetensors
+bitsandbytes

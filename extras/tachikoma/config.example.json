@@ -3,17 +3,24 @@
   "model": "gemma4:e2b",
   "num_ctx": 8192,
   "gpu_duty_cycle": 0.5,
-
   "db_path": "tachikoma.db",
-
-  "watch_dirs": ["C:/Users/you/projects/my-app"],
-  "terminal_logs": ["C:/Users/you/Documents/tachikoma-terminal.log"],
+  "watch_dirs": [
+    "C:/Users/you/projects/my-app"
+  ],
+  "terminal_logs": [
+    "C:/Users/you/Documents/tachikoma-terminal.log"
+  ],
   "clipboard": false,
   "active_window": true,
-
   "curiosity_threshold": 0.35,
   "speak_threshold": 0.6,
   "min_speak_interval_s": 90,
   "allow_ask_user": true,
+  "finetune_enabled": true,
+  "finetune_python": "C:/tachikoma-train/Scripts/python.exe",
+  "hf_base_model": "google/gemma-4-E2B-it",
+  "finetune_after_idle_s": 7200,
+  "finetune_min_new_samples": 20,
+  "llama_cpp_dir": "",
   "verbose": true
 }

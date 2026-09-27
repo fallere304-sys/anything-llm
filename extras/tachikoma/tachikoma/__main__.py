@@ -5,6 +5,8 @@ import sys
 
 from . import config, sensors
 from .agent import Tachikoma
+from .dataset import TrainingData
+from .learner import Learner
 from .llm import LLMError, OllamaClient
 from .memory import Memory
 from .probes import Probes
@@ -29,11 +31,15 @@ def main(argv=None):
         return 1
 
     memory = Memory(cfg["db_path"])
+    data = TrainingData(memory)
+    learner = Learner(cfg, data, llm)
+    llm.model = learner.active_model()      # 前回までに採用した学習済みの版があればそれを使う
     agent = Tachikoma(cfg, llm, memory, sensors.build(cfg), Probes(cfg, memory),
-                      idle_fn=sensors.idle_seconds)
+                      idle_fn=sensors.idle_seconds, data=data, learner=learner)
     try:
         agent.run_forever()
     except KeyboardInterrupt:
+        learner.abort()
         agent.say("おやすみなさい。")
     return 0
 

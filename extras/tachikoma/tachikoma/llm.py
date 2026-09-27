@@ -51,16 +51,17 @@ class GpuGate:
 
 class OllamaClient:
     def __init__(self, cfg, gate=None):
-        self.url = cfg["ollama_url"].rstrip("/") + "/api/chat"
+        self.base_url = cfg["ollama_url"].rstrip("/")
+        self.url = self.base_url + "/api/chat"
         self.model = cfg["model"]
         self.num_ctx = cfg["num_ctx"]
         self.timeout = cfg["request_timeout"]
         self.gate = gate or GpuGate(cfg["gpu_duty_cycle"])
         self._think_supported = True
 
-    def _post(self, body):
+    def _post(self, body, url=None):
         req = urllib.request.Request(
-            self.url, data=json.dumps(body).encode("utf-8"),
+            url or self.url, data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
         try:
@@ -72,10 +73,15 @@ class OllamaClient:
         except (urllib.error.URLError, TimeoutError) as e:
             raise LLMError(f"Ollama に接続できません ({self.url}): {e}") from e
 
-    def chat(self, system, user, schema=None, think=False, max_tokens=512, temperature=0.3):
+    def unload(self, model=None):
+        """VRAM を空ける (学習の前に呼ぶ)。"""
+        self._post({"model": model or self.model, "keep_alive": 0}, self.base_url + "/api/generate")
+
+    def chat(self, system, user, schema=None, think=False, max_tokens=512, temperature=0.3,
+             model=None):
         """schema を渡すと Ollama の structured output で JSON を強制し、dict を返す。"""
         body = {
-            "model": self.model,
+            "model": model or self.model,
             "stream": False,
             # -1: モデルを VRAM に常駐させる (毎回のロードで数秒失うのを防ぐ)
             "keep_alive": -1,

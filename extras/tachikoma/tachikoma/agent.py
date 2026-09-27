@@ -4,6 +4,11 @@
       → 好奇心 (低確度の仮説を選び、調べ、判定し、信念を更新)
       → 発話 (伝える価値 > 割り込みコスト のときだけ)
       → 睡眠 (長い無操作時に記憶を整理)
+      → 学習 (さらに長い無操作時に、裏付けのある標本で LoRA ファインチューン)
+
+学習標本は 2 経路で溜まる (dataset.py):
+  - ユーザーとのやり取り: /good /bad 訂正、質問への回答、本人の申告
+  - 自律調査: 仮説が外部の根拠で確定したとき、知識と「結論と整合した判定」を記録
 
 GPU 推論は 1 tick に最大 1 回。ユーザーの話しかけだけは即時・最優先。
 """
@@ -12,6 +17,7 @@ import time
 
 from . import curiosity, prompts
 from .llm import LLMError
+from .dataset import TrainingData
 from .memory import FACT, INFERENCE, REFUTED, SPECULATION, Memory
 from .text import clip, overlap
 
@@ -27,8 +33,10 @@ SITUATION_HALF_LIFE = 2 * 3600
 
 class Tachikoma:
     def __init__(self, cfg, llm, memory: Memory, sensors, probes, out=print,
-                 clock=time.time, idle_fn=None):
+                 clock=time.time, idle_fn=None, data=None, learner=None):
         self.cfg, self.llm, self.memory = cfg, llm, memory
+        self.data = data or TrainingData(memory)
+        self.learner = learner
         self.sensors, self.probes = sensors, probes
         self.out, self.clock = out, clock
         self.idle_fn = idle_fn or (lambda: None)
@@ -57,7 +65,13 @@ class Tachikoma:
         self.memory.decay_relevance(now - self.last_tick, self.cfg["relevance_half_life_s"])
         self.last_tick = now
 
-        if now >= self.backoff_until and self.llm.gate.can_run_background():
+        if self.learner is not None:
+            msg = self.learner.poll()
+            if msg:
+                self.say(msg)
+        training = self.learner is not None and self.learner.busy
+        # 学習中は GPU を学習プロセスに明け渡す (知覚と記録だけ続ける)
+        if not training and now >= self.backoff_until and self.llm.gate.can_run_background():
             try:
                 self.appraise_next() or self.curiosity_step()
             except LLMError as e:
@@ -65,39 +79,83 @@ class Tachikoma:
                 self.backoff_until = now + 30
         self.maybe_speak()
         self.maybe_sleep()
+        self.maybe_learn()
 
     # ------------------------------------------------------------- perceive
     def perceive(self, source, kind, content):
         now = self.clock()
+        if kind == "user_message" and content.startswith("/"):
+            self.last_activity = now
+            self.on_command(content)
+            return
         novelty = self.memory.novelty(source, content)
         eid = self.memory.add_event(source, kind, content, novelty)
         self.memory.touch_relevance(content)
         self.last_activity = now
         self.slept = False
         if kind == "user_message":
-            self.on_user_message(content)
+            try:
+                self.on_user_message(content)
+            except LLMError as e:
+                self.say(f"(推論に失敗しました: {e})")
         elif novelty < self.cfg["novelty_threshold"]:
             self.memory.mark_appraised(eid, 2)   # 既視感: 考えるまでもない
 
     def on_user_message(self, text):
+        if self.learner is not None and self.learner.busy:
+            self.learner.abort()     # ユーザー最優先: 学習を止めて GPU を返してもらう
+            msg = self.learner.poll()
+            self.say(msg or "学習を中断しました。")
         if self.asked is not None:
             b = self.memory.get_belief(self.asked)
             if b is not None:
-                verdict = self.llm.chat(
-                    prompts.JUDGE_SYSTEM,
-                    f"仮説: {b.statement}\n根拠 (ユーザーの回答): {text}",
-                    schema=prompts.JUDGE_SCHEMA, max_tokens=160)
+                verdict = self.judge(b, f"仮説: {b.statement}\n根拠 (ユーザーの回答): {text}", "user")
                 if verdict.get("verdict") != "irrelevant":
                     self.apply_verdict(b, verdict, "user", 1.0, "ユーザー回答: " + clip(text, 200))
                     self.asked = None
+        user = self.context_text() + "\n\n# ユーザーの発言\n" + text
+        # 即効層: 学習前でも、過去に裏付けの取れた例をプロンプトに添える
+        shots = "\n".join(x for x in (self.data.examples("knowledge", text),
+                                       self.data.examples("chat", text)) if x)
         try:
-            reply = self.llm.chat(prompts.CHAT_SYSTEM,
-                                  self.context_text() + "\n\n# ユーザーの発言\n" + text,
+            reply = self.llm.chat(prompts.CHAT_SYSTEM, (shots + "\n\n" if shots else "") + user,
                                   max_tokens=400, temperature=0.5)
         except LLMError as e:
-            reply = f"(推論に失敗しました: {e})"
+            self.say(f"(推論に失敗しました: {e})")
+            return
         self.say(reply)
         self.memory.add_event("self", "reply", reply, 0.0)
+        self.data.remember_chat(prompts.CHAT_SYSTEM, user, reply)
+
+    def on_command(self, text):
+        cmd, _, arg = text.partition(" ")
+        arg = arg.strip()
+        if cmd == "/good":
+            ok = self.data.feedback(True)
+            self.say("覚えておきます。" if ok else "評価できる直前の応答がありません。")
+        elif cmd == "/bad":
+            ok = self.data.feedback(False, arg)
+            if not ok:
+                self.say("評価できる直前の応答がありません。")
+            else:
+                self.say("訂正を覚えておきます。" if arg else
+                         "記録しました。正解を `/bad 正しい答え` の形で教えてもらえると学習に使えます。")
+        elif cmd == "/learn":
+            if self.learner is None:
+                self.say("学習機能は無効です。")
+            else:
+                self.say(self.learner.start("手動") or "学習できる標本がないか、既に学習中です。")
+        elif cmd == "/rollback":
+            if self.learner is None:
+                self.say("学習機能は無効です。")
+            else:
+                self.say(f"{self.learner.rollback()} に戻しました。")
+        elif cmd == "/status":
+            model = self.learner.active_model() if self.learner else self.llm.model
+            stage = f" / 学習中: {self.learner.stage}" if self.learner and self.learner.busy else ""
+            self.say(f"モデル: {model}{stage} / 標本: {self.data.stats()} / 未学習: {self.data.count_new()} 件")
+        else:
+            self.say("コマンド: /good, /bad [正しい答え], /learn, /rollback, /status")
 
     # ------------------------------------------------------------- appraise
     def appraise_next(self):
@@ -127,8 +185,13 @@ class Tachikoma:
                 p, source = BASIS_PRIOR["inferred"]
             elif source == "observation" and ev["source"] == "user":
                 source = "user"
-            self.memory.add_belief(st, p, source, relevance=1.0, half_life=SITUATION_HALF_LIFE,
-                                   evidence=f"{ev['kind']}#{ev['id']}")
+            bid = self.memory.add_belief(st, p, source, relevance=1.0, half_life=SITUATION_HALF_LIFE,
+                                         evidence=f"{ev['kind']}#{ev['id']}")
+            if source == "user":
+                # 本人の申告は、それ自体が学習できる知識
+                b = self.memory.get_belief(bid)
+                if b.label() == FACT:
+                    self.data.on_resolved(b)
         remark, imp = (res.get("remark") or "").strip(), res.get("remark_importance")
         if remark and imp in ("low", "high"):
             self.memory.add_utterance("remark", remark, 0.85 if imp == "high" else 0.45)
@@ -173,16 +236,16 @@ class Tachikoma:
             return True
 
         evidence = self.probes.run(name, query or target.statement)
+        ev_key = f"{name}: {clip(evidence, 200)}" if evidence else None
+        if ev_key and any(ev_key[len(name) + 2:] == e.split(": ", 1)[-1] for e in target.evidence):
+            evidence = None     # 既に見た根拠: 同じ証拠を二重に数えない (独立な根拠ではない)
         if not evidence:
             nb = self.memory.update_belief(target.id, 0.0, target.source, count_attempt=True)
             self._maybe_give_up(nb)
             return True
-        verdict = self.llm.chat(
-            prompts.JUDGE_SYSTEM,
-            f"仮説: {target.statement}\n\n根拠 ({name}):\n{clip(evidence, 2500)}",
-            schema=prompts.JUDGE_SCHEMA, max_tokens=160)
-        self.apply_verdict(target, verdict, spec.source, spec.reliability,
-                           f"{name}: {clip(evidence, 200)}")
+        verdict = self.judge(target, f"仮説: {target.statement}\n\n根拠 ({name}):\n{clip(evidence, 2500)}",
+                             spec.source)
+        self.apply_verdict(target, verdict, spec.source, spec.reliability, ev_key)
         return True
 
     def apply_verdict(self, b, verdict, source, reliability, evidence):
@@ -196,6 +259,9 @@ class Tachikoma:
                                        evidence=evidence, count_attempt=True)
         after = nb.label()
         self.log(f"更新: {nb!r} ({verdict.get('reason', '')})")
+        if after != before and after in (FACT, REFUTED):
+            added, dropped = self.data.on_resolved(nb)
+            self.log(f"学習標本 +{added} (結論と矛盾した判定 {dropped} 件は不採用)")
         if before == SPECULATION and after in (FACT, INFERENCE, REFUTED):
             self.memory.add_utterance(
                 "finding", f"確かめた: {nb.statement} → [{after}] {verdict.get('reason', '')}".strip(),
@@ -203,6 +269,14 @@ class Tachikoma:
         else:
             self._maybe_give_up(nb)
         return nb
+
+    def judge(self, b, user, source):
+        """判定し、後で結論が出たときの事後ラベル付けのために記録しておく。"""
+        shots = self.data.examples("judge", user)
+        verdict = self.llm.chat(prompts.JUDGE_SYSTEM, (shots + "\n\n" if shots else "") + user,
+                                schema=prompts.JUDGE_SCHEMA, max_tokens=160)
+        self.data.record_judgment(b.id, user, verdict, source)
+        return verdict
 
     def _maybe_give_up(self, b):
         """何度調べても減らない不確実性は『今は解けない』として好奇心の対象から外す。"""
@@ -254,6 +328,19 @@ class Tachikoma:
             except LLMError as e:
                 self.log(f"要約失敗: {e}")
         self.log(f"睡眠: 信念 {removed} 件を整理")
+
+    # ---------------------------------------------------------------- learn
+    def maybe_learn(self):
+        if self.learner is None or self.learner.busy:
+            return
+        now = self.clock()
+        idle = self.idle_fn()
+        if idle is None:
+            idle = now - self.last_activity
+        if self.learner.should_train(idle, now):
+            msg = self.learner.start("睡眠中の自動学習")
+            if msg:
+                self.log(msg)
 
     # --------------------------------------------------------------- helpers
     def context_text(self, k=8):
