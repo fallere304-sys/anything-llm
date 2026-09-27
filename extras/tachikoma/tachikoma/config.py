@@ -170,6 +170,45 @@ DEFAULTS = {
     "gpu_tdp_w": 120,                 # GTX 1060
     "cpu_tdp_w": 65,                  # i7-7700
 
+    # --- 資源の予算 (利用者が決める上限。タチコマは自分で上げられない) ---
+    "budget_vram_gb": 6,
+    "budget_ram_gb": 8,
+    "budget_threads": 6,              # i7-7700 は 4 コア 8 スレッド → 論理 6 スレッドまで
+    "budget_disk_gb": 20,
+
+    # --- 自己進化・自己強化 (CPU と RAM で動く) ---
+    "evolution_enabled": True,
+    "evolution_dir": "evolution",
+    "evolution_interval_s": 1800,     # 次の自己改良を始めるまでの最短間隔
+    "evolution_window_h": 24,         # 「いまの必要度」を測る期間
+    "evolution_explore": 0.3,
+    "evolution_bold": 0.6,            # 使えるときに大胆な階層 (code) を選ぶ確率
+    "evolution_min_gain": 0.03,       # 狙った指標がこれ以上改善したら定着
+    "novelty_web_weight": 0.6,        # 新しさのうち「ネット・論文で見つからない」の比重
+    "novelty_bonus": 1.0,             # 新しいやり方で成功したときの追加報酬
+    "discovery_web_novelty": 0.8,     # これ以上ネットで見当たらない改良を「発見」として記録
+    "canary_hours": 12,               # 試用期間
+    "canary_min_steps": 500,
+    "hotspot_min_s": 0.05,
+    "profile_every": 300,             # 何 step ごとに 1 回プロファイルを取るか
+    "sandbox": "docker",              # docker / local (local は allow_local_sandbox が必要)
+    "allow_local_sandbox": False,
+    "sandbox_image": "python:3.11-slim",
+    "sandbox_timeout_s": 900,
+    "docker_bin": "docker",
+    # CPU の脳 (Docker の llama.cpp サーバー)。GGUF は利用者が用意する
+    "cpu_brain_mode": "docker",       # docker / external (自分で起動した OpenAI 互換サーバー)
+    "cpu_brain_url": "http://127.0.0.1:8081",
+    "cpu_brain_image": "ghcr.io/ggml-org/llama.cpp:server",
+    "cpu_brain_models": {
+        "code": "models/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        "ja": "models/RakutenAI-7B-instruct-q4_K_M.gguf",
+    },
+    "cpu_brain_ctx": 8192,
+    "cpu_brain_ram_gb": 6,
+    "evolution_threads": 4,           # 2 スレッドは会話・耳・目のために残す
+    "cpu_brain_timeout_s": 1800,
+
     # --- 実行ファイル (tachikoma.exe) 用 ---
     # exe は Python 本体と標準ライブラリだけを内蔵する。音声・OCR など重い依存は、
     # 同じ Python 3.11 の venv の site-packages をここに指定すると読み込める
@@ -189,9 +228,12 @@ DEFAULTS = {
 
 def load(path=None):
     cfg = dict(DEFAULTS)
+    user = {}
     if path and os.path.exists(path):
         with open(path, encoding="utf-8") as f:
-            cfg.update(json.load(f))
+            user = json.load(f)
+        cfg.update(user)
+    cfg["_user_keys"] = set(user)     # 利用者が明示した値は、進化で上書きしない
     cfg["watch_dirs"] = [os.path.abspath(os.path.expanduser(d)) for d in cfg["watch_dirs"]]
     cfg["terminal_logs"] = [os.path.abspath(os.path.expanduser(p)) for p in cfg["terminal_logs"]]
     cfg["study_media_dirs"] = [os.path.abspath(os.path.expanduser(d)) for d in cfg["study_media_dirs"]]

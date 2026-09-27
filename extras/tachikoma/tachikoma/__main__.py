@@ -27,6 +27,9 @@ def main(argv=None):
         first_run_config(args.config)
     cfg = config.load(args.config)
     cfg["verbose"] = args.verbose or cfg.get("verbose", False)
+    from .kernel.evolve import apply_params, apply_prompts
+    evolved = apply_params(cfg)                # 自己進化したパラメータ (範囲内・利用者の明示値は優先)
+    evolved_prompts = apply_prompts()          # 自己進化した指示文
     for p in cfg.get("extra_site_packages") or []:
         # exe は重い依存 (faster-whisper / torch 等) を内蔵しない。同じ Python 3.11 の venv を借りる
         if os.path.isdir(p) and p not in sys.path:
@@ -115,6 +118,29 @@ def main(argv=None):
                       tts=tts, study=study, asr_learner=asr_learner, eyes=eyes, eye_learner=eye_learner,
                       idle=idle, ui=ui, power=power)
     log.append(agent.log)
+    if evolved or evolved_prompts:
+        agent.log(f"自己進化の結果を反映: {evolved} {evolved_prompts}")
+
+    # ---- 自己進化・自己強化 (CPU と RAM で動く。GPU は会話・耳・目に残す) ----
+    from .kernel import runtime
+    from .kernel.budget import Budget
+    from .kernel.cpu_brain import CpuBrain
+    from .kernel.evolve import Evolution
+    from .kernel.metrics import Metrics
+    from .kernel.novelty import NoveltyJudge
+    from .kernel.sandbox import Sandbox
+    budget = Budget(cfg)
+    metrics = Metrics(memory.db)
+    brain = CpuBrain(cfg, budget)
+    evolution = None
+    if cfg["evolution_enabled"] and config.frozen():
+        # exe は起動のたびに一時フォルダへ展開されるので、自分を書き換えても残らない
+        agent.log("自己進化はソースから起動したとき (python supervisor.py) だけ有効です")
+    elif cfg["evolution_enabled"]:
+        evolution = Evolution(cfg, memory, brain, Sandbox(cfg, budget), metrics,
+                              novelty=NoveltyJudge(cfg, scholar=scholar, web=web))
+        if not brain.available():
+            agent.log("CPU の脳のモデルが無いので、自己進化はパラメータの調整だけ行います (README 参照)")
     # 独りの時間の候補。耳と目 (自習・学習) は同時には走らない: スケジューラが 1 つずつ選ぶ
     alone = agent.attention.alone_for
     if study is not None:
@@ -129,7 +155,16 @@ def main(argv=None):
         idle.register("brain_train", TrainActivity("brain", learner, data, alone, agent.log))
     idle.register("reading", ReadingActivity(agent))
     try:
-        agent.run_forever()
+        agent.say("起動しました。見てます。")
+        code = runtime.run(agent, cfg, metrics, evolution=evolution, brain=brain if evolution else None,
+                           power=power)
+        if code == runtime.RESTART_CODE:
+            agent.say("自分を改良したので、少し再起動するね！")
+            for lr in agent.learners():
+                lr.abort()
+            if ui is not None:
+                ui.close()
+            runtime.restart(code)
     except KeyboardInterrupt:
         for lr in agent.learners():
             lr.abort()
@@ -139,6 +174,8 @@ def main(argv=None):
         agent.say("おやすみなさい。")
         if ui is not None:
             ui.close()
+        if evolution is not None:
+            brain.stop()
     return 0
 
 

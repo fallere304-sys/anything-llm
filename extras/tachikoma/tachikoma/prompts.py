@@ -135,3 +135,4 @@ WONDER_SCHEMA = {
     "properties": {"hypotheses": {"type": "array", "maxItems": 2, "items": {"type": "string"}}},
     "required": ["hypotheses"],
 }
+

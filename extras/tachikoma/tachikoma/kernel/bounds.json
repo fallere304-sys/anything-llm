@@ -1,0 +1,59 @@
+{
+  "_comment": "進化で動かしてよいパラメータとその範囲 (カーネル)。利用者が config で明示した値は進化で上書きしない。",
+  "curiosity_threshold": [
+    0.2,
+    0.6
+  ],
+  "novelty_threshold": [
+    0.2,
+    0.6
+  ],
+  "speak_threshold": [
+    0.45,
+    0.85
+  ],
+  "min_speak_interval_s": [
+    30,
+    600
+  ],
+  "max_probe_attempts": [
+    2,
+    6
+  ],
+  "relevance_half_life_s": [
+    600,
+    7200
+  ],
+  "wonder_interval_s": [
+    300,
+    3600
+  ],
+  "challenge_share": [
+    0.0,
+    0.4
+  ],
+  "study_cer_min": [
+    0.02,
+    0.1
+  ],
+  "study_cer_max": [
+    0.3,
+    0.7
+  ],
+  "persona_playfulness": [
+    0.2,
+    0.9
+  ],
+  "persona_skepticism": [
+    0.3,
+    0.95
+  ],
+  "chat_temperature": [
+    0.2,
+    0.9
+  ],
+  "idle_rest_value": [
+    0.05,
+    1.0
+  ]
+}

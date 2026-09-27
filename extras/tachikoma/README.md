@@ -185,6 +185,27 @@ pip install -r requirements-eye.txt        # torch / torchvision / transformers 
 1 つずつ選ぶ (耳と目は並行しない)。伸びなくなった練習は自然に選ばれなくなり、どれも割に合わなければ休んで電力を節約する。
 何をなぜ選んだかは画面と `/status` に出る。詳しくは DESIGN.md §15。
 
+## 自己進化・自己強化 (CPU と RAM で動く)
+
+タチコマが自分の「思考」のコード・指示文・性格パラメータを改良する。GPU は使わず、
+**Docker の中の llama.cpp (CPU 専用、4 スレッド・6GB まで)** で考え、**Docker の隔離環境で全テストに合格した変更だけ**を入れ、
+12 時間の試用期間で良くなったものだけを残す。**論文やネットで見つからない新しいやり方ほど高く評価して試す。**
+
+1. 役割ごとの GGUF を `models/` に置く (どちらか片方だけでも動く):
+   - `models/qwen2.5-coder-7b-instruct-q4_k_m.gguf` — コードの改良用 (コード特化)
+   - `models/RakutenAI-7B-instruct-q4_K_M.gguf` — 日本語の指示文の書き直し・アイデア出し用
+2. Docker Desktop を起動しておく (隔離テストと CPU の脳に使う)
+3. ソースから、見守り役ごと起動する (自己改良後の再起動と、壊れたときの自動撤回を担う):
+   ```powershell
+   python supervisor.py --config config.json --verbose
+   ```
+   exe では自己進化は動かない (起動のたびに一時フォルダに展開されるので、書き換えが残らない)。
+
+進化の方向 (頑健さ・速さ・知識の効率・合理性・省電力・関係) はタチコマ自身が、実運用の数値と過去の成功率から選ぶ。
+変えられないもの (テスト・評価・学習の採否・資源の上限・ネットに触れる部分) は「カーネル」として固定されていて、
+変更は提案だけ・あなたの `/approve` が必要。監督コマンド: `/evolution` `/freeze` `/unfreeze` `/revert N` `/proposals` `/approve N` `/discoveries`。
+詳しくは DESIGN.md §13。
+
 ## VRAM と RAM の配分
 
 「モデルは VRAM、コンテキストは RAM」は Gemma 4 E2B では得にならない (KV キャッシュが 128K でも 1GB 弱と小さく、

@@ -9,3 +9,5 @@ dist/
 build/
 .build-venv/
 *.spec
+models/
+evolution/
