@@ -5,3 +5,7 @@ study/
 anchors/
 ui/assets/*
 !ui/assets/.gitkeep
+dist/
+build/
+.build-venv/
+*.spec

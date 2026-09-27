@@ -15,6 +15,7 @@ import threading
 import time
 from collections import defaultdict
 
+from .config import training_python
 from .learner import Aborted, StepFailed, default_runner
 from .text import cer
 
@@ -110,7 +111,10 @@ class EyeLearner:
                     pass
             self.stage = "OCR 学習"
             out = os.path.join(vdir, "model")
-            py = cfg["finetune_python"] or sys.executable
+            py = training_python(cfg)
+            if py is None:
+                raise StepFailed("学習には Python の環境が必要です。config.json の finetune_python に"
+                                 " 学習用 venv の python.exe を指定してください")
             self._run([py, TRAIN_SCRIPT, "--base", cfg["ocr_model"],   # 毎回、元のモデルから学習し直す
                        "--train", train_path, "--out", out] + list(cfg["ocr_finetune_args"]),
                       cfg["finetune_timeout_s"])

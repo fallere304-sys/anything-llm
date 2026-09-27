@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 
+from .config import training_python
 from . import prompts
 from .llm import LLMError
 from .text import jaccard
@@ -146,7 +147,10 @@ class Learner:
 
             self.stage = "LoRA 学習"
             adapter_dir = os.path.join(vdir, "adapter")
-            py = cfg["finetune_python"] or sys.executable
+            py = training_python(cfg)
+            if py is None:
+                raise StepFailed("学習には Python の環境が必要です。config.json の finetune_python に"
+                                 " 学習用 venv の python.exe を指定してください")
             self._run([py, TRAIN_SCRIPT, "--base", cfg["hf_base_model"], "--train", train_path,
                        "--out", adapter_dir] + list(cfg["finetune_args"]), cfg["finetune_timeout_s"])
             self._check_abort()

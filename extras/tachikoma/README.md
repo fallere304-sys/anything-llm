@@ -14,6 +14,26 @@
 - 推論: Ollama 上の `gemma4:e2b` (他のモデルでも可)
 - 想定環境: Windows 10 / i7-7700 / RAM 16GB / GTX 1060 6GB
 
+## すぐ試す: tachikoma.exe
+
+Python を入れなくても動く実行ファイル。GitHub Actions ("Build tachikoma.exe") の実行結果ページの
+**Artifacts → tachikoma-windows** からダウンロードできる (自分で作るなら `packaging\build_exe.ps1`)。
+
+1. Ollama を入れて `ollama pull gemma4:e2b` しておく
+2. 好きなフォルダに `tachikoma.exe` を置いてダブルクリック
+3. 初回は同じフォルダに `config.json` と `README.md` が作られ、ブラウザで画面 (http://127.0.0.1:8765) が開く
+
+exe に入っているのは本体 (会話・好奇心・記憶・性格・論文検索・画面) だけ。音声・カメラ・目 (OCR)・学習は重い依存
+(faster-whisper / torch など) が要るので、**Python 3.11** の venv にそれらを入れ、`config.json` で借りる:
+
+```json
+"extra_site_packages": ["C:/tachikoma-train/Lib/site-packages"],
+"finetune_python": "C:/tachikoma-train/Scripts/python.exe",
+"voice": true, "eye": true
+```
+
+> exe は署名していないので、初回に Windows SmartScreen の警告が出ることがある (「詳細情報」→「実行」)。
+
 ## セットアップ (Windows 10)
 
 1. Ollama をインストールし、モデルを取得:

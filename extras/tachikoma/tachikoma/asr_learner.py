@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 
+from .config import training_python
 from .learner import Aborted, StepFailed, default_runner
 from .text import cer
 
@@ -121,7 +122,10 @@ class AsrLearner:
         cfg = self.cfg
         result = {"version": version, "train_ids": train_ids, "ok": False, "adopt": False}
         try:
-            py = cfg["finetune_python"] or sys.executable
+            py = training_python(cfg)
+            if py is None:
+                raise StepFailed("学習には Python の環境が必要です。config.json の finetune_python に"
+                                 " 学習用 venv の python.exe を指定してください")
             merged, ct2 = os.path.join(vdir, "merged"), os.path.join(vdir, "ct2")
             if self.llm is not None:
                 self.stage = "VRAM 解放"

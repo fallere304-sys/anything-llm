@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 
 DEFAULTS = {
     # --- 推論バックエンド (Ollama) ---
@@ -169,6 +170,12 @@ DEFAULTS = {
     "gpu_tdp_w": 120,                 # GTX 1060
     "cpu_tdp_w": 65,                  # i7-7700
 
+    # --- 実行ファイル (tachikoma.exe) 用 ---
+    # exe は Python 本体と標準ライブラリだけを内蔵する。音声・OCR など重い依存は、
+    # 同じ Python 3.11 の venv の site-packages をここに指定すると読み込める
+    "extra_site_packages": [],
+    "ui_open_browser": True,
+
     # --- UI ---
     "ui": True,
     "ui_port": 8765,
@@ -190,3 +197,13 @@ def load(path=None):
     cfg["study_media_dirs"] = [os.path.abspath(os.path.expanduser(d)) for d in cfg["study_media_dirs"]]
     cfg["eye_pdf_dirs"] = [os.path.abspath(os.path.expanduser(d)) for d in cfg["eye_pdf_dirs"]]
     return cfg
+
+
+def frozen():
+    """PyInstaller で固めた実行ファイル (tachikoma.exe) として動いているか。"""
+    return bool(getattr(sys, "frozen", False))
+
+
+def training_python(cfg):
+    """学習スクリプトを動かす Python。exe 自身は Python として使えないので、exe では設定が必須。"""
+    return cfg.get("finetune_python") or (None if frozen() else sys.executable)

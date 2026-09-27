@@ -1,6 +1,9 @@
-"""起動: python -m tachikoma --config config.json [--verbose]"""
+"""起動: python -m tachikoma --config config.json [--verbose]  /  tachikoma.exe [--config ...]"""
 
 import argparse
+import json
+import os
+import shutil
 import sys
 
 from . import config, sensors
@@ -20,8 +23,14 @@ def main(argv=None):
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    if config.frozen() and not os.path.exists(args.config):
+        first_run_config(args.config)
     cfg = config.load(args.config)
     cfg["verbose"] = args.verbose or cfg.get("verbose", False)
+    for p in cfg.get("extra_site_packages") or []:
+        # exe は重い依存 (faster-whisper / torch 等) を内蔵しない。同じ Python 3.11 の venv を借りる
+        if os.path.isdir(p) and p not in sys.path:
+            sys.path.append(p)
 
     llm = OllamaClient(cfg)
     try:
@@ -81,8 +90,12 @@ def main(argv=None):
         from .ui import UIServer, UISensor
         ui = UIServer(cfg)
         try:
-            print(f"画面: {ui.start()}")
+            url = ui.start()
+            print(f"画面: {url}")
             senses.append(UISensor(ui))
+            if cfg.get("ui_open_browser") and config.frozen():
+                import webbrowser
+                webbrowser.open(url)
         except OSError as e:
             print(f"画面を開けません (ポート {cfg['ui_port']} が使用中?): {e}")
             ui = None
@@ -127,6 +140,24 @@ def main(argv=None):
         if ui is not None:
             ui.close()
     return 0
+
+
+def first_run_config(path):
+    """exe の初回起動: 同梱の設定例をもとに config.json を作る (音声などは依存が揃うまで無効)。"""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    example = os.path.join(base, "config.example.json")
+    cfg = {}
+    if os.path.exists(example):
+        with open(example, encoding="utf-8") as f:
+            cfg = json.load(f)
+    cfg.update({"watch_dirs": [], "terminal_logs": [], "voice": False, "study": False, "eye": False,
+                "camera": False, "finetune_python": None, "ui": True})
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    readme = os.path.join(base, "README.md")
+    if os.path.exists(readme) and not os.path.exists("README.md"):
+        shutil.copy(readme, "README.md")
+    print(f"初回起動: {os.path.abspath(path)} を作りました。音声・目・学習は README.md の手順で依存を入れてから有効にしてください。")
 
 
 if __name__ == "__main__":
