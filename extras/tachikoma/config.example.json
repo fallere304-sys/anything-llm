@@ -1,0 +1,19 @@
+{
+  "ollama_url": "http://127.0.0.1:11434",
+  "model": "gemma4:e2b",
+  "num_ctx": 8192,
+  "gpu_duty_cycle": 0.5,
+
+  "db_path": "tachikoma.db",
+
+  "watch_dirs": ["C:/Users/you/projects/my-app"],
+  "terminal_logs": ["C:/Users/you/Documents/tachikoma-terminal.log"],
+  "clipboard": false,
+  "active_window": true,
+
+  "curiosity_threshold": 0.35,
+  "speak_threshold": 0.6,
+  "min_speak_interval_s": 90,
+  "allow_ask_user": true,
+  "verbose": true
+}
