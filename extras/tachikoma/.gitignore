@@ -3,3 +3,5 @@ config.json
 finetune_runs/
 study/
 anchors/
+ui/assets/*
+!ui/assets/.gitkeep

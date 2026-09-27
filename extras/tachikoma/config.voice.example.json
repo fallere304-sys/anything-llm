@@ -2,7 +2,7 @@
   "user_name": "",
   "ollama_url": "http://127.0.0.1:11434",
   "model": "gemma4:e2b",
-  "num_ctx": 8192,
+  "num_ctx": 16384,
   "gpu_duty_cycle": 0.5,
   "db_path": "tachikoma.db",
   "voice": true,
@@ -30,5 +30,10 @@
   "finetune_python": "C:/tachikoma-train/Scripts/python.exe",
   "hf_base_model": "google/gemma-4-E2B-it",
   "asr_hf_base": "openai/whisper-small",
+  "eye": true,
+  "eye_dir": "study/eye",
+  "ocr_model": "kha-white/manga-ocr-base",
+  "ui": true,
+  "ui_port": 8765,
   "verbose": true
 }

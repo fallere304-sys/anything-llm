@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>タチコマ</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="layout">
+  <section class="stage" aria-label="タチコマ">
+    <div class="bubble" id="bubble" hidden></div>
+    <div class="avatar-wrap expr-idle" id="avatar">
+      <img id="avatar-img" src="/static/avatar.svg" alt="タチコマ">
+      <span class="badge" id="badge" aria-hidden="true"></span>
+      <span class="zzz" aria-hidden="true">z z Z</span>
+      <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+    </div>
+    <div class="activity" id="activity">起動中…</div>
+  </section>
+
+  <section class="talk" aria-label="会話">
+    <ol class="log" id="log"></ol>
+    <form class="input" id="form">
+      <input id="text" autocomplete="off" placeholder="タチコマに話しかける…" aria-label="メッセージ">
+      <button type="submit">送る</button>
+    </form>
+  </section>
+</main>
+
+<footer class="status">
+  <span><b>注意</b> <em id="st-mode">-</em></span>
+  <span><b>耳</b> CER <em id="st-ear">-</em></span>
+  <span><b>目</b> CER <em id="st-eye">-</em></span>
+  <span><b>電力</b> <em id="st-w">-</em></span>
+  <span><b>モデル</b> <em id="st-model">-</em></span>
+</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

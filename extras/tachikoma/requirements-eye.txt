@@ -1,0 +1,7 @@
+# 目 (日本語 OCR) の自習・学習用。学習用 venv に入れれば本体と共用できる
+# torch は GTX 1060 (Pascal, sm_61) を含む CUDA 版を入れること (README 参照)
+torch
+torchvision
+transformers
+pymupdf
+pillow

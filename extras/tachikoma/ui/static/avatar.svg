@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="仮のアバター">
+  <!-- 同梱の仮アバター (オリジナルの簡単なロボット)。ui/assets/tachikoma.png を置くとそちらが使われる -->
+  <defs>
+    <radialGradient id="body" cx="40%" cy="35%" r="70%">
+      <stop offset="0" stop-color="#7fb6ff"/><stop offset="1" stop-color="#2b63c9"/>
+    </radialGradient>
+  </defs>
+  <line x1="100" y1="38" x2="100" y2="18" stroke="#2b63c9" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="100" cy="14" r="7" fill="#ffcc4d"/>
+  <rect x="38" y="38" width="124" height="104" rx="44" fill="url(#body)"/>
+  <rect x="56" y="64" width="88" height="46" rx="22" fill="#0e1b2e" opacity=".85"/>
+  <g fill="#9fe7ff">
+    <ellipse cx="82" cy="87" rx="9" ry="10"><animate attributeName="ry" values="10;10;1;10" keyTimes="0;.9;.95;1" dur="4s" repeatCount="indefinite"/></ellipse>
+    <ellipse cx="118" cy="87" rx="9" ry="10"><animate attributeName="ry" values="10;10;1;10" keyTimes="0;.9;.95;1" dur="4s" repeatCount="indefinite"/></ellipse>
+  </g>
+  <path d="M60 142 L46 176 M100 142 L100 180 M140 142 L154 176" stroke="#2b63c9" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="46" cy="178" r="7" fill="#1d4ea8"/><circle cx="100" cy="182" r="7" fill="#1d4ea8"/><circle cx="154" cy="178" r="7" fill="#1d4ea8"/>
+</svg>

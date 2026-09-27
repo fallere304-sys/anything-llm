@@ -29,7 +29,7 @@ GPU 推論は 1 tick に最大 1 回。ユーザーの話しかけだけは即�
 import re
 import time
 
-from . import curiosity, prompts
+from . import curiosity, expression, prompts
 from .attention import ALONE, Attention
 from .llm import LLMError
 from .dataset import TrainingData
@@ -51,11 +51,16 @@ SITUATION_HALF_LIFE = 2 * 3600
 class Tachikoma:
     def __init__(self, cfg, llm, memory: Memory, sensors, probes, out=print,
                  clock=time.time, idle_fn=None, data=None, learner=None,
-                 attention=None, tts=None, study=None, asr_learner=None):
+                 attention=None, tts=None, study=None, asr_learner=None,
+                 eyes=None, eye_learner=None, idle=None, ui=None, power=None):
         self.cfg, self.llm, self.memory = cfg, llm, memory
         self.data = data or TrainingData(memory)
         self.learner = learner
         self.tts, self.study, self.asr_learner = tts, study, asr_learner
+        self.eyes, self.eye_learner = eyes, eye_learner
+        self.idle, self.ui, self.power = idle, ui, power      # 独りの時間の使い方 / 画面 / 電力計
+        self.bits_resolved = 0.0                              # 調べて解消した不確実性の累計 (知識の伸び)
+        self._last_activity = None
         self.attention = attention or Attention(cfg, clock, idle_fn,
                                                 has_camera=getattr(probes, "camera", None) is not None)
         self.mode = None
@@ -85,7 +90,7 @@ class Tachikoma:
             time.sleep(self.cfg["tick_seconds"])
 
     def learners(self):
-        return [x for x in (self.learner, self.asr_learner) if x is not None]
+        return [x for x in (self.learner, self.asr_learner, self.eye_learner) if x is not None]
 
     def step(self):
         now = self.clock()
@@ -101,8 +106,9 @@ class Tachikoma:
             self.mode = mode
         if mode != ALONE:
             # 誰かいる: 独りの時間の活動 (自習・学習) はすぐやめて GPU を返す
-            if self.study is not None:
-                self.study.pause()
+            for st in (self.study, self.eyes):
+                if st is not None:
+                    st.pause()
             for lr in self.learners():
                 if lr.busy:
                     lr.abort()
@@ -111,17 +117,31 @@ class Tachikoma:
             if msg:
                 self.say(msg)
         training = any(lr.busy for lr in self.learners())
+        scheduled = self.idle is not None and mode == ALONE
         # 学習中は GPU を学習プロセスに明け渡す (知覚と記録だけ続ける)
         if not training and now >= self.backoff_until and self.llm.gate.can_run_background():
             try:
                 if self.want_look:
                     self.look_around()
+                elif scheduled:
+                    self.appraise_next()     # 独りの時間の調べものは、スケジューラが「読書」として選んだときだけ
                 else:
                     self.appraise_next() or self.curiosity_step() or self.wonder()
             except LLMError as e:
                 self.log(f"推論失敗、30秒待ちます: {e}")
                 self.backoff_until = now + 30
-        if mode == ALONE and not training and self.study is not None:
+        if self.idle is not None:
+            try:
+                act = self.idle.step(alone=(mode == ALONE))
+                if act and act != self._last_activity:
+                    d = self.idle.describe()
+                    self.log(f"独りの時間: {act} を選んだ ({d['why'] if d else ''})")
+                self._last_activity = act
+            except Exception as e:  # noqa: BLE001 — 独りの時間の活動の失敗で本体を止めない
+                self.log(f"独りの時間の活動でエラー: {e}")
+                if self.idle.current:
+                    self.idle._end(interrupted=True)
+        elif mode == ALONE and not training and self.study is not None:
             try:
                 self.study.step(self.cfg["study_step_budget_s"])
             except Exception as e:  # noqa: BLE001 — 自習の失敗で本体を止めない
@@ -129,7 +149,9 @@ class Tachikoma:
                 self.study.state = "idle"
         self.maybe_speak()
         self.maybe_sleep()
-        self.maybe_learn()
+        if self.idle is None:
+            self.maybe_learn()
+        self.push_state()
 
     # ------------------------------------------------------------- perceive
     def perceive(self, source, kind, content, meta=None):
@@ -180,6 +202,8 @@ class Tachikoma:
             self.memory.mark_appraised(eid, 2)   # 既視感: 考えるまでもない
 
     def on_user_message(self, text, voice=False):
+        if self.ui is not None:
+            self.ui.push({"type": "user", "text": text})
         for lr in self.learners():
             if lr.busy:
                 lr.abort()     # ユーザー最優先: 学習を止めて GPU を返してもらう
@@ -307,6 +331,23 @@ class Tachikoma:
                 self.say("耳の学習は無効です。")
             else:
                 self.say(self.asr_learner.start("手動") or "学習できる標本 (字幕の検証分を含む) が足りないか、学習中です。")
+        elif cmd == "/eye_learn":
+            if self.eye_learner is None:
+                self.say("目の学習は無効です。")
+            else:
+                self.say(self.eye_learner.start("手動") or "学習できる行 (検証分を含む) が足りないか、学習中です。")
+        elif cmd == "/eye_rollback":
+            if self.eye_learner is None:
+                self.say("目の学習は無効です。")
+            else:
+                self.say(f"目を {self.eye_learner.rollback()} に戻しました。")
+        elif cmd == "/idle":
+            if self.idle is None:
+                self.say("独りの時間のスケジューラは無効です。")
+            else:
+                st = self.idle.stats()
+                self.say("独りの時間の見込み (1Wh あたりの伸び / 試行回数): " + ", ".join(
+                    f"{a} {v['rate']:.2f}/{v['n']}" for a, v in st.items()))
         elif cmd == "/ear_rollback":
             if self.asr_learner is None:
                 self.say("耳の学習は無効です。")
@@ -330,10 +371,18 @@ class Tachikoma:
                 ear = self.asr_learner.active_model() if self.asr_learner else "-"
                 lines.append(f"耳: {ear} / 自習: {self.study.state} / 最近の CER: "
                              f"{'-' if rc is None else f'{rc:.3f}'} / 未学習の聞き間違い: {self.study.count_new_hard()} 件")
+            if self.eyes is not None:
+                rc = self.eyes.recent_cer()
+                eye = self.eye_learner.active_model() if self.eye_learner else "-"
+                lines.append(f"目: {eye} / 自習: {self.eyes.state} / 最近の CER: {'-' if rc is None else f'{rc:.3f}'}"
+                             f" / 未学習の読み間違い: {self.eyes.count_new_hard()} 行")
+            if self.idle is not None and self.idle.describe():
+                d = self.idle.describe()
+                lines.append(f"独りの時間: {d['activity']} ({d['why']})")
             self.say(" | ".join(lines))
         else:
             self.say("コマンド: /good, /bad [正しい答え], /learn, /rollback, /ear_learn, /ear_rollback, "
-                     "/status, /self, /diary")
+                     "/eye_learn, /eye_rollback, /idle, /status, /self, /diary")
 
     # ------------------------------------------------------------- appraise
     def appraise_next(self):
@@ -481,11 +530,12 @@ class Tachikoma:
                                        causal_evidence=causal_evidence and v != "contradicts")
         after = nb.label()
         self.log(f"更新: {nb!r} ({verdict.get('reason', '')})")
-        if after != before:
+        gain = entropy(p_before) - entropy(nb.p_now())
+        if gain > 0:
+            self.bits_resolved += gain
+        if after != before and gain > 0:
             # わかった! = 不確実性が減った分だけ、その話題への興味が育つ
-            gain = entropy(p_before) - entropy(nb.p_now())
-            if gain > 0:
-                self.selfm.learned(nb.statement, gain)
+            self.selfm.learned(nb.statement, gain)
         if after != before and after in (FACT, REFUTED):
             added, dropped = self.data.on_resolved(nb)
             self.log(f"学習標本 +{added} (結論と矛盾した判定 {dropped} 件は不採用)")
@@ -649,8 +699,26 @@ class Tachikoma:
             lines += [f"- {e['source']}/{e['kind']}: {clip(e['content'], 200)}" for e in recent]
         return "\n".join(lines)
 
+    def push_state(self):
+        if self.ui is None:
+            return
+        d = self.idle.describe() if self.idle is not None else None
+        thinking = bool(getattr(self.llm.gate, "busy", False))
+        listening = self.attention.conversing() and self.cfg["voice"]
+        self.ui.push({
+            "type": "state", "mode": self.mode, "activity": d and {"activity": d["activity"], "why": d["why"]},
+            "expression": expression.from_state(self.mode, d and d["activity"], thinking, listening),
+            "speaking": bool(self.tts is not None and self.tts.speaking),
+            "ear_cer": self.study.recent_cer() if self.study is not None else None,
+            "eye_cer": self.eyes.recent_cer() if self.eyes is not None else None,
+            "watts": round(self.power.watts(), 0) if self.power is not None else None,
+            "model": getattr(self.llm, "model", None),
+        })
+
     def say(self, text):
         self.out(f"[タチコマ {time.strftime('%H:%M')}] {text}")
+        if self.ui is not None:
+            self.ui.push({"type": "say", "text": text, "expression": expression.from_text(text)})
         # 声に出すのは誰かいるときだけ
         if self.cfg["voice"] and self.tts is not None and self.attention.mode() != ALONE:
             self.tts.speak(text)

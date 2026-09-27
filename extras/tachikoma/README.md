@@ -135,6 +135,42 @@ python -m tachikoma --config config.json --verbose
 > `study_urls` による動画の自動取得は既定で Creative Commons ライセンスのものに限定している。
 > 各サービスの利用規約・著作権は利用者の責任で確認すること。
 
+## 画面 (UI)
+
+起動すると http://127.0.0.1:8765 で画面が開ける。タチコマの画像が会話や状態に合わせて動き、画面からも話しかけられる。
+
+- 画像は `ui/assets/tachikoma.png` に置く (表情別に `tachikoma_happy.png` / `_curious` / `_puzzled` / `_sorry` /
+  `_proud` / `_thinking` / `_talk` / `_sleeping` / `_studying_ear` / `_studying_eye` / `_training` も置ける)。
+  無ければ同梱の仮アバター。**タチコマの画像の著作権は権利者にあるので、私的利用の範囲で各自用意し、配布しないこと。**
+
+## 目の自習 (日本語 OCR)
+
+```powershell
+pip install -r requirements-eye.txt        # torch / torchvision / transformers / pymupdf / pillow
+```
+
+- 文字情報付き PDF を `study/eye/` に置く (いろいろなフォントのものほど良い)。`"web": true` と SearXNG があれば、
+  政府機関の公開 PDF (site:go.jp) を自分で取ってくる (出典は `*.source.txt` に記録)。
+- 独りの時間に PDF を画像として読み、文字情報で答え合わせし、読み間違えた行と文字の組を集める。
+  500 行溜まると OCR モデルを微調整し、**検証の CER が下がり、どのフォントも悪化していない**ときだけ採用する。
+
+| コマンド | 効果 |
+|---|---|
+| `/eye_learn` / `/eye_rollback` | 目の学習を今すぐ / 一つ前の目に戻す |
+| `/idle` | 独りの時間の各活動の「1Wh あたりの伸び」の見込みと試行回数 |
+
+## 独りの時間の使い方はタチコマが決める
+
+耳の自習・目の自習・耳/目/頭の学習・論文や資料を読む・休む、の中から、**「1Wh あたりの伸び」が最も大きいもの**を
+1 つずつ選ぶ (耳と目は並行しない)。伸びなくなった練習は自然に選ばれなくなり、どれも割に合わなければ休んで電力を節約する。
+何をなぜ選んだかは画面と `/status` に出る。詳しくは DESIGN.md §15。
+
+## VRAM と RAM の配分
+
+「モデルは VRAM、コンテキストは RAM」は Gemma 4 E2B では得にならない (KV キャッシュが 128K でも 1GB 弱と小さく、
+RAM に置くと生成が遅くなる)。**計算するもの (層・KV) は VRAM、引くだけのもの (長期記憶の DB・検索) は RAM** が推奨。
+推奨設定と根拠は DESIGN.md §16。
+
 ## 主な設定
 
 | キー | 既定 | 意味 |

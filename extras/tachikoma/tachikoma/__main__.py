@@ -37,6 +37,7 @@ def main(argv=None):
     senses = sensors.build(cfg)
     log = []                                 # agent ができる前のログ中継
     tts = asr = study = asr_learner = camera = web = scholar = None
+    eyes = eye_learner = ui = None
 
     if cfg["voice"] or cfg["study"]:
         try:
@@ -65,24 +66,66 @@ def main(argv=None):
             senses.append(camera)
         except Exception as e:  # noqa: BLE001
             print(f"カメラを使えません: {e}")
+    if cfg["eye"]:
+        try:
+            from .eye_learner import EyeLearner
+            from .eyes import EyeStudy
+            from .ocr import VisionOCR
+            ocr = VisionOCR(cfg, data.get("active_ocr") or cfg["ocr_model"])
+            eyes = EyeStudy(cfg, memory, ocr, log=lambda m: log[0](m) if log else print(m))
+            if cfg["ocr_finetune_enabled"]:
+                eye_learner = EyeLearner(cfg, eyes, data, ocr, lambda m: VisionOCR(cfg, m), llm=llm)
+        except Exception as e:  # noqa: BLE001
+            print(f"目の自習を無効にします: {e}\n(依存は requirements-eye.txt。初回は OCR モデルのダウンロードが必要)")
+    if cfg["ui"]:
+        from .ui import UIServer, UISensor
+        ui = UIServer(cfg)
+        try:
+            print(f"画面: {ui.start()}")
+            senses.append(UISensor(ui))
+        except OSError as e:
+            print(f"画面を開けません (ポート {cfg['ui_port']} が使用中?): {e}")
+            ui = None
     if cfg["web"]:
         from .web import WebSearch
         web = WebSearch(cfg)
         from .scholar import Scholar
         scholar = Scholar(cfg)
 
+    from .activities import ReadingActivity, StudyActivity, TrainActivity
+    from .idle import IdleScheduler
+    from .power import PowerMeter
+    power = PowerMeter(cfg)
+    idle = IdleScheduler(cfg, memory, power)
     agent = Tachikoma(cfg, llm, memory, senses, Probes(cfg, memory, web=web, camera=camera, llm=llm, scholar=scholar),
                       idle_fn=sensors.idle_seconds, data=data, learner=learner,
-                      tts=tts, study=study, asr_learner=asr_learner)
+                      tts=tts, study=study, asr_learner=asr_learner, eyes=eyes, eye_learner=eye_learner,
+                      idle=idle, ui=ui, power=power)
     log.append(agent.log)
+    # 独りの時間の候補。耳と目 (自習・学習) は同時には走らない: スケジューラが 1 つずつ選ぶ
+    alone = agent.attention.alone_for
+    if study is not None:
+        idle.register("ear_study", StudyActivity("ear", study, data))
+    if eyes is not None:
+        idle.register("eye_study", StudyActivity("eye", eyes, data))
+    if asr_learner is not None:
+        idle.register("ear_train", TrainActivity("ear", asr_learner, data, alone, agent.log))
+    if eye_learner is not None:
+        idle.register("eye_train", TrainActivity("eye", eye_learner, data, alone, agent.log))
+    if cfg["finetune_enabled"]:
+        idle.register("brain_train", TrainActivity("brain", learner, data, alone, agent.log))
+    idle.register("reading", ReadingActivity(agent))
     try:
         agent.run_forever()
     except KeyboardInterrupt:
         for lr in agent.learners():
             lr.abort()
-        if study is not None:
-            study.pause()
+        for st in (study, eyes):
+            if st is not None:
+                st.pause()
         agent.say("おやすみなさい。")
+        if ui is not None:
+            ui.close()
     return 0
 
 

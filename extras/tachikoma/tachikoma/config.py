@@ -133,6 +133,47 @@ DEFAULTS = {
     "asr_finetune_args": ["--rank", "16", "--epochs", "2", "--lr", "5e-5"],
     "ct2_converter": "",
 
+    # --- 目 (OCR) の自習と学習 ---
+    "eye": True,
+    "ocr_model": "kha-white/manga-ocr-base",   # 行単位の日本語 OCR (Vision Encoder-Decoder)
+    "ocr_device": "cuda",
+    "ocr_cpu_threads": 4,
+    "ocr_max_len": 64,
+    "eye_dir": "study/eye",           # 文字情報付き PDF を置く・取得する場所
+    "eye_pdf_dirs": [],
+    "eye_fetch_topics": ["白書", "統計", "報告書", "ガイドライン", "年次報告", "資料"],
+    "eye_max_pdf_bytes": 30 * 2**20,
+    "eye_max_pages": 30,
+    "eye_dpis": [96, 120, 150, 200],  # 画面・印刷・撮影の違いを模す描画解像度
+    "eye_cer_min": 0.02,
+    "eye_cer_max": 0.5,
+    "eye_easy_ratio": 0.2,
+    "eye_holdout_ratio": 0.15,
+    "eye_rule_min_count": 3,
+    "ocr_finetune_enabled": True,
+    "eye_train_after_alone_s": 3600,
+    "eye_min_new_samples": 500,
+    "eye_max_train": 8000,
+    "eye_eval_max": 300,
+    "eye_min_holdout": 50,
+    "eye_font_tolerance": 0.01,
+    "ocr_finetune_args": ["--epochs", "2", "--lr", "2e-5", "--batch", "8"],
+
+    # --- 独りの時間の使い方 (タチコマ自身が選ぶ) ---
+    "idle_session_s": 900,            # 1 つの活動を続ける長さ (その後に選び直す)
+    "idle_rest_s": 600,
+    "idle_rest_value": 0.2,           # 「休む」の価値 (1Wh あたりの伸びがこれ未満なら休んで電力を節約)
+    "idle_explore": 0.5,              # 試したことの少ない活動をどれだけ優遇するか
+    "idle_ema": 0.3,
+    "reading_weight": 0.5,            # 読書で解消した不確実性 1 bit を何ポイントとみなすか
+    "gpu_tdp_w": 120,                 # GTX 1060
+    "cpu_tdp_w": 65,                  # i7-7700
+
+    # --- UI ---
+    "ui": True,
+    "ui_port": 8765,
+    "ui_assets_dir": "ui/assets",     # ここに tachikoma.png (と表情別の画像) を置く
+
     # --- 睡眠(記憶の整理) ---
     "sleep_after_idle_s": 1800,
     "event_retention_days": 7,
@@ -147,4 +188,5 @@ def load(path=None):
     cfg["watch_dirs"] = [os.path.abspath(os.path.expanduser(d)) for d in cfg["watch_dirs"]]
     cfg["terminal_logs"] = [os.path.abspath(os.path.expanduser(p)) for p in cfg["terminal_logs"]]
     cfg["study_media_dirs"] = [os.path.abspath(os.path.expanduser(d)) for d in cfg["study_media_dirs"]]
+    cfg["eye_pdf_dirs"] = [os.path.abspath(os.path.expanduser(d)) for d in cfg["eye_pdf_dirs"]]
     return cfg
