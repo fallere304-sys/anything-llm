@@ -6,6 +6,11 @@
       → 睡眠 (長い無操作時に記憶を整理)
       → 学習 (さらに長い無操作時に、裏付けのある標本で LoRA ファインチューン)
 
+音声会話モード (voice=true) では、注意状態 (attention.py) で振る舞いを切り替える:
+  conversing  声で話しかけられた → 最優先で短く声で返す。聞き取りに自信がなければ聞き返す
+  attending   人がいる/声がする → 観察と好奇心。他人の会話には割り込まない
+  alone       誰もいない → 字幕付き動画で耳を鍛え (study.py)、耳と頭を学習する
+
 学習標本は 2 経路で溜まる (dataset.py):
   - ユーザーとのやり取り: /good /bad 訂正、質問への回答、本人の申告
   - 自律調査: 仮説が外部の根拠で確定したとき、知識と「結論と整合した判定」を記録
@@ -13,9 +18,11 @@
 GPU 推論は 1 tick に最大 1 回。ユーザーの話しかけだけは即時・最優先。
 """
 
+import re
 import time
 
 from . import curiosity, prompts
+from .attention import ALONE, Attention
 from .llm import LLMError
 from .dataset import TrainingData
 from .memory import FACT, INFERENCE, REFUTED, SPECULATION, Memory
@@ -33,10 +40,16 @@ SITUATION_HALF_LIFE = 2 * 3600
 
 class Tachikoma:
     def __init__(self, cfg, llm, memory: Memory, sensors, probes, out=print,
-                 clock=time.time, idle_fn=None, data=None, learner=None):
+                 clock=time.time, idle_fn=None, data=None, learner=None,
+                 attention=None, tts=None, study=None, asr_learner=None):
         self.cfg, self.llm, self.memory = cfg, llm, memory
         self.data = data or TrainingData(memory)
         self.learner = learner
+        self.tts, self.study, self.asr_learner = tts, study, asr_learner
+        self.attention = attention or Attention(cfg, clock, idle_fn,
+                                                has_camera=getattr(probes, "camera", None) is not None)
+        self.mode = None
+        self.want_look = False
         self.sensors, self.probes = sensors, probes
         self.out, self.clock = out, clock
         self.idle_fn = idle_fn or (lambda: None)
@@ -57,33 +70,84 @@ class Tachikoma:
             self.step()
             time.sleep(self.cfg["tick_seconds"])
 
+    def learners(self):
+        return [x for x in (self.learner, self.asr_learner) if x is not None]
+
     def step(self):
         now = self.clock()
         for s in self.sensors:
-            for kind, content in s.poll():
-                self.perceive(s.name, kind, content)
+            for item in s.poll():
+                self.perceive(s.name, item[0], item[1], item[2] if len(item) > 2 else None)
         self.memory.decay_relevance(now - self.last_tick, self.cfg["relevance_half_life_s"])
         self.last_tick = now
 
-        if self.learner is not None:
-            msg = self.learner.poll()
+        mode = self.attention.mode(now)
+        if mode != self.mode:
+            self.log(f"注意: {self.mode} → {mode}")
+            self.mode = mode
+        if mode != ALONE:
+            # 誰かいる: 独りの時間の活動 (自習・学習) はすぐやめて GPU を返す
+            if self.study is not None:
+                self.study.pause()
+            for lr in self.learners():
+                if lr.busy:
+                    lr.abort()
+        for lr in self.learners():
+            msg = lr.poll()
             if msg:
                 self.say(msg)
-        training = self.learner is not None and self.learner.busy
+        training = any(lr.busy for lr in self.learners())
         # 学習中は GPU を学習プロセスに明け渡す (知覚と記録だけ続ける)
         if not training and now >= self.backoff_until and self.llm.gate.can_run_background():
             try:
-                self.appraise_next() or self.curiosity_step()
+                if self.want_look:
+                    self.look_around()
+                else:
+                    self.appraise_next() or self.curiosity_step()
             except LLMError as e:
                 self.log(f"推論失敗、30秒待ちます: {e}")
                 self.backoff_until = now + 30
+        if mode == ALONE and not training and self.study is not None:
+            try:
+                self.study.step(self.cfg["study_step_budget_s"])
+            except Exception as e:  # noqa: BLE001 — 自習の失敗で本体を止めない
+                self.log(f"自習エラー: {e}")
+                self.study.state = "idle"
         self.maybe_speak()
         self.maybe_sleep()
         self.maybe_learn()
 
     # ------------------------------------------------------------- perceive
-    def perceive(self, source, kind, content):
+    def perceive(self, source, kind, content, meta=None):
         now = self.clock()
+        meta = meta or {}
+        voice = False
+        if kind == "user_message":
+            self.attention.on_addressed()
+        elif kind in ("person_appeared", "person_left"):
+            self.attention.on_presence(kind == "person_appeared")
+            if kind == "person_appeared" and self.cfg["camera_describe"]:
+                self.want_look = True
+        elif kind == "speech":
+            self.attention.on_speech()
+            if self.attention.is_addressed(content):
+                self.attention.on_addressed()
+                text = self.attention.strip_wake_word(content)
+                if meta.get("avg_logprob", 0.0) < self.cfg["asr_min_logprob"]:
+                    # 聞き取りの低確度推定 → いちばん安い情報収集は「聞き返す」こと
+                    eid = self.memory.add_event(source, "unclear_speech", content, 0.0)
+                    self.memory.mark_appraised(eid, 2)   # 聞き取れていない文から推論はしない
+                    self.say("ごめん、よく聞き取れなかった。もう一回言って？")
+                    return
+                if not text:
+                    self.say("はい、なに？")
+                    return
+                fb = voice_feedback(text)
+                if fb is not None:
+                    content = "/good" if fb[0] == "good" else f"/bad {fb[1]}"
+                kind, content, voice = "user_message", content if fb else text, True
+            else:
+                kind = "overheard_speech"     # 他の人の会話・テレビ等。記録と評価はするが返事はしない
         if kind == "user_message" and content.startswith("/"):
             self.last_activity = now
             self.on_command(content)
@@ -95,17 +159,20 @@ class Tachikoma:
         self.slept = False
         if kind == "user_message":
             try:
-                self.on_user_message(content)
+                self.on_user_message(content, voice=voice)
             except LLMError as e:
                 self.say(f"(推論に失敗しました: {e})")
         elif novelty < self.cfg["novelty_threshold"]:
             self.memory.mark_appraised(eid, 2)   # 既視感: 考えるまでもない
 
-    def on_user_message(self, text):
-        if self.learner is not None and self.learner.busy:
-            self.learner.abort()     # ユーザー最優先: 学習を止めて GPU を返してもらう
-            msg = self.learner.poll()
-            self.say(msg or "学習を中断しました。")
+    def on_user_message(self, text, voice=False):
+        for lr in self.learners():
+            if lr.busy:
+                lr.abort()     # ユーザー最優先: 学習を止めて GPU を返してもらう
+                msg = lr.poll()
+                self.say(msg or "学習を中断しました。")
+        if self.study is not None:
+            self.study.pause()
         if self.asked is not None:
             b = self.memory.get_belief(self.asked)
             if b is not None:
@@ -117,15 +184,19 @@ class Tachikoma:
         # 即効層: 学習前でも、過去に裏付けの取れた例をプロンプトに添える
         shots = "\n".join(x for x in (self.data.examples("knowledge", text),
                                        self.data.examples("chat", text)) if x)
+        system = prompts.CHAT_VOICE_SYSTEM if voice else prompts.CHAT_SYSTEM
         try:
-            reply = self.llm.chat(prompts.CHAT_SYSTEM, (shots + "\n\n" if shots else "") + user,
-                                  max_tokens=400, temperature=0.5)
+            reply = self.llm.chat(system, (shots + "\n\n" if shots else "") + user,
+                                  max_tokens=160 if voice else 400, temperature=0.5)
         except LLMError as e:
             self.say(f"(推論に失敗しました: {e})")
             return
+        if voice:
+            reply = shorten(reply, self.cfg["voice_max_reply_chars"])
         self.say(reply)
+        self.attention.on_self_spoke()      # 続けて呼びかけ語なしで返事できるようにする
         self.memory.add_event("self", "reply", reply, 0.0)
-        self.data.remember_chat(prompts.CHAT_SYSTEM, user, reply)
+        self.data.remember_chat(system, user, reply)
 
     def on_command(self, text):
         cmd, _, arg = text.partition(" ")
@@ -150,12 +221,29 @@ class Tachikoma:
                 self.say("学習機能は無効です。")
             else:
                 self.say(f"{self.learner.rollback()} に戻しました。")
+        elif cmd == "/ear_learn":
+            if self.asr_learner is None:
+                self.say("耳の学習は無効です。")
+            else:
+                self.say(self.asr_learner.start("手動") or "学習できる標本 (字幕の検証分を含む) が足りないか、学習中です。")
+        elif cmd == "/ear_rollback":
+            if self.asr_learner is None:
+                self.say("耳の学習は無効です。")
+            else:
+                self.say(f"耳を {self.asr_learner.rollback()} に戻しました。")
         elif cmd == "/status":
             model = self.learner.active_model() if self.learner else self.llm.model
-            stage = f" / 学習中: {self.learner.stage}" if self.learner and self.learner.busy else ""
-            self.say(f"モデル: {model}{stage} / 標本: {self.data.stats()} / 未学習: {self.data.count_new()} 件")
+            busy = [f"{lr.stage}" for lr in self.learners() if lr.busy]
+            lines = [f"注意: {self.attention.mode()} / モデル: {model}" + (f" / 学習中: {busy[0]}" if busy else ""),
+                     f"標本: {self.data.stats()} / 未学習: {self.data.count_new()} 件"]
+            if self.study is not None:
+                rc = self.study.recent_cer()
+                ear = self.asr_learner.active_model() if self.asr_learner else "-"
+                lines.append(f"耳: {ear} / 自習: {self.study.state} / 最近の CER: "
+                             f"{'-' if rc is None else f'{rc:.3f}'} / 未学習の聞き間違い: {self.study.count_new_hard()} 件")
+            self.say(" | ".join(lines))
         else:
-            self.say("コマンド: /good, /bad [正しい答え], /learn, /rollback, /status")
+            self.say("コマンド: /good, /bad [正しい答え], /learn, /rollback, /ear_learn, /ear_rollback, /status")
 
     # ------------------------------------------------------------- appraise
     def appraise_next(self):
@@ -202,6 +290,10 @@ class Tachikoma:
         allowed = ["search_memory", "wait_observe"]
         if self.cfg["watch_dirs"]:
             allowed += ["grep_workspace", "read_file"]
+        if getattr(self.probes, "web", None) is not None:
+            allowed.append("web_search")
+        if getattr(self.probes, "camera", None) is not None:
+            allowed.append("look")
         if self.cfg["allow_ask_user"] and self.question_outstanding is None and self.asked is None:
             allowed.append("ask_user")
         return allowed
@@ -289,10 +381,15 @@ class Tachikoma:
         now = self.clock()
         if now - self.last_speak < self.cfg["min_speak_interval_s"]:
             return
-        idle = self.idle_fn()
-        if idle is None:
-            idle = now - self.last_activity
-        busy = idle < self.cfg["busy_idle_s"]
+        if self.cfg["voice"]:
+            if self.attention.mode(now) == ALONE:
+                return          # 誰もいない部屋に話しかけない (15分以内に人が来たら話す)
+            busy = self.attention.someone_talking(now) and not self.attention.conversing(now)
+        else:
+            idle = self.idle_fn()
+            if idle is None:
+                idle = now - self.last_activity
+            busy = idle < self.cfg["busy_idle_s"]
         for u in self.memory.pending_utterances():
             if now - u["ts"] > 900:     # 15分前の話はもう「目の前」ではない
                 self.memory.mark_delivered(u["id"], -1)
@@ -307,6 +404,7 @@ class Tachikoma:
             self.memory.add_event("self", u["kind"], u["text"], 0.0)
             if u["kind"] == "question":
                 self.asked, self.question_outstanding = u["belief_id"], None
+                self.attention.on_self_spoke()   # 返事を呼びかけ語なしで受けられるように
             self.last_speak = now
             return
 
@@ -331,16 +429,31 @@ class Tachikoma:
 
     # ---------------------------------------------------------------- learn
     def maybe_learn(self):
-        if self.learner is None or self.learner.busy:
+        if not self.learners() or any(lr.busy for lr in self.learners()):
             return
         now = self.clock()
-        idle = self.idle_fn()
-        if idle is None:
-            idle = now - self.last_activity
-        if self.learner.should_train(idle, now):
-            msg = self.learner.start("睡眠中の自動学習")
-            if msg:
-                self.log(msg)
+        if self.cfg["voice"] or self.attention.has_camera:
+            idle = self.attention.alone_for(now)
+        else:
+            idle = self.idle_fn()
+            if idle is None:
+                idle = now - self.last_activity
+        # 耳の学習を優先 (独りの時間の自習の成果をすぐ反映させる)。同時には走らせない
+        for lr, reason in ((self.asr_learner, "独りの時間に耳の学習"), (self.learner, "睡眠中の自動学習")):
+            if lr is not None and lr.should_train(idle, now):
+                if self.study is not None:
+                    self.study.pause()
+                msg = lr.start(reason)
+                if msg:
+                    self.log(msg)
+                    return
+
+    def look_around(self):
+        """人が現れた: カメラの様子を Gemma に説明させ、出来事として記録する。"""
+        self.want_look = False
+        desc = self.probes.run("look", "誰がいて何をしているか")
+        if desc:
+            self.memory.add_event("camera", "scene", desc, 1.0)
 
     # --------------------------------------------------------------- helpers
     def context_text(self, k=8):
@@ -355,7 +468,34 @@ class Tachikoma:
 
     def say(self, text):
         self.out(f"[タチコマ {time.strftime('%H:%M')}] {text}")
+        # 声に出すのは誰かいるときだけ
+        if self.cfg["voice"] and self.tts is not None and self.attention.mode() != ALONE:
+            self.tts.speak(text)
 
     def log(self, text):
         if self.cfg.get("verbose"):
             self.out(f"  · {text}")
+
+
+_GOOD = re.compile(r"^(それ)?(正解|合ってる|あってる|その通り|覚えといて|覚えておいて)[。!！]*$")
+_BAD = re.compile(r"^(違う|ちがう)[よね、,。 ]*(正しくは|本当は|ほんとは)[、,: ]*(.+)$")
+
+
+def voice_feedback(text):
+    """声でのフィードバック。誤爆しないよう、はっきりした言い方だけを拾う。
+    「正解」「覚えといて」→ good /「違う、正しくは○○」→ ○○ を正解として bad"""
+    t = text.strip()
+    if _GOOD.match(t):
+        return ("good", None)
+    m = _BAD.match(t)
+    if m:
+        return ("bad", m.group(3).strip())
+    return None
+
+
+def shorten(text, limit):
+    """声の返事は短く。文の切れ目で切る。"""
+    if len(text) <= limit:
+        return text
+    cut = max(text.rfind(c, 0, limit) for c in "。！？!?")
+    return text[: cut + 1] if cut > 0 else text[:limit]

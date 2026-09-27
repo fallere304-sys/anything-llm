@@ -78,8 +78,9 @@ class OllamaClient:
         self._post({"model": model or self.model, "keep_alive": 0}, self.base_url + "/api/generate")
 
     def chat(self, system, user, schema=None, think=False, max_tokens=512, temperature=0.3,
-             model=None):
-        """schema を渡すと Ollama の structured output で JSON を強制し、dict を返す。"""
+             model=None, images=None):
+        """schema を渡すと Ollama の structured output で JSON を強制し、dict を返す。
+        images: base64 の JPEG/PNG のリスト (Gemma の画像入力)。"""
         body = {
             "model": model or self.model,
             "stream": False,
@@ -87,7 +88,7 @@ class OllamaClient:
             "keep_alive": -1,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                dict({"role": "user", "content": user}, **({"images": images} if images else {})),
             ],
             "options": {
                 "num_ctx": self.num_ctx,

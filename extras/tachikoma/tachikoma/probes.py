@@ -1,7 +1,7 @@
 """情報収集行為 (プローブ) の実装。すべて読み取り専用。
 
-コマンド実行や外部送信は意図的に持たない。自律エージェントが
-「調べる」だけなら、壊すものは何もない。
+任意のコマンド実行は意図的に持たない。自律エージェントが「調べる」だけなら、壊すものは何もない。
+外に出るのは web_search の検索語だけで、個人情報らしき語は web.sanitize() が止める。
 """
 
 import os
@@ -10,9 +10,10 @@ from .text import clip
 
 
 class Probes:
-    def __init__(self, cfg, memory):
+    def __init__(self, cfg, memory, web=None, camera=None, llm=None):
         self.cfg = cfg
         self.memory = memory
+        self.web, self.camera, self.llm = web, camera, llm
 
     def _allowed_path(self, path):
         path = os.path.abspath(path)
@@ -45,7 +46,7 @@ class Probes:
 
     def run(self, name, query):
         """根拠テキストを返す。見つからなければ None。"""
-        if name not in ("search_memory", "grep_workspace", "read_file", "wait_observe"):
+        if name not in ("search_memory", "grep_workspace", "read_file", "wait_observe", "web_search", "look"):
             return None
         return getattr(self, name)(query)
 
@@ -87,3 +88,18 @@ class Probes:
 
     def wait_observe(self, query):
         return None
+
+    def web_search(self, query):
+        return self.web.search(query) if self.web is not None else None
+
+    def look(self, query):
+        """カメラの今の 1 枚を Gemma に見せ、問いに沿って説明させる (画像は保存しない)。"""
+        if self.camera is None or self.llm is None:
+            return None
+        img = self.camera.snapshot_b64()
+        if img is None:
+            return None
+        from . import prompts
+        text = self.llm.chat(prompts.VISION_SYSTEM, f"確かめたい点: {query or '今の様子'}",
+                             images=[img], max_tokens=150)
+        return f"カメラ映像の説明: {text}" if text else None

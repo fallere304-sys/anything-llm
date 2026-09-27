@@ -1,0 +1,8 @@
+# 音声会話モード・カメラ・自習用 (本体とは別に入れる。Windows ではそのまま pip install 可)
+numpy
+sounddevice
+faster-whisper
+opencv-python>=4.8,<5   # 5 系は Haar/HOG が本体から外れた (動き検出のみになる)
+webrtcvad-wheels   # 無くても動く (音量ベースの簡易 VAD に切り替わる)
+yt-dlp             # study_urls を使うときだけ
+# 別途 ffmpeg (https://ffmpeg.org) を PATH に置くこと

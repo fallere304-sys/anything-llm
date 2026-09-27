@@ -33,6 +33,10 @@ PROBES = {
         "read_file", "監視フォルダ内の特定ファイルを読む (query にパス)", 0.3, 0.9, "observation"),
     "wait_observe": ProbeSpec(
         "wait_observe", "何もせず、次の出来事で自然に判明するのを待つ", 0.5, 0.15, "observation"),
+    "web_search": ProbeSpec(
+        "web_search", "ネットで一般的な知識を調べる (個人的なことは調べられない)", 0.6, 0.6, "web"),
+    "look": ProbeSpec(
+        "look", "カメラで今の様子を見る (query に見たい点)", 0.8, 0.7, "observation"),
     "ask_user": ProbeSpec(
         "ask_user", "ユーザーに短く質問する (割り込みコストが高い)", 3.0, 1.0, "user"),
 }

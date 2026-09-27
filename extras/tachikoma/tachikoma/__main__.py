@@ -34,12 +34,52 @@ def main(argv=None):
     data = TrainingData(memory)
     learner = Learner(cfg, data, llm)
     llm.model = learner.active_model()      # 前回までに採用した学習済みの版があればそれを使う
-    agent = Tachikoma(cfg, llm, memory, sensors.build(cfg), Probes(cfg, memory),
-                      idle_fn=sensors.idle_seconds, data=data, learner=learner)
+    senses = sensors.build(cfg)
+    log = []                                 # agent ができる前のログ中継
+    tts = asr = study = asr_learner = camera = web = None
+
+    if cfg["voice"] or cfg["study"]:
+        try:
+            from .asr import FasterWhisperASR
+            asr = FasterWhisperASR(cfg, data.get("active_asr") or cfg["asr_model"])
+        except Exception as e:  # noqa: BLE001
+            print(f"音声認識を使えないので音声会話と自習を無効にします: {e}\n"
+                  "(依存は requirements-voice.txt。初回は Whisper モデルのダウンロードが必要)")
+            cfg["voice"] = cfg["study"] = False
+    if cfg["voice"]:
+        from . import tts as tts_mod
+        from .audio import VoiceSensor
+        tts = tts_mod.build(cfg)
+    if cfg["study"]:
+        from .asr_learner import AsrLearner
+        from .study import Study
+        study = Study(cfg, memory, asr, log=lambda m: log[0](m) if log else print(m))
+        if cfg["asr_finetune_enabled"]:
+            asr_learner = AsrLearner(cfg, study, data, asr, lambda m: FasterWhisperASR(cfg, m), llm=llm)
+    if cfg["voice"]:
+        senses.append(VoiceSensor(cfg, asr, tts, prompt_fn=study.prompt if study else None))
+    if cfg["camera"]:
+        try:
+            from .camera import PresenceSensor
+            camera = PresenceSensor(cfg)
+            senses.append(camera)
+        except Exception as e:  # noqa: BLE001
+            print(f"カメラを使えません: {e}")
+    if cfg["web"]:
+        from .web import WebSearch
+        web = WebSearch(cfg)
+
+    agent = Tachikoma(cfg, llm, memory, senses, Probes(cfg, memory, web=web, camera=camera, llm=llm),
+                      idle_fn=sensors.idle_seconds, data=data, learner=learner,
+                      tts=tts, study=study, asr_learner=asr_learner)
+    log.append(agent.log)
     try:
         agent.run_forever()
     except KeyboardInterrupt:
-        learner.abort()
+        for lr in agent.learners():
+            lr.abort()
+        if study is not None:
+            study.pause()
         agent.say("おやすみなさい。")
     return 0
 

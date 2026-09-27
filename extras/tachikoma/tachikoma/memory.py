@@ -19,6 +19,7 @@ SOURCE_CAP = {
     "observation": 0.99,   # ファイル・ログ・画面など直接観測
     "user": 0.99,          # ユーザーの明示的な回答
     "memory": 0.85,        # 過去の記憶からの想起
+    "web": 0.85,           # ネット情報。世界の一般知識の裏付けにはなるが、目の前の事実にはならない
     "reflection": 0.75,    # LLM の推論のみ
 }
 
@@ -183,7 +184,7 @@ class Memory:
         if not b:
             return None
         now = self.clock()
-        rank = ["reflection", "memory", "observation", "user"]
+        rank = ["reflection", "web", "memory", "observation", "user"]
         best_source = max([b.source, source], key=lambda s: rank.index(s) if s in rank else 0)
         cap = SOURCE_CAP.get(best_source, 0.75)
         p = sigmoid(logit(b.p_now(now)) + delta_logit)

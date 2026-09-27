@@ -5,6 +5,7 @@ LLM も埋め込みモデルも使わないので CPU で数万件を即時に�
 """
 
 import re
+import unicodedata
 
 _WS = re.compile(r"\s+")
 
@@ -34,3 +35,50 @@ def overlap(query, text):
 def clip(text, limit):
     text = text or ""
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+# ---------------------------------------------------------------- 音声認識の評価用
+_BRACKETS = re.compile(r"[(\[【〈《{<][^)\]】〉》}>]*[)\]】〉》}>]")
+_SPEAKER = re.compile(r"^[^\s:]{1,12}:")
+_PUNCT = re.compile(r"[\s、。,.!?「」『』…・〜~\-—―:;\"'“”‘’♪＃#*_]+")
+
+
+def normalize_transcript(text):
+    """字幕と認識結果を比べられる形にする。
+
+    全角半角・大小文字を揃え、話者名 (「田中:」)・効果音 ((拍手) [笑]) と句読点を落とす。"""
+    t = unicodedata.normalize("NFKC", text or "")
+    t = _BRACKETS.sub("", t)
+    t = "".join(_SPEAKER.sub("", line.strip()) for line in t.splitlines())
+    return _PUNCT.sub("", t.lower())
+
+
+def edit_distance(a, b):
+    if len(a) < len(b):
+        a, b = b, a
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def cer(reference, hypothesis):
+    """文字誤り率 (Character Error Rate)。日本語は単語境界が無いので WER ではなく CER で測る。"""
+    r, h = normalize_transcript(reference), normalize_transcript(hypothesis)
+    if not r:
+        return 0.0 if not h else 1.0
+    return edit_distance(r, h) / len(r)
+
+
+_TERM = re.compile(r"[ァ-ヴー]{3,}|[一-龥]{2,}|[A-Za-z][A-Za-z0-9]{2,}")
+
+
+def missed_terms(reference, hypothesis):
+    """字幕にあって認識結果に無い語 (カタカナ語・漢字語・英単語) を返す。
+    認識の苦手語彙として、次回からの認識プロンプトに混ぜる。"""
+    h = normalize_transcript(hypothesis)
+    ref = unicodedata.normalize("NFKC", reference or "")
+    return [t for t in dict.fromkeys(_TERM.findall(ref)) if t.lower() not in h]

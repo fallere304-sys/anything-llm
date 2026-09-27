@@ -58,6 +58,70 @@ DEFAULTS = {
     "ollama_bin": "ollama",
     "model_prefix": "tachikoma",
 
+    # --- 音声会話モード (耳・口) ---
+    "voice": False,                   # マイクで常時聴取し、声で返事する
+    "wake_words": ["タチコマ", "たちこま"],
+    "conversation_window_s": 20,      # 話しかけ/返事の後、呼びかけ語なしで会話が続くとみなす秒数
+    "talking_grace_s": 3,             # 誰かが話している最中 (この秒数以内に声) は割り込まない
+    "voice_max_reply_chars": 120,
+    "mic_device": None,
+    "vad_aggressiveness": 2,
+    "vad_end_silence_ms": 700,
+    "barge_in": True,
+    "barge_in_rms": 3000,
+    "asr_model": "small",             # faster-whisper のモデル名 (初回に自動ダウンロード) またはパス
+    "asr_device": "cuda",
+    "asr_compute_type": "int8",       # Pascal は fp16 が遅いので int8
+    "asr_language": "ja",
+    "asr_beam_size": 3,
+    "asr_min_logprob": -1.0,          # これより自信のない聞き取りは聞き返す
+    "asr_prompt_terms": 20,
+    "tts": "sapi",                    # sapi / voicevox / none
+    "tts_rate": 1,
+    "voicevox_url": "http://127.0.0.1:50021",
+    "voicevox_speaker": 3,
+    "voicevox_speed": 1.1,
+
+    # --- カメラ (目) ---
+    "camera": False,
+    "camera_index": 0,
+    "camera_interval_s": 1.0,
+    "camera_absent_s": 60,
+    "camera_motion_ratio": 0.02,
+    "camera_face_model": "",          # OpenCV 5 系用: YuNet の ONNX (face_detection_yunet_*.onnx)
+    "camera_describe": True,          # 人が現れたとき Gemma に様子を説明させる (画像は保存しない)
+
+    # --- ネット ---
+    "web": False,
+    "web_language": "ja",
+    "searxng_url": "",                # 自前の SearXNG があれば優先 (無ければ Wikipedia API)
+
+    # --- 独りの時間 (自習と耳の学習) ---
+    "absent_after_s": 300,            # 声も人影もこの秒数なければ「独り」
+    "study": True,
+    "study_dir": "study",             # 字幕付き動画 (foo.mp4 + foo.ja.vtt/srt) を置く・取得する場所
+    "study_media_dirs": [],
+    "study_urls": [],                 # yt-dlp で取得する動画/再生リスト (人手字幕のみ)
+    "study_match_filter": "license ~= '(?i)creative commons'",
+    "ytdlp_bin": "yt-dlp",
+    "ffmpeg_bin": "ffmpeg",
+    "study_cer_min": 0.05,            # これ未満は「もう聞き取れている」
+    "study_cer_max": 0.5,             # これ超は字幕の意訳・ずれの可能性が高く捨てる
+    "study_easy_ratio": 0.2,          # 聞き取れた例も忘却防止に一部残す
+    "study_holdout_ratio": 0.15,
+    "study_step_budget_s": 1.5,
+    "asr_finetune_enabled": True,
+    "asr_hf_base": "openai/whisper-small",
+    "asr_train_after_alone_s": 3600,
+    "asr_min_new_samples": 300,
+    "asr_max_train": 4000,
+    "asr_eval_max": 200,
+    "asr_min_holdout": 30,
+    "asr_anchor_dir": "",             # 利用者の声 (foo.wav + foo.txt) — 悪化していないかの確認用
+    "asr_anchor_tolerance": 0.0,
+    "asr_finetune_args": ["--rank", "16", "--epochs", "2", "--lr", "5e-5"],
+    "ct2_converter": "",
+
     # --- 睡眠(記憶の整理) ---
     "sleep_after_idle_s": 1800,
     "event_retention_days": 7,
@@ -71,4 +135,5 @@ def load(path=None):
             cfg.update(json.load(f))
     cfg["watch_dirs"] = [os.path.abspath(os.path.expanduser(d)) for d in cfg["watch_dirs"]]
     cfg["terminal_logs"] = [os.path.abspath(os.path.expanduser(p)) for p in cfg["terminal_logs"]]
+    cfg["study_media_dirs"] = [os.path.abspath(os.path.expanduser(d)) for d in cfg["study_media_dirs"]]
     return cfg
