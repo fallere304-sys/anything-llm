@@ -36,7 +36,7 @@ def main(argv=None):
     llm.model = learner.active_model()      # 前回までに採用した学習済みの版があればそれを使う
     senses = sensors.build(cfg)
     log = []                                 # agent ができる前のログ中継
-    tts = asr = study = asr_learner = camera = web = None
+    tts = asr = study = asr_learner = camera = web = scholar = None
 
     if cfg["voice"] or cfg["study"]:
         try:
@@ -68,8 +68,10 @@ def main(argv=None):
     if cfg["web"]:
         from .web import WebSearch
         web = WebSearch(cfg)
+        from .scholar import Scholar
+        scholar = Scholar(cfg)
 
-    agent = Tachikoma(cfg, llm, memory, senses, Probes(cfg, memory, web=web, camera=camera, llm=llm),
+    agent = Tachikoma(cfg, llm, memory, senses, Probes(cfg, memory, web=web, camera=camera, llm=llm, scholar=scholar),
                       idle_fn=sensors.idle_seconds, data=data, learner=learner,
                       tts=tts, study=study, asr_learner=asr_learner)
     log.append(agent.log)

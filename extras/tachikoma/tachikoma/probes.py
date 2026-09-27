@@ -1,7 +1,10 @@
 """情報収集行為 (プローブ) の実装。すべて読み取り専用。
 
 任意のコマンド実行は意図的に持たない。自律エージェントが「調べる」だけなら、壊すものは何もない。
-外に出るのは web_search の検索語だけで、個人情報らしき語は web.sanitize() が止める。
+外に出るのは web_search / research / challenge の検索語だけで、個人情報らしき語は web.sanitize() が止める。
+
+research / challenge は (根拠テキスト, メタ情報) を返す。メタ情報には根拠の種類から決めた
+信頼度 (reliability) と、因果を示せる研究デザインか (causal_design) が入る。
 """
 
 import os
@@ -10,10 +13,10 @@ from .text import clip
 
 
 class Probes:
-    def __init__(self, cfg, memory, web=None, camera=None, llm=None):
+    def __init__(self, cfg, memory, web=None, camera=None, llm=None, scholar=None):
         self.cfg = cfg
         self.memory = memory
-        self.web, self.camera, self.llm = web, camera, llm
+        self.web, self.camera, self.llm, self.scholar = web, camera, llm, scholar
 
     def _allowed_path(self, path):
         path = os.path.abspath(path)
@@ -45,8 +48,9 @@ class Probes:
             return None
 
     def run(self, name, query):
-        """根拠テキストを返す。見つからなければ None。"""
-        if name not in ("search_memory", "grep_workspace", "read_file", "wait_observe", "web_search", "look"):
+        """根拠テキスト (または (テキスト, メタ情報)) を返す。見つからなければ None。"""
+        if name not in ("search_memory", "grep_workspace", "read_file", "wait_observe", "web_search", "look",
+                        "research", "challenge"):
             return None
         return getattr(self, name)(query)
 
@@ -103,3 +107,18 @@ class Probes:
         text = self.llm.chat(prompts.VISION_SYSTEM, f"確かめたい点: {query or '今の様子'}",
                              images=[img], max_tokens=150)
         return f"カメラ映像の説明: {text}" if text else None
+
+    def research(self, query):
+        """論文・政府文書を調べ、強い根拠から順に並べて返す。"""
+        found = self.scholar.search(query) if self.scholar is not None else []
+        if not found:
+            text = self.web_search(query)
+            return (text, {"reliability": 0.55, "causal_design": False, "kind": "encyclopedia"}) if text else None
+        best = found[0]
+        text = "\n".join(f"{e.cite()}\n  {clip(e.summary, 400)}" for e in found[:3])
+        return text, {"reliability": best.reliability, "causal_design": best.causal_design, "kind": best.kind}
+
+    def challenge(self, query):
+        """反証を探す: 否定・効果なし・批判の方向で検索する。"""
+        return self.research(f"{query} no effect OR criticism OR null result OR replication failure")
+

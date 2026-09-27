@@ -1,0 +1,11 @@
+# Tachikoma 用の最小設定: JSON で結果を返せるようにする (タチコマが機械的に読むため)
+use_default_settings: true
+server:
+  secret_key: "change-this-to-a-random-string"
+  limiter: false
+  image_proxy: false
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json

@@ -28,6 +28,7 @@ class FakeLLM:
     def __init__(self, clock):
         self.gate = GpuGate(duty_cycle=1.0, clock=clock)
         self.appraise, self.plan, self.judge = [], [], []
+        self.inquiry, self.wonder = [], []
         self.calls = []
 
     def chat(self, system, user, schema=None, **kw):
@@ -39,6 +40,10 @@ class FakeLLM:
             return self.plan.pop(0)
         if "verdict" in props:
             return self.judge.pop(0)
+        if "premises" in props:
+            return self.inquiry.pop(0) if self.inquiry else {"premises": [], "unknowns": [], "answerable": True}
+        if "hypotheses" in props:
+            return self.wonder.pop(0) if self.wonder else {"hypotheses": []}
         return "了解。"
 
 

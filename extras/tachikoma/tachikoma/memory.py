@@ -10,6 +10,7 @@ import math
 import sqlite3
 import time
 
+from .epistemics import claim_type
 from .text import jaccard, overlap
 
 FACT, INFERENCE, SPECULATION, REFUTED = "観測事実", "合理的推定", "低確度仮説", "反証済み"
@@ -20,6 +21,7 @@ SOURCE_CAP = {
     "user": 0.99,          # ユーザーの明示的な回答
     "memory": 0.85,        # 過去の記憶からの想起
     "web": 0.85,           # ネット情報。世界の一般知識の裏付けにはなるが、目の前の事実にはならない
+    "research": 0.9,       # 論文・政府文書。強い根拠だが「自分で観測した事実」ではないので [合理的推定] 止まり
     "reflection": 0.75,    # LLM の推論のみ
 }
 
@@ -61,9 +63,17 @@ def entropy(p):
     return -(p * math.log2(p) + (1 - p) * math.log2(1 - p))
 
 
+# 因果の主張の上限: 因果を示せる研究デザイン (RCT・メタ分析・自然実験) の根拠が無い限り、
+# 何度「そうらしい」と確かめても相関の域を出ないので [観測事実] にはしない
+CAUSAL_CAP = 0.8
+MIGRATIONS = (("claim_type", "TEXT DEFAULT 'descriptive'"), ("causal_ok", "INTEGER DEFAULT 0"),
+              ("challenged", "INTEGER DEFAULT 0"), ("promised", "INTEGER DEFAULT 0"))
+
+
 class Belief:
     __slots__ = ("id", "statement", "p", "source", "relevance", "created", "updated",
-                 "verified", "half_life", "attempts", "irreducible", "evidence", "clock")
+                 "verified", "half_life", "attempts", "irreducible", "evidence",
+                 "claim_type", "causal_ok", "challenged", "promised", "clock")
 
     def __init__(self, row, clock=time.time):
         for k in self.__slots__[:-1]:
@@ -96,6 +106,11 @@ class Memory:
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(beliefs)")}
+        for name, decl in MIGRATIONS:
+            if name not in cols:
+                self.db.execute(f"ALTER TABLE beliefs ADD COLUMN {name} {decl}")
+        self.db.commit()
         self.clock = clock
 
     # ---------- events ----------
@@ -165,38 +180,54 @@ class Memory:
                                relevance=max(same.relevance, relevance))
             return same.id
         now = self.clock()
-        p = min(p, SOURCE_CAP.get(source, 0.75))
+        kind = claim_type(statement)
+        cap = SOURCE_CAP.get(source, 0.75)
+        if kind == "causal":
+            cap = min(cap, CAUSAL_CAP)
+        p = min(p, cap)
         cur = self.db.execute(
-            "INSERT INTO beliefs(statement,p,source,relevance,created,updated,verified,half_life,evidence)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO beliefs(statement,p,source,relevance,created,updated,verified,half_life,evidence,"
+            "claim_type) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (statement, p, source, relevance, now, now, now, half_life,
-             json.dumps([evidence] if evidence else [], ensure_ascii=False)))
+             json.dumps([evidence] if evidence else [], ensure_ascii=False), kind))
         self.db.commit()
         return cur.lastrowid
 
     def update_belief(self, bid, delta_logit, source, evidence=None, relevance=None,
-                      count_attempt=False):
+                      count_attempt=False, causal_evidence=False):
         """対数オッズに根拠の重みを足す (ナイーブベイズ的更新)。
 
         上限は「これまでに得た最も強い出所」で決まる。内省を何度重ねても
-        observation 級の確信には届かない。"""
+        observation 級の確信には届かない。因果の主張は、因果を示せる研究デザインの
+        根拠 (causal_evidence=True) を一度でも得るまで CAUSAL_CAP 止まり。"""
         b = self.get_belief(bid)
         if not b:
             return None
         now = self.clock()
-        rank = ["reflection", "web", "memory", "observation", "user"]
+        rank = ["reflection", "web", "memory", "research", "observation", "user"]
         best_source = max([b.source, source], key=lambda s: rank.index(s) if s in rank else 0)
         cap = SOURCE_CAP.get(best_source, 0.75)
+        causal_ok = bool(b.causal_ok) or bool(causal_evidence)
+        if b.claim_type == "causal" and not causal_ok:
+            cap = min(cap, CAUSAL_CAP)
         p = sigmoid(logit(b.p_now(now)) + delta_logit)
         p = min(max(p, 1 - cap), cap)
         ev = b.evidence + ([evidence] if evidence else [])
         self.db.execute(
             "UPDATE beliefs SET p=?, source=?, updated=?, verified=?, evidence=?, relevance=?,"
-            " attempts=attempts+? WHERE id=?",
+            " attempts=attempts+?, causal_ok=? WHERE id=?",
             (p, best_source, now, now, json.dumps(ev[-8:], ensure_ascii=False),
-             b.relevance if relevance is None else relevance, 1 if count_attempt else 0, bid))
+             b.relevance if relevance is None else relevance, 1 if count_attempt else 0,
+             1 if causal_ok else 0, bid))
         self.db.commit()
         return self.get_belief(bid)
+
+    def set_flag(self, bid, flag, value=1):
+        """challenged (反証を探した) / promised (ユーザーに調べると約束した) の印。"""
+        if flag not in ("challenged", "promised"):
+            raise ValueError(flag)
+        self.db.execute(f"UPDATE beliefs SET {flag}=? WHERE id=?", (value, bid))
+        self.db.commit()
 
     def mark_irreducible(self, bid):
         self.db.execute("UPDATE beliefs SET irreducible=1 WHERE id=?", (bid,))

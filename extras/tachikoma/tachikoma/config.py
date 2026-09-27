@@ -58,6 +58,17 @@ DEFAULTS = {
     "ollama_bin": "ollama",
     "model_prefix": "tachikoma",
 
+    # --- 人格と認識の作法 ---
+    "user_name": "",                  # タチコマが呼ぶ名前 (空なら「キミ」)
+    "persona_playfulness": 0.6,       # はしゃぎ具合 (0-1)
+    "persona_skepticism": 0.6,        # 慎重さ (確信過剰のときの初期確信の縮め方に効く)
+    "chat_temperature": 0.5,
+    "inquiry_on_chat": True,          # 返事の前に「怪しい前提」と「知らないこと」を点検する
+    "wonder_interval_s": 900,         # 自分から疑問を作る間隔
+    "challenge_share": 0.15,          # 好奇心の何割を「確信した推定の反証探し」に使うか
+    "contact_email": "",              # OpenAlex の礼儀 (任意。送るのは検索時のみ)
+    "gov_sites": ["go.jp", "gov"],    # SearXNG で政府文書を探すドメイン
+
     # --- 音声会話モード (耳・口) ---
     "voice": False,                   # マイクで常時聴取し、声で返事する
     "wake_words": ["タチコマ", "たちこま"],

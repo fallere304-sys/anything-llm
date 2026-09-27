@@ -35,6 +35,10 @@ PROBES = {
         "wait_observe", "何もせず、次の出来事で自然に判明するのを待つ", 0.5, 0.15, "observation"),
     "web_search": ProbeSpec(
         "web_search", "ネットで一般的な知識を調べる (個人的なことは調べられない)", 0.6, 0.6, "web"),
+    "research": ProbeSpec(
+        "research", "論文・政府文書で調べる (根拠の強さを格付けする)", 0.8, 0.8, "research"),
+    "challenge": ProbeSpec(
+        "challenge", "反証を探す (論文・ネットで、この仮説に反する根拠を探す)", 0.8, 0.7, "research"),
     "look": ProbeSpec(
         "look", "カメラで今の様子を見る (query に見たい点)", 0.8, 0.7, "observation"),
     "ask_user": ProbeSpec(

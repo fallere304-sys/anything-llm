@@ -15,6 +15,14 @@
   - ユーザーとのやり取り: /good /bad 訂正、質問への回答、本人の申告
   - 自律調査: 仮説が外部の根拠で確定したとき、知識と「結論と整合した判定」を記録
 
+性格の芯 (persona.py / epistemics.py) はプロンプトだけでなく仕組みとして実装している:
+  知ったかぶりしない  返事の前に「答えに必要だが知らないこと」を洗い出し、調べると約束する。
+                      調べ終わったら「さっきの、調べたよ！」と自分から報告する
+  前提を疑う          発言の前提を点検し、怪しい前提は確かめる対象にする
+  疑問を作る          確かめた事柄から「なぜ？」「もし違ったら？」を自分で作る (wonder)
+  根拠と因果          論文・政府文書を格付けし、因果の主張は因果を示せる研究デザインでしか確信しない
+  自分を疑う          確信の較正 (当たり外れの記録) で初期確信を縮め、確信した推定の反証も探す (challenge)
+
 GPU 推論は 1 tick に最大 1 回。ユーザーの話しかけだけは即時・最優先。
 """
 
@@ -25,7 +33,9 @@ from . import curiosity, prompts
 from .attention import ALONE, Attention
 from .llm import LLMError
 from .dataset import TrainingData
-from .memory import FACT, INFERENCE, REFUTED, SPECULATION, Memory
+from .epistemics import Calibration, shrink_p
+from .memory import FACT, INFERENCE, REFUTED, SPECULATION, Memory, entropy
+from .persona import DIARY_SYSTEM, SelfModel, diary_input
 from .text import clip, overlap
 
 # 判定 → 対数オッズの変化量 (プローブの信頼度を掛けて使う)
@@ -50,6 +60,8 @@ class Tachikoma:
                                                 has_camera=getattr(probes, "camera", None) is not None)
         self.mode = None
         self.want_look = False
+        self.selfm = SelfModel(memory, clock)
+        self.calib = Calibration(memory)
         self.sensors, self.probes = sensors, probes
         self.out, self.clock = out, clock
         self.idle_fn = idle_fn or (lambda: None)
@@ -62,6 +74,8 @@ class Tachikoma:
         self.asked = None                   # 実際に尋ねて回答待ちの信念 id
         self.slept = False
         self.backoff_until = 0.0
+        self.last_wonder = now
+        self.last_diary = now
 
     # ------------------------------------------------------------------ loop
     def run_forever(self):
@@ -103,7 +117,7 @@ class Tachikoma:
                 if self.want_look:
                     self.look_around()
                 else:
-                    self.appraise_next() or self.curiosity_step()
+                    self.appraise_next() or self.curiosity_step() or self.wonder()
             except LLMError as e:
                 self.log(f"推論失敗、30秒待ちます: {e}")
                 self.backoff_until = now + 30
@@ -181,13 +195,15 @@ class Tachikoma:
                     self.apply_verdict(b, verdict, "user", 1.0, "ユーザー回答: " + clip(text, 200))
                     self.asked = None
         user = self.context_text() + "\n\n# ユーザーの発言\n" + text
+        check = self.inquire(text) if self.cfg["inquiry_on_chat"] else ""
         # 即効層: 学習前でも、過去に裏付けの取れた例をプロンプトに添える
         shots = "\n".join(x for x in (self.data.examples("knowledge", text),
                                        self.data.examples("chat", text)) if x)
-        system = prompts.CHAT_VOICE_SYSTEM if voice else prompts.CHAT_SYSTEM
+        system = self.selfm.system_prompt(self.cfg, voice=voice, calibration=self.calib.stats())
         try:
-            reply = self.llm.chat(system, (shots + "\n\n" if shots else "") + user,
-                                  max_tokens=160 if voice else 400, temperature=0.5)
+            reply = self.llm.chat(system, (shots + "\n\n" if shots else "") + user + check,
+                                  max_tokens=160 if voice else 400,
+                                  temperature=self.cfg.get("chat_temperature", 0.5))
         except LLMError as e:
             self.say(f"(推論に失敗しました: {e})")
             return
@@ -198,13 +214,78 @@ class Tachikoma:
         self.memory.add_event("self", "reply", reply, 0.0)
         self.data.remember_chat(system, user, reply)
 
+    def inquire(self, text):
+        """答える前の点検: 怪しい前提と、知らないことを洗い出して「調べる対象」にする。
+
+        返り値は返事のプロンプトに足す点検結果。知らないことは知らないと言い、調べると約束させる。"""
+        try:
+            res = self.llm.chat(prompts.INQUIRY_SYSTEM, self.context_text() + "\n\n# 発言\n" + text,
+                                schema=prompts.INQUIRY_SCHEMA, max_tokens=300)
+        except LLMError:
+            return ""
+        doubtful, unknown = [], []
+        for pr in (res.get("premises") or [])[:3]:
+            st = (pr.get("statement") or "").strip()
+            if st and pr.get("doubtful"):
+                self._hypothesis(st, 0.5, relevance=1.0, basis="premise")
+                doubtful.append(st)
+        for u in (res.get("unknowns") or [])[:3]:
+            u = (u or "").strip()
+            if u:
+                bid = self._hypothesis(u, 0.5, relevance=1.0, basis="unknown")
+                self.memory.set_flag(bid, "promised")
+                unknown.append(u)
+        if not doubtful and not unknown:
+            return ""
+        lines = ["\n\n# 返事の前の点検"]
+        if doubtful:
+            lines.append("- 怪しい前提 (まずここを確かめたいと伝える): " + " / ".join(doubtful))
+        if unknown:
+            lines.append("- ボクがまだ知らないこと (知ったかぶりせず、調べると約束する): " + " / ".join(unknown))
+        return "\n".join(lines)
+
+    def _hypothesis(self, statement, p, relevance, basis):
+        """新しい仮説を記憶し、予測として記録する (後で当たり外れを較正に使う)。"""
+        p = shrink_p(p, self.calib.shrink(self.cfg.get("persona_skepticism", 0.6)))
+        bid = self.memory.add_belief(statement, p, "reflection", relevance=relevance,
+                                     half_life=SITUATION_HALF_LIFE * 12)
+        self.calib.predict(bid, self.memory.get_belief(bid).p, basis)
+        return bid
+
+    def wonder(self):
+        """疑問を作る: 確かめた事柄から「なぜ？」「もし違ったら？」を自分で立てる。"""
+        now = self.clock()
+        if now - self.last_wonder < self.cfg["wonder_interval_s"] or self.attention.conversing(now):
+            return False
+        self.last_wonder = now
+        known = [b for b in self.memory.beliefs() if b.label() in (FACT, INFERENCE)]
+        known.sort(key=lambda b: -b.relevance)
+        if not known:
+            return False
+        res = self.llm.chat(prompts.WONDER_SYSTEM, "\n".join(f"- [{b.label()}] {b.statement}" for b in known[:3]),
+                            schema=prompts.WONDER_SCHEMA, max_tokens=200, temperature=0.8)
+        made = 0
+        for h in (res.get("hypotheses") or [])[:2]:
+            if (h or "").strip():
+                self._hypothesis(h.strip(), 0.5, relevance=0.6, basis="wonder")
+                made += 1
+        if made:
+            self.selfm.bump("questions", made)
+            self.log(f"疑問を {made} 個つくった")
+        return made > 0
+
     def on_command(self, text):
         cmd, _, arg = text.partition(" ")
         arg = arg.strip()
         if cmd == "/good":
+            last = self.data.last_chat
             ok = self.data.feedback(True)
+            if ok and last:
+                self.selfm.remember("褒められた: " + clip(last[2], 80), "praise")
             self.say("覚えておきます。" if ok else "評価できる直前の応答がありません。")
         elif cmd == "/bad":
+            if arg:
+                self.selfm.remember("訂正された: " + clip(arg, 80), "correction")
             ok = self.data.feedback(False, arg)
             if not ok:
                 self.say("評価できる直前の応答がありません。")
@@ -231,6 +312,14 @@ class Tachikoma:
                 self.say("耳の学習は無効です。")
             else:
                 self.say(f"耳を {self.asr_learner.rollback()} に戻しました。")
+        elif cmd == "/diary":
+            self.say(self.selfm.get("last_diary") or "まだ日記を書いてないんです。今夜書きますね！")
+        elif cmd == "/self":
+            c = self.calib.stats()
+            self.say(f"ボクは生まれて {self.selfm.days_alive()} 日目！ 興味: {'、'.join(self.selfm.top_interests()) or 'これから'}"
+                     f" / これまで: {self.selfm.get('counters', {})}"
+                     + (f" / 確信の当たり具合 Brier {c['brier']:.3f} (確信過剰度 {c['overconfidence']:+.2f}, n={c['n']})"
+                        if c["n"] else ""))
         elif cmd == "/status":
             model = self.learner.active_model() if self.learner else self.llm.model
             busy = [f"{lr.stage}" for lr in self.learners() if lr.busy]
@@ -243,7 +332,8 @@ class Tachikoma:
                              f"{'-' if rc is None else f'{rc:.3f}'} / 未学習の聞き間違い: {self.study.count_new_hard()} 件")
             self.say(" | ".join(lines))
         else:
-            self.say("コマンド: /good, /bad [正しい答え], /learn, /rollback, /ear_learn, /ear_rollback, /status")
+            self.say("コマンド: /good, /bad [正しい答え], /learn, /rollback, /ear_learn, /ear_rollback, "
+                     "/status, /self, /diary")
 
     # ------------------------------------------------------------- appraise
     def appraise_next(self):
@@ -268,6 +358,9 @@ class Tachikoma:
             if not st:
                 continue
             p, source = BASIS_PRIOR.get(c.get("basis"), BASIS_PRIOR["guessed"])
+            if source == "reflection":
+                # 確信過剰が続いていたら、推論だけの初期確信を 0.5 側に縮める (自分を疑う)
+                p = shrink_p(p, self.calib.shrink(self.cfg.get("persona_skepticism", 0.6)))
             # 「本文に書いてある」と言うなら本文と重なっているはず。重ならなければ格下げ
             if source == "observation" and overlap(st, ev["content"]) < 0.3:
                 p, source = BASIS_PRIOR["inferred"]
@@ -275,6 +368,8 @@ class Tachikoma:
                 source = "user"
             bid = self.memory.add_belief(st, p, source, relevance=1.0, half_life=SITUATION_HALF_LIFE,
                                          evidence=f"{ev['kind']}#{ev['id']}")
+            if source == "reflection":
+                self.calib.predict(bid, self.memory.get_belief(bid).p, c.get("basis", "guessed"))
             if source == "user":
                 # 本人の申告は、それ自体が学習できる知識
                 b = self.memory.get_belief(bid)
@@ -292,6 +387,8 @@ class Tachikoma:
             allowed += ["grep_workspace", "read_file"]
         if getattr(self.probes, "web", None) is not None:
             allowed.append("web_search")
+        if getattr(self.probes, "scholar", None) is not None or getattr(self.probes, "web", None) is not None:
+            allowed.append("research")
         if getattr(self.probes, "camera", None) is not None:
             allowed.append("look")
         if self.cfg["allow_ask_user"] and self.question_outstanding is None and self.asked is None:
@@ -302,8 +399,12 @@ class Tachikoma:
         max_att = self.cfg["max_probe_attempts"]
         waiting = (self.asked, self.question_outstanding)   # 回答待ちの仮説は重ねて調べない
         beliefs = [b for b in self.memory.beliefs(include_irreducible=False) if b.id not in waiting]
+        can_challenge = "research" in self.allowed_probes()
         if curiosity.drive(beliefs, max_att) < self.cfg["curiosity_threshold"]:
-            return False
+            # 気になる仮説が無い = 自分の「わかったつもり」を疑う番
+            return self.challenge_step(beliefs) if can_challenge else False
+        if can_challenge and self._rand() < self.cfg["challenge_share"] and self.challenge_step(beliefs):
+            return True
         target, u = curiosity.pick_target(beliefs, max_att)
         if target is None:
             return False
@@ -328,6 +429,9 @@ class Tachikoma:
             return True
 
         evidence = self.probes.run(name, query or target.statement)
+        meta = {}
+        if isinstance(evidence, tuple):
+            evidence, meta = evidence
         ev_key = f"{name}: {clip(evidence, 200)}" if evidence else None
         if ev_key and any(ev_key[len(name) + 2:] == e.split(": ", 1)[-1] for e in target.evidence):
             evidence = None     # 既に見た根拠: 同じ証拠を二重に数えない (独立な根拠ではない)
@@ -337,23 +441,65 @@ class Tachikoma:
             return True
         verdict = self.judge(target, f"仮説: {target.statement}\n\n根拠 ({name}):\n{clip(evidence, 2500)}",
                              spec.source)
-        self.apply_verdict(target, verdict, spec.source, spec.reliability, ev_key)
+        self.apply_verdict(target, verdict, spec.source, meta.get("reliability", spec.reliability), ev_key,
+                           causal_evidence=meta.get("causal_design", False))
         return True
 
-    def apply_verdict(self, b, verdict, source, reliability, evidence):
+    def _rand(self):
+        import random
+        return random.random()
+
+    def challenge_step(self, beliefs):
+        """反証探し: 確信している推定のうち、まだ反証を探していないものを 1 つ疑ってみる。"""
+        cands = [b for b in beliefs if b.label() == INFERENCE and not b.challenged and b.relevance > 0.2]
+        if not cands:
+            return False
+        b = max(cands, key=lambda x: x.relevance)
+        self.memory.set_flag(b.id, "challenged")
+        plan = self.llm.chat(prompts.PLAN_SYSTEM, f"# 反証を探したい推定\n{b.statement}\n\n# 使える調べ方\n"
+                             f"- challenge: {curiosity.PROBES['challenge'].description}",
+                             schema=prompts.plan_schema(["challenge"]), max_tokens=120)
+        res = self.probes.run("challenge", (plan.get("query") or b.statement).strip())
+        self.log(f"反証探し: 「{b.statement}」")
+        if not res:
+            return True
+        evidence, meta = res if isinstance(res, tuple) else (res, {})
+        verdict = self.judge(b, f"仮説: {b.statement}\n\n根拠 (反証探し):\n{clip(evidence, 2500)}", "research")
+        self.apply_verdict(b, verdict, "research", meta.get("reliability", 0.7), f"challenge: {clip(evidence, 200)}",
+                           causal_evidence=meta.get("causal_design", False))
+        return True
+
+    def apply_verdict(self, b, verdict, source, reliability, evidence, causal_evidence=False):
         v = verdict.get("verdict", "irrelevant")
-        before = b.label()
+        before, p_before = b.label(), b.p_now()
         if v == "irrelevant":
             nb = self.memory.update_belief(b.id, 0.0, b.source, count_attempt=True)
             self._maybe_give_up(nb)
             return nb
         nb = self.memory.update_belief(b.id, VERDICT_WEIGHT.get(v, 0.0) * reliability, source,
-                                       evidence=evidence, count_attempt=True)
+                                       evidence=evidence, count_attempt=True,
+                                       causal_evidence=causal_evidence and v != "contradicts")
         after = nb.label()
         self.log(f"更新: {nb!r} ({verdict.get('reason', '')})")
+        if after != before:
+            # わかった! = 不確実性が減った分だけ、その話題への興味が育つ
+            gain = entropy(p_before) - entropy(nb.p_now())
+            if gain > 0:
+                self.selfm.learned(nb.statement, gain)
         if after != before and after in (FACT, REFUTED):
             added, dropped = self.data.on_resolved(nb)
             self.log(f"学習標本 +{added} (結論と矛盾した判定 {dropped} 件は不採用)")
+            self.calib.resolve(nb.id, 1 if after == FACT else 0)
+            pred = self.db_prediction(nb.id)
+            if after == REFUTED and pred is not None and pred > 0.6:
+                self.selfm.remember(f"確信していたのに外れた: {clip(nb.statement, 60)}", "mistake")
+        if nb.promised and after in (FACT, INFERENCE, REFUTED) and after != before:
+            # 知らないと言ったことを、知にした → 自分から報告する
+            self.memory.set_flag(nb.id, "promised", 0)
+            self.memory.add_utterance(
+                "finding", f"ねえねえ、さっきわからなかった「{clip(nb.statement, 60)}」、調べたよ！ → [{after}] "
+                           f"{verdict.get('reason', '')}".strip(), 0.9, nb.id)
+            return nb
         if before == SPECULATION and after in (FACT, INFERENCE, REFUTED):
             self.memory.add_utterance(
                 "finding", f"確かめた: {nb.statement} → [{after}] {verdict.get('reason', '')}".strip(),
@@ -361,6 +507,10 @@ class Tachikoma:
         else:
             self._maybe_give_up(nb)
         return nb
+
+    def db_prediction(self, bid):
+        row = self.memory.db.execute("SELECT p FROM predictions WHERE belief_id=?", (bid,)).fetchone()
+        return row["p"] if row else None
 
     def judge(self, b, user, source):
         """判定し、後で結論が出たときの事後ラベル付けのために記録しておく。"""
@@ -425,7 +575,32 @@ class Tachikoma:
                 self.memory.add_event("self", "digest", digest, 0.0)
             except LLMError as e:
                 self.log(f"要約失敗: {e}")
+        self.write_diary()
         self.log(f"睡眠: 信念 {removed} 件を整理")
+
+    def write_diary(self):
+        """1 日 1 回、知ったこと・間違えたこと・まだわからないことを自分の言葉で書く。"""
+        now = self.clock()
+        if now - self.last_diary < 20 * 3600 and self.selfm.get("last_diary"):
+            return
+        since = now - 86400
+        rows = self.memory.db.execute(
+            "SELECT b.statement, p.p, p.outcome FROM predictions p JOIN beliefs b ON b.id=p.belief_id"
+            " WHERE p.resolved_ts>=?", (since,)).fetchall()
+        learned = [r["statement"] for r in rows if r["outcome"] == 1]
+        wrong = [r["statement"] for r in rows if r["outcome"] == 0 and r["p"] > 0.6]
+        open_q = [b.statement for b in sorted(self.memory.beliefs(), key=lambda b: -b.relevance)
+                  if b.label() == SPECULATION][:5]
+        if not (learned or wrong or open_q):
+            return
+        try:
+            diary = self.llm.chat(DIARY_SYSTEM, diary_input(learned, wrong, open_q, self.calib.stats()),
+                                  max_tokens=400, temperature=0.7)
+        except LLMError:
+            return
+        self.last_diary = now
+        self.selfm.set("last_diary", diary)
+        self.memory.add_event("self", "diary", diary, 0.0)
 
     # ---------------------------------------------------------------- learn
     def maybe_learn(self):
@@ -459,7 +634,15 @@ class Tachikoma:
     def context_text(self, k=8):
         top = sorted(self.memory.beliefs(), key=lambda b: -b.relevance)[:k]
         lines = [f"# いま把握していること\n状況: {self.situation or '(まだ不明)'}"]
-        lines += [f"- [{b.label()}] {b.statement}" for b in top if b.label() != REFUTED]
+        for b in top:
+            if b.label() == REFUTED:
+                continue
+            note = ""
+            if b.source == "research" and b.evidence:
+                note = f" (根拠: {clip(b.evidence[-1].split(': ', 1)[-1], 80)})"
+            if b.claim_type == "causal" and not b.causal_ok:
+                note += " (因果の根拠は相関どまり)"
+            lines.append(f"- [{b.label()}] {b.statement}{note}")
         recent = [e for e in self.memory.recent_events(6) if e["kind"] != "digest"]
         if recent:
             lines.append("# 直近の出来事")

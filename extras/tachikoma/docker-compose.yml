@@ -1,0 +1,21 @@
+# Docker Desktop で動かす補助サービス。本体 (Python) と Ollama は Windows 上で直接動かす。
+#   docker compose up -d
+# SearXNG: 自前のメタ検索。政府文書 (site:go.jp 等) の検索と、検索語を外部の検索会社に
+#          アカウントと紐づけて渡さないために使う。config.json で "searxng_url": "http://127.0.0.1:8080"
+services:
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - "127.0.0.1:8080:8080"          # 自分の PC からだけ使える
+    volumes:
+      - ./docker/searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://127.0.0.1:8080/
+      - SEARXNG_BIND_ADDRESS=0.0.0.0     # IPv6 が無い環境でも起動できるように
+      - GRANIAN_HOST=0.0.0.0
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
