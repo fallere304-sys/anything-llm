@@ -57,8 +57,53 @@ jobs:
           if (-not (Test-Path "$home_dir\python\python.exe")) { throw "python was not installed" }
           exit 0
 
+      - name: Build TachikomaUninstall.exe
+        run: |
+          pyinstaller --noconfirm --onefile --console --name TachikomaUninstall `
+            --icon packaging/tachikoma.ico packaging/uninstaller.py
+
+      - name: "Install, then uninstall from the installed copy (the PC must be back to how it was)"
+        run: |
+          $h = "$env:LOCALAPPDATA\Tachikoma"
+          $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Tachikoma.lnk"
+          $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Tachikoma"
+          $p = Start-Process -FilePath dist\Tachikoma.exe -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 3) { throw "expected exit code 3 without Ollama, got $($p.ExitCode)" }
+          foreach ($x in @($h, "$h\Tachikoma.exe", "$h\footprint.json", $lnk, $key)) {
+            if (-not (Test-Path $x)) { throw "missing after install: $x" }
+          }
+          Get-ItemProperty $key | Format-List DisplayName, UninstallString
+          # 「設定 → アプリ」と同じ: インストール先の Tachikoma.exe --uninstall (自分を一時フォルダに写して続ける)
+          & "$h\Tachikoma.exe" --uninstall --yes
+          $deadline = (Get-Date).AddMinutes(3)
+          while ((Test-Path $h) -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
+          foreach ($x in @($h, $lnk, $key)) { if (Test-Path $x) { throw "left behind: $x" } }
+          $deadline = (Get-Date).AddSeconds(90)
+          do {
+            Start-Sleep 3
+            $left = Get-ChildItem $env:TEMP -Filter "tachikoma-uninstall-*.exe" -ErrorAction SilentlyContinue
+          } while ($left -and (Get-Date) -lt $deadline)
+          if ($left) { throw "the temporary uninstaller was left behind: $left" }
+          exit 0
+
+      - name: "Install again, then TachikomaUninstall.exe with a backup"
+        run: |
+          $h = "$env:LOCALAPPDATA\Tachikoma"
+          $p = Start-Process -FilePath dist\Tachikoma.exe -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 3) { throw "expected exit code 3 without Ollama, got $($p.ExitCode)" }
+          $p = Start-Process -FilePath dist\TachikomaUninstall.exe -Wait -PassThru -NoNewWindow `
+            -ArgumentList "--yes", "--backup", "$env:RUNNER_TEMP\backup"
+          if ($p.ExitCode -ne 0) { throw "uninstall failed ($($p.ExitCode))" }
+          if (Test-Path $h) { throw "left behind: $h" }
+          if (-not (Get-ChildItem "$env:RUNNER_TEMP\backup" -Filter "Tachikoma-backup-*.zip")) { throw "no backup" }
+          $p = Start-Process -FilePath dist\TachikomaUninstall.exe -Wait -PassThru -NoNewWindow -ArgumentList "--yes"
+          if ($p.ExitCode -ne 0) { throw "second run should find nothing ($($p.ExitCode))" }
+          exit 0
+
       - uses: actions/upload-artifact@v4
         with:
           name: Tachikoma-windows
-          path: extras/tachikoma/dist/Tachikoma.exe
+          path: |
+            extras/tachikoma/dist/Tachikoma.exe
+            extras/tachikoma/dist/TachikomaUninstall.exe
           retention-days: 30

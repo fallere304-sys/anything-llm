@@ -31,7 +31,38 @@ GitHub Actions ("Build Tachikoma.exe") の実行結果ページの **Artifacts �
 - 新しい `Tachikoma.exe` を起動すると更新される。自己進化で書き換わった思考のファイルは残し (同梱の版は `*.new` として横に置く)、
   記憶 (`tachikoma.db`)・設定 (`config.json`)・学習の成果・モデル・育ったプラグインには触れない
 - 設定は `%LOCALAPPDATA%\Tachikoma\app\config.json` (監視フォルダ `watch_dirs` などはここで)
-- `Tachikoma.exe --selftest` で、同梱の Python でテスト一式を走らせて動作を確かめられる。`--uninstall` で取り除く (記憶も消える)
+- `Tachikoma.exe --selftest` で、同梱の Python でテスト一式を走らせて動作を確かめられる
+- キャッシュ (pip・Hugging Face・PyTorch) も Hugging Face のログイン情報 (`Tachikoma.exe --hf-login`) もインストール先の中に置く。
+  PC のほかの場所を汚さないため
+
+### 取り除く (完全アンインストール・原状回復)
+
+`TachikomaUninstall.exe` (同じ Artifacts に入っている) を実行する。`Tachikoma.exe --uninstall` や、
+Windows の「設定 → アプリ → Tachikoma → アンインストール」からも同じものが動く。
+
+- **入れる前の姿を記録してある**: 初回に入れるとき、PC にもともとあったもの (Ollama とそのモデル・Hugging Face と pip のキャッシュ・
+  Docker のイメージ) を台帳 (`footprint.json`) に写し、その後タチコマが外に作ったもの (スタートメニュー・アプリ一覧への登録・
+  Ollama に取ったモデル・起動した場所) を書き足していく。アンインストーラは **入れる前からあったものは残し、
+  タチコマが持ち込んだものだけを消す**
+- 何を消すか一覧で見せ、確かめてから消す。最後に **一つずつ残っていないか確かめて** 結果を出す (`済み` / `残っている`)
+- 消すもの: 動いているタチコマを止める → Docker のコンテナとイメージ (自己進化) → Ollama のモデル (`gemma4:e2b` と学習した
+  `tachikoma-vN`) → 古い版が置いた Hugging Face・pip のキャッシュ → スタートメニュー・アプリ一覧への登録 →
+  Windows に残った使用の記録 (マイク・カメラの許可の記録・アプリ名の記録・互換性の記録) → ファイアウォールの規則 →
+  一時フォルダの残り → インストール先 (記憶・設定・学習と進化の成果・同梱の Python)
+- 持ち込んだか分からないもの (台帳が無い・古い版から更新した場合など) は一つずつ尋ねる。ダウンロードした `Tachikoma.exe`、
+  Ollama 本体 (`--remove-ollama`)、Hugging Face のログイン情報も、ここで尋ねる
+
+| 使い方 | 効果 |
+|---|---|
+| `TachikomaUninstall.exe` | 一覧を見せて、確かめてから消す (消す前に記憶を zip で残すかも尋ねる) |
+| `TachikomaUninstall.exe --dry-run` | 何が消えるかを見るだけ |
+| `TachikomaUninstall.exe --yes` | 確かめずに消す (タチコマが持ち込んだと確かなものだけ) |
+| `TachikomaUninstall.exe --yes --all` | 持ち込んだか分からないものも消す |
+| `--backup フォルダ` | 消す前に記憶・設定・進化の成果を zip にする (入れ直したあと `%LOCALAPPDATA%\Tachikoma\app` に展開すれば続きから) |
+| `--remove-ollama` | Ollama 本体も取り除く (タチコマのために入れた場合) |
+
+Docker Desktop は Windows の仕組み (WSL) と深く結びついた大きなアプリなので、自動では取り除かない
+(タチコマのために入れたのなら、最後にそう案内する)。
 
 > exe は署名していないので、初回に Windows SmartScreen の警告が出ることがある (「詳細情報」→「実行」)。
 > Ollama と Docker Desktop はそれぞれ独立したアプリなので、Tachikoma.exe の中には入れられない (案内とダウンロードのページを開くところまで行う)。

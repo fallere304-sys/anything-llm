@@ -8,4 +8,6 @@ python -m venv .build-venv
 .\.build-venv\Scripts\python packaging\build_app.py --out build\payload.zip
 .\.build-venv\Scripts\pyinstaller --noconfirm --clean --onefile --console --name Tachikoma `
   --icon packaging\tachikoma.ico --add-data "build/payload.zip:." packaging\launcher.py
-Write-Host "できました: dist\Tachikoma.exe"
+.\.build-venv\Scripts\pyinstaller --noconfirm --onefile --console --name TachikomaUninstall `
+  --icon packaging\tachikoma.ico packaging\uninstaller.py
+Write-Host "できました: dist\Tachikoma.exe と dist\TachikomaUninstall.exe"

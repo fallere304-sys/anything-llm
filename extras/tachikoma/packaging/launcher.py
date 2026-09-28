@@ -3,7 +3,8 @@
     Tachikoma.exe               初回は %LOCALAPPDATA%\\Tachikoma に入れて、準備を整えて起動する。2 回目以降はそのまま起動
     Tachikoma.exe --setup       追加機能 (音声・カメラ・学習・自己進化) の選び直し
     Tachikoma.exe --selftest    入れたあと、同梱の Python でテスト一式を走らせる (動作確認)
-    Tachikoma.exe --uninstall   取り除く (記憶・設定も消える)
+    Tachikoma.exe --uninstall   取り除いて、入れる前の姿に戻す (uninstaller.py。TachikomaUninstall.exe と同じ)
+    Tachikoma.exe --hf-login    Hugging Face にログインする (頭の学習用。ログイン情報もインストール先の中に置く)
 
 中身 (payload.zip):
     python/   Windows 用の組み込み版 Python 3.11 (+ pip)。重い追加機能はここに pip で入れる
@@ -12,6 +13,9 @@
 
 更新するとき、自己進化で書き換わったファイル (進化してよいファイルだけ) は残し、同梱の新しい版を *.new として横に置く。
 記憶 (tachikoma.db)・設定 (config.json)・学習の成果・モデル・プラグインには触れない。
+
+原状回復のために、入れる前の姿と、外に作ったもの (スタートメニュー・アプリ一覧への登録・Ollama に取ったモデル・
+起動した場所) を台帳 (footprint.json) に記録する。キャッシュ (pip・Hugging Face・PyTorch) はインストール先の中に置く。
 """
 
 import argparse
@@ -27,6 +31,9 @@ import urllib.error
 import urllib.request
 import webbrowser
 import zipfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import footprint  # noqa: E402
 
 OLLAMA_DOWNLOAD = "https://ollama.com/download/windows"
 DOCKER_DOWNLOAD = "https://www.docker.com/products/docker-desktop/"
@@ -89,6 +96,7 @@ class App:
         self.cfg_path = os.path.join(self.app, "config.json")
         self.state_path = os.path.join(home, "state.json")
         self.state = self._load(self.state_path, {})
+        self.ledger = footprint.Ledger(home)
 
     @staticmethod
     def _load(path, default):
@@ -109,6 +117,8 @@ class App:
             new = json.loads(zf.read("manifest.json"))
             if self.state.get("version") == new["version"] and os.path.exists(self.py):
                 return False
+            # 原状回復のために、入れる前の姿を写しておく (古い版からの更新なら「後から写した」と記す)
+            self.ledger.snapshot(legacy="version" in self.state)
             if "version" not in self.state:
                 say(f"タチコマを入れています: {self.home}")
             else:
@@ -180,13 +190,33 @@ class App:
                 shutil.copy2(me, target)
             except OSError:
                 return
-        link = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs",
-                            "Tachikoma.lnk")
-        if os.path.exists(link) or not os.path.exists(target):
+        if not os.path.exists(target):
             return
+        self.register(target)
+        link = footprint.start_menu_link()
+        if os.path.exists(link):
+            return
+        self.ledger.note("files", link)
         ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{link}');"
               f"$s.TargetPath='{target}';$s.WorkingDirectory='{self.home}';$s.Save()")
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True)
+
+    def register(self, target, registry=None):
+        """「設定 → アプリ」の一覧に載せる (そこからアンインストールできるように)。今の利用者の範囲 (HKCU) だけ。"""
+        reg = registry or footprint.registry()
+        if reg is None:
+            return False
+        try:
+            reg.set_values(footprint.UNINSTALL_KEY, {
+                "DisplayName": "Tachikoma", "DisplayVersion": str(self.state.get("version", "")),
+                "Publisher": "Tachikoma", "InstallLocation": self.home, "DisplayIcon": target,
+                "UninstallString": f'"{target}" --uninstall',
+                "QuietUninstallString": f'"{target}" --uninstall --yes',
+                "NoModify": 1, "NoRepair": 1})
+        except OSError:
+            return False
+        self.ledger.note("registry", footprint.UNINSTALL_KEY)
+        return True
 
     # ------------------------------------------------------------ 準備を整える
     def ollama(self, model):
@@ -219,6 +249,7 @@ class App:
         if model in names or f"{model}:latest" in names:
             return True
         say(f"\n考える力のモデル {model} を取得します (数 GB。初回だけ)…")
+        self.ledger.note("ollama_models", model)          # タチコマが持ち込んだモデル (取り除くときに消す)
         return self._pull(url, model)
 
     @staticmethod
@@ -257,7 +288,8 @@ class App:
         return True
 
     def pip(self, *args):
-        env = dict(os.environ, PYTHONIOENCODING="utf-8", PIP_DISABLE_PIP_VERSION_CHECK="1")
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", PIP_DISABLE_PIP_VERSION_CHECK="1",
+                   **footprint.cache_env(self.home))
         return subprocess.run([self.py, "-m", "pip", "install", "--no-warn-script-location", *args],
                               cwd=self.app, env=env).returncode == 0
 
@@ -298,7 +330,7 @@ class App:
         if ok:
             self.update_config(eye=True, finetune_enabled=True, asr_finetune_enabled=True, ocr_finetune_enabled=True)
             say("  頭 (Gemma) の学習には、Hugging Face で Gemma の利用規約に同意してログインが要ります:")
-            say(f"    \"{self.py}\" -c \"from huggingface_hub import login; login()\"")
+            say("    Tachikoma.exe --hf-login")
         return ok
 
     def _evolution(self):
@@ -311,6 +343,7 @@ class App:
                 webbrowser.open(DOCKER_DOWNLOAD)
             say("  入れて起動したら、もう一度 `Tachikoma.exe --setup` を実行してください。")
             return False
+        self.ledger.snapshot_docker()        # 自己進化が持ち込むイメージと、前からあったイメージを見分けるため
         models = os.path.join(self.app, "models")
         os.makedirs(models, exist_ok=True)
         for name, urls in GGUF.items():
@@ -353,7 +386,7 @@ class App:
 
     # ------------------------------------------------------------ 起動する
     def env(self):
-        env = dict(os.environ, PYTHONIOENCODING="utf-8", TACHIKOMA_APP="1")
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", TACHIKOMA_APP="1", **footprint.cache_env(self.home))
         site = os.path.join(self.home, "python", "Lib", "site-packages", "nvidia")
         if os.path.isdir(site):     # faster-whisper (CUDA) が cuBLAS / cuDNN の DLL を見つけられるように
             dlls = [os.path.join(site, d, "bin") for d in os.listdir(site) if os.path.isdir(os.path.join(site, d, "bin"))]
@@ -389,24 +422,20 @@ class App:
         say("同梱の Python でテスト一式を走らせます…")
         return subprocess.call([self.py, "-B", "-m", "unittest", "discover", "-s", "tests"], cwd=self.app, env=self.env())
 
-    def uninstall(self):
-        if self.interactive and not ask(f"{self.home} を消します (記憶・設定・学習の成果も消えます)。よいですか？", False):
-            return 1
-        link = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs",
-                            "Tachikoma.lnk")
-        if os.path.exists(link):
-            os.remove(link)
-        shutil.rmtree(self.home, ignore_errors=True)
-        say("取り除きました。")
-        return 0
+    def hf_login(self):
+        return subprocess.call([self.py, "-c", "from huggingface_hub import login; login()"], env=self.env())
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--uninstall" in argv:            # 取り除く (TachikomaUninstall.exe と同じもの)
+        import uninstaller
+        return uninstaller.main([a for a in argv if a != "--uninstall"], prefix=["--uninstall"])
     ap = argparse.ArgumentParser(prog="Tachikoma")
     ap.add_argument("--home", default=os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "Tachikoma"))
     ap.add_argument("--setup", action="store_true", help="追加機能を選び直す")
     ap.add_argument("--selftest", action="store_true", help="入れたあと、テスト一式を走らせる")
-    ap.add_argument("--uninstall", action="store_true")
+    ap.add_argument("--hf-login", action="store_true", help="Hugging Face にログインする (頭の学習用)")
     ap.add_argument("--no-shortcut", action="store_true")
     ap.add_argument("--no-start", action="store_true", help="準備だけして起動しない")
     args = ap.parse_args(argv)
@@ -414,10 +443,12 @@ def main(argv=None):
         sys.stdout.reconfigure(errors="backslashreplace")
     interactive = sys.stdin is not None and sys.stdin.isatty()
     app = App(args.home, interactive)
-    if args.uninstall:
-        return app.uninstall()
     app.install(payload_path())
     app.ensure_config()
+    if getattr(sys, "frozen", False):
+        app.ledger.note("launched_from", os.path.abspath(sys.executable))
+    if args.hf_login:
+        return app.hf_login()
     if args.selftest:
         return app.selftest()
     if not args.no_shortcut:
