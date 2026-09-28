@@ -14,27 +14,29 @@
 - 推論: Ollama 上の `gemma4:e2b` (他のモデルでも可)
 - 想定環境: Windows 10 / i7-7700 / RAM 16GB / GTX 1060 6GB
 
-## すぐ試す: tachikoma.exe
+## Windows アプリ: Tachikoma.exe (これ 1 つで入る)
 
-Python を入れなくても動く実行ファイル。GitHub Actions ("Build tachikoma.exe") の実行結果ページの
-**Artifacts → tachikoma-windows** からダウンロードできる (自分で作るなら `packaging\build_exe.ps1`)。
+GitHub Actions ("Build Tachikoma.exe") の実行結果ページの **Artifacts → Tachikoma-windows** から `Tachikoma.exe` をダウンロードして
+ダブルクリックするだけ。Python などを別に入れる必要はない (自分で作るなら `packaging\build_exe.ps1`)。
 
-1. Ollama を入れて `ollama pull gemma4:e2b` しておく
-2. 好きなフォルダに `tachikoma.exe` を置いてダブルクリック
-3. 初回は同じフォルダに `config.json` と `README.md` が作られ、ブラウザで画面 (http://127.0.0.1:8765) が開く
+初回にやること (画面の案内に答えるだけ):
+1. 自分を `%LOCALAPPDATA%\Tachikoma` に入れ、スタートメニューに「Tachikoma」を登録する (次からはそこから起動)
+2. 追加機能を選ぶ: 音声会話と耳の自習 / 目の自習と頭・耳・目の学習 (PyTorch) / 自己進化 (Docker Desktop と CPU の考えるモデル)。
+   選んだものは自動でダウンロードして入れる (あとで `Tachikoma.exe --setup` で選び直せる)
+3. Ollama が無ければダウンロードのページを開く。あれば Gemma (`gemma4:e2b`) を自動で取得する
+4. タチコマを起動し、ブラウザで画面 (http://127.0.0.1:8765) を開く。終わるときはコンソールで Ctrl+C
 
-exe に入っているのは本体 (会話・好奇心・記憶・性格・論文検索・画面) だけ。音声・カメラ・目 (OCR)・学習は重い依存
-(faster-whisper / torch など) が要るので、**Python 3.11** の venv にそれらを入れ、`config.json` で借りる:
-
-```json
-"extra_site_packages": ["C:/tachikoma-train/Lib/site-packages"],
-"finetune_python": "C:/tachikoma-train/Scripts/python.exe",
-"voice": true, "eye": true
-```
+- 中身は組み込み版の Python 3.11 と本体のソース。**自己進化はインストール先のソースを書き換える**ので、
+  アプリの中で進化が積み重なる (見守り役 `supervisor.py` が改良後の再起動と、壊れたときの自動撤回を担う)
+- 新しい `Tachikoma.exe` を起動すると更新される。自己進化で書き換わった思考のファイルは残し (同梱の版は `*.new` として横に置く)、
+  記憶 (`tachikoma.db`)・設定 (`config.json`)・学習の成果・モデル・育ったプラグインには触れない
+- 設定は `%LOCALAPPDATA%\Tachikoma\app\config.json` (監視フォルダ `watch_dirs` などはここで)
+- `Tachikoma.exe --selftest` で、同梱の Python でテスト一式を走らせて動作を確かめられる。`--uninstall` で取り除く (記憶も消える)
 
 > exe は署名していないので、初回に Windows SmartScreen の警告が出ることがある (「詳細情報」→「実行」)。
+> Ollama と Docker Desktop はそれぞれ独立したアプリなので、Tachikoma.exe の中には入れられない (案内とダウンロードのページを開くところまで行う)。
 
-## セットアップ (Windows 10)
+## ソースから動かす (Windows 10)
 
 1. Ollama をインストールし、モデルを取得:
    ```powershell

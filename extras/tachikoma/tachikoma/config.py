@@ -245,7 +245,7 @@ DEFAULTS = {
     "evolution_threads": 4,           # 2 スレッドは会話・耳・目のために残す
     "cpu_brain_timeout_s": 1800,
 
-    # --- 実行ファイル (tachikoma.exe) 用 ---
+    # --- 以前の単体 exe (PyInstaller で本体を固めたもの) 用。Tachikoma.exe (組み込み Python 版) では使わない ---
     # exe は Python 本体と標準ライブラリだけを内蔵する。音声・OCR など重い依存は、
     # 同じ Python 3.11 の venv の site-packages をここに指定すると読み込める
     "extra_site_packages": [],
