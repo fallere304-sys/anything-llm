@@ -1,4 +1,4 @@
-"""視界の端への興味・深掘り・先見の帳簿・仲間の検証。"""
+"""視界の端への興味・深掘り・先見の帳簿・自発性の選択圧・プラグインの検証。"""
 
 import os
 import sys
@@ -8,10 +8,12 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tachikoma import curiosity, prompts  # noqa: E402
-from tachikoma.bonds import Bonds  # noqa: E402
 from tachikoma.kernel.fitness import window_stats  # noqa: E402
 from tachikoma.kernel.foresight import Foresight, auc, related, terms  # noqa: E402
+from tachikoma.kernel.evolve import GOALS  # noqa: E402
 from tachikoma.kernel.guard import check_source  # noqa: E402
+from tachikoma.kernel.initiative import Initiative  # noqa: E402
+from tachikoma.kernel.plugins import PluginHost  # noqa: E402
 from tachikoma.kernel.metrics import Metrics  # noqa: E402
 from tachikoma.memory import Memory  # noqa: E402
 from tachikoma.news import NewsSensor, parse_feed  # noqa: E402
@@ -150,7 +152,7 @@ class ForesightTest(unittest.TestCase):
         self.assertTrue(check_source("tachikoma/agent.py", "x = 'UPDATE info_items SET used_ts=1'\n"))
         self.assertTrue(check_source("tachikoma/agent.py", "from .kernel import foresight\n"))
         self.assertTrue(check_source("tachikoma/agent.py", "from .kernel.foresight import Foresight\n"))
-        for f in ("bonds.py", "inquiry.py", "curiosity.py", "agent.py", "memory.py"):
+        for f in ("inquiry.py", "curiosity.py", "agent.py", "memory.py"):
             path = os.path.join(os.path.dirname(__file__), "..", "tachikoma", f)
             with open(path, encoding="utf-8") as fh:
                 self.assertEqual(check_source("tachikoma/" + f, fh.read()), [], f)
@@ -187,44 +189,8 @@ class NewsTest(unittest.TestCase):
         self.assertEqual(s.poll(), [])
 
 
-# ---------------------------------------------------------------- 仲間
-class BondsTest(unittest.TestCase):
-    def test_bonds_grow_with_interaction(self):
-        clock = Clock()
-        b = Bonds(Memory(":memory:", clock=clock).db, clock)
-        b.mention("田中さん", "person", "user_message")
-        self.assertEqual(b.find_in("田中さんが入院", 0.3), [])     # 1 回ではまだ仲間ではない
-        b.mention("田中さん", "person", "user_message")
-        self.assertEqual(len(b.find_in("田中さんが入院", 0.3)), 1)
-        self.assertIsNone(b.mention("ユーザー", "person"))           # 一般名詞は仲間にしない
-        b.befriend("SSL", "software")
-        self.assertEqual(b.find_in("OpenSSL に脆弱性", 0.3), [])   # 英字は語の境界で照合
-        self.assertEqual(len(b.find_in("SSL の証明書", 0.3)), 1)
-
-    def test_tell_a_companion_by_voice(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            agent, llm, sensor, mem, clock, out = world_agent(tmp)
-            agent.on_user_message("田中さんは仲間だよ", voice=True)
-            self.assertEqual(len(agent.bonds.find_in("田中さんが表彰された", 0.3)), 1)
-            self.assertIn("仲間！覚えたよ", out[-1])
-
-    def test_only_shared_experience_makes_companions(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            agent, llm, sensor, mem, clock, out = world_agent(tmp)
-            ent = {"situation": "", "claims": [], "remark": "", "remark_importance": "none",
-                   "entities": [{"name": "Rust", "kind": "software"}]}
-            llm.appraise += [dict(ent), dict(ent)]
-            agent.perceive("news", "news", "Rust の新しい版が出た")
-            agent.appraise_next()
-            self.assertIsNone(agent.bonds.get("Rust"))              # ニュースに出ただけの名前は仲間にしない
-            agent.perceive("terminal", "terminal_output", "cargo build (Rust) 成功")
-            agent.appraise_next()
-            self.assertIsNotNone(agent.bonds.get("Rust"))
-
-
-# ---------------------------------------------------------------- 仲間の危機
 class InquiryTest(unittest.TestCase):
-    """視界の端の情報に興味を持つ → 深掘りする → 途中で誰かに関係すると気づく → 裏付け → 行動する。"""
+    """視界の端の情報に疑問を持つ → 掘る → わかったことから次の疑問 → 収穫が減ったら見切る。"""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -237,55 +203,39 @@ class InquiryTest(unittest.TestCase):
         # 一般の好奇心は止めて、深掘りの糸だけを見る
         agent, llm, sensor, mem, clock, out = world_agent(self.tmp, curiosity_threshold=1.1, **over)
         agent.probes.news = FakeNews(results)
-        agent.on_command("/friend 田中さん person")
-        mem.add_belief("田中さんは札幌に住んでいる", 0.95, "user")
         return agent, llm, sensor, mem, clock, out
 
     def appraisal(self, question):
         return {"situation": "", "claims": [], "remark": "", "remark_importance": "none", "question": question}
 
-    def run_steps(self, agent, n):
-        for _ in range(n):
-            agent.step()
-
-    def test_edge_of_vision_to_action(self):
-        """テレビの停電のニュース (仲間の名前は出ない) → 掘る → 札幌の仲間に関係すると気づく → 動く。"""
-        agent, llm, sensor, mem, clock, out = self.dig_agent([
-            "- 北海道で大規模停電 札幌市でも約80万戸 (https://www.hokkaido-np.co.jp/a/1)",
-            "- 札幌の停電 復旧は明日以降の見通し (https://www3.nhk.or.jp/sapporo/2)"])
+    def test_starts_naive(self):
+        """出発点のタチコマは、掘って知ったことを誰かと結びつけたり、それをもとに動いたりはしない。"""
+        agent, llm, sensor, mem, clock, out = self.dig_agent(
+            ["- 北海道で大規模停電 札幌市でも約80万戸 (https://www.hokkaido-np.co.jp/a/1)"])
+        mem.add_belief("田中さんは札幌に住んでいる", 0.95, "user")
         agent.perceive("voice", "overheard_speech", "テレビ: 北海道で大規模な停電が発生、復旧のめどは立っていません")
-        self.assertNotIn("田中", mem.pending_events()[0]["content"])      # 仲間の名前は出ていない
         llm.appraise.append(self.appraisal("停電は札幌市内にも及んでいる"))
-        llm.plan += [{"probe": "news_search", "query": "北海道 停電 札幌"}] * 2
-        llm.judge += [{"verdict": "supports", "reason": "札幌も停電と報道"}] * 2
-        llm.matters = [{"matters": True, "to_whom": "田中さん", "why": "田中さんは札幌に住んでいて、札幌が停電している",
-                        "urgent": False, "next_question": ""}]
-        llm.act.append({"summary": "北海道の大停電が札幌にも及んでいて、田中さんが住む地域も停電しているみたい",
-                        "actions": [{"type": "draft_message", "detail": "田中さん、札幌が停電って聞いたけど大丈夫？"},
-                                    {"type": "remind_later", "detail": ""}]})
-        self.run_steps(agent, 12)
+        llm.plan += [{"probe": "news_search", "query": "北海道 停電 札幌"}]
+        llm.judge += [{"verdict": "supports", "reason": "札幌も停電と報道"}]
+        for _ in range(12):
+            agent.step()
         th = agent.inquiry.recent()[0]
-        self.assertEqual(th["state"], "reported")
-        self.assertGreaterEqual(th["steps"], 2)
-        reflection = [u for sys_, u in llm.calls if sys_ == prompts.MATTERS_SYSTEM][0]
-        self.assertIn("田中さんは札幌に住んでいる", reflection)       # 関係は、掘った結果と仲間の記憶を照らして気づく
-        said = "\n".join(out)
-        self.assertIn("聞こえてきた話が気になって調べてたんだけど", said)
-        self.assertIn("[合理的推定]", said)
-        self.assertIn("大丈夫？", said)
-        self.assertNotIn("確かめた:", said)                     # 途中の発見を 1 つずつ言わない
-        self.assertIsNotNone(th["remind_at"])
+        self.assertGreaterEqual(th["steps"], 1)                          # 視界の端に興味を持って掘った
+        b = [x for x in mem.beliefs() if "停電" in x.statement][0]
+        self.assertEqual(b.label(), "合理的推定")                       # 知った
+        self.assertFalse(any("田中" in o for o in out))                 # でも、結びつけて動くことはまだできない
+        self.assertFalse(hasattr(prompts, "MATTERS_SYSTEM") or hasattr(prompts, "ACT_SYSTEM"))
 
     def test_unrelated_digging_ends_quietly(self):
-        agent, llm, sensor, mem, clock, out = self.dig_agent(["- 深海魚の図鑑 (https://example.org/fish)"] * 5)
+        agent, llm, sensor, mem, clock, out = self.dig_agent([f"- 深海魚の図鑑 {i} (https://example.org/{i})" for i in range(5)])
         agent.perceive("screen", "background_window", "背後のウィンドウ: 深海魚はなぜ光るのか - 動画")
         llm.appraise.append(self.appraisal("深海魚が光るのは獲物を呼ぶためだ"))
         llm.plan += [{"probe": "news_search", "query": "深海魚 光る"}] * 5
-        self.run_steps(agent, 16)                                 # 判定は既定で irrelevant → 掘っても減らない
+        for _ in range(16):                                      # 判定は既定で irrelevant → 掘っても減らない
+            agent.step()
         th = agent.inquiry.recent()[0]
         self.assertEqual(th["state"], "closed")
         self.assertLessEqual(th["steps"], agent.cfg["dig_min_steps"] + 1)   # 収穫が無ければ早めに見切る
-        self.assertFalse(any("ねえねえ" in o for o in out))      # 誰にも関係しなければ黙って終わる
 
     def test_keeps_digging_while_it_pays(self):
         agent, llm, sensor, mem, clock, out = self.dig_agent(
@@ -293,51 +243,13 @@ class InquiryTest(unittest.TestCase):
         agent.perceive("voice", "overheard_speech", "ラジオ: 新しい彗星が肉眼で見えるかもしれない")
         llm.appraise.append(self.appraisal("今週は彗星が肉眼で見える"))
         llm.plan += [{"probe": "news_search", "query": "彗星 肉眼"}] * 6
-        llm.judge += [{"verdict": "supports", "reason": "報道"}]
         llm.wonder += [{"hypotheses": ["彗星は夜明け前の東の空に見える"]}, {"hypotheses": ["彗星は来週には暗くなる"]}]
-        llm.judge += [{"verdict": "supports", "reason": "報道"}] * 4
-        llm.matters = [{"matters": False, "to_whom": "", "why": "", "urgent": False, "next_question": ""}] * 3
-        self.run_steps(agent, 14)
+        llm.judge += [{"verdict": "supports", "reason": "報道"}] * 5
+        for _ in range(14):
+            agent.step()
         th = agent.inquiry.recent()[0]
         self.assertGreater(th["steps"], agent.cfg["dig_min_steps"])       # わかり続ける間は掘り続ける
-        self.assertGreaterEqual(len(agent.inquiry.beliefs(th["id"])), 2)  # 掘ってわかったことから次の問いを作った
-
-    def test_unconfirmed_is_reported_as_unconfirmed(self):
-        agent, llm, sensor, mem, clock, out = self.dig_agent(["- 札幌で停電か (https://a.example.com/1)"])
-        agent.perceive("news", "news", "北海道で停電の情報", {"link": "https://a.example.com/0", "source": "a.example.com"})
-        llm.appraise.append(self.appraisal("札幌が停電している"))
-        llm.plan += [{"probe": "news_search", "query": "札幌 停電"}] * 6
-        llm.judge += [{"verdict": "partially_supports", "reason": "一部報道"}]
-        llm.matters = [{"matters": True, "to_whom": "田中さん", "why": "札幌に住んでいる", "urgent": False,
-                        "next_question": ""}]
-        llm.act.append({"summary": "札幌が停電しているかもしれない", "actions": []})
-        self.run_steps(agent, 20)
-        said = "\n".join(out)
-        self.assertIn("ニュースが気になって調べてたんだけど", said)
-        self.assertIn("まだ確かめきれてない", said)
-
-    def test_wrong_alarm_is_withdrawn(self):
-        agent, llm, sensor, mem, clock, out = self.dig_agent(
-            ["- 札幌で停電の速報 (https://b.example.org/1)", "- 停電の続報 (https://b.example.org/2)"]   # 同じ媒体
-            + [f"- 停電は誤報と電力会社 その{i} (https://c{i}.example.com/x)" for i in range(4)])
-        agent.perceive("voice", "overheard_speech", "テレビ: 札幌で大規模停電との情報")
-        llm.appraise.append(self.appraisal("札幌が停電している"))
-        llm.plan += [{"probe": "news_search", "query": "札幌 停電"}] * 8
-        llm.judge += [{"verdict": "partially_supports", "reason": "速報"}] * 2 + [{"verdict": "contradicts", "reason": "誤報"}] * 4
-        llm.matters = [{"matters": True, "to_whom": "田中さん", "why": "札幌に住んでいる", "urgent": True,
-                        "next_question": ""}]
-        self.run_steps(agent, 20)
-        said = "\n".join(out)
-        self.assertIn("いま調べてるね", said)          # 急ぎなら先に一言
-        self.assertIn("違ったみたい", said)             # 言ったことは撤回まで責任を持つ
-        self.assertEqual(agent.inquiry.recent()[0]["state"], "dismissed")
-
-    def test_familiar_name_catches_attention(self):
-        self.assertEqual(curiosity.interest(0.1, 0.2, familiarity=0.7), 0.7)      # 新しくなくても名前には気づく
-        self.assertLess(curiosity.interest(0.1, 0.2), 0.1)
-        agent, llm, sensor, mem, clock, out = self.dig_agent([])
-        agent.perceive("voice", "overheard_speech", "隣の人: 田中さんって最近どうしてるんだろうね")
-        self.assertGreaterEqual(mem.pending_events()[0]["priority"], agent.cfg["dig_threshold"])
+        self.assertGreaterEqual(len(agent.inquiry.beliefs(th["id"])), 2)  # わかったことから次の問いを作った
 
     def test_glance_at_the_edge(self):
         agent, llm, sensor, mem, clock, out = self.dig_agent([])
@@ -349,22 +261,141 @@ class InquiryTest(unittest.TestCase):
         self.assertEqual((ev["source"], ev["kind"]), ("camera", "glance"))
 
     def test_background_windows(self):
-        titles = [["メモ帳", "YouTube - 台風情報"], ["メモ帳", "YouTube - 台風情報", "Slack - 田中さん"]]
+        titles = [["メモ帳", "YouTube - 台風情報"], ["メモ帳", "YouTube - 台風情報", "Slack - 雑談"]]
         clock = Clock()
         s = BackgroundWindowsSensor(interval_s=30, clock=clock, titles_fn=lambda: titles.pop(0))
         self.assertEqual(len(s.poll()), 2)
         clock.t += 31
-        self.assertEqual(s.poll(), [("background_window", "背後のウィンドウ: Slack - 田中さん")])
+        self.assertEqual(s.poll(), [("background_window", "背後のウィンドウ: Slack - 雑談")])
 
-    def test_report_waits_for_the_partner(self):
-        agent, llm, sensor, mem, clock, out = self.dig_agent([])
-        mem.add_utterance("report", "ねえねえ！聞こえてきた話が気になって…", 0.95)
-        mem.add_utterance("remark", "ふつうの気づき", 0.95)
-        clock.t += 3600
-        agent.maybe_speak()
-        said = "\n".join(out)
-        self.assertIn("ねえねえ", said)
-        self.assertNotIn("ふつうの気づき", said)
+
+# ---------------------------------------------------------------- 選択圧: 自分から言ったことが役に立ったか (カーネル)
+class InitiativeTest(unittest.TestCase):
+    def setUp(self):
+        self.clock = Clock()
+        self.mem = Memory(":memory:", clock=self.clock)
+        self.cfg = {"initiative_reply_window_s": 60, "initiative_engage_window_s": 600}
+        self.ini = Initiative(self.cfg, self.mem.db, clock=self.clock)
+
+    def rows(self):
+        return [tuple(r) for r in self.mem.db.execute("SELECT text, proactive, engaged, annoyed FROM spoken ORDER BY id")]
+
+    def test_replies_are_not_initiative(self):
+        self.ini.on_partner("今日の天気は？")
+        self.clock.t += 5
+        self.ini.on_say("晴れだよ")
+        self.assertEqual(self.rows(), [("晴れだよ", 0, 0, 0)])
+
+    def test_partner_engagement_is_the_only_reward(self):
+        self.ini.on_say("北海道で大規模な停電が起きてるみたい")
+        self.clock.t += 120
+        self.ini.on_say("彗星が見えるらしいよ")
+        self.clock.t += 60
+        self.ini.on_partner("え、北海道の停電ってどのくらい？")        # 同じ話題で話しかけてきた
+        self.assertEqual([r[2] for r in self.rows()], [1, 0])
+        self.clock.t += 700
+        self.ini.on_say("深海魚の話")
+        self.ini.on_partner("/bad")                                   # うるさがられた
+        self.assertEqual(self.rows()[-1][3], 1)
+        s = window_stats(Metrics(self.mem.db), self.mem.db, self.clock.t - 3600, self.clock.t + 1)
+        self.assertEqual((s["proactive_n"], s["annoyed_per_h"] > 0), (3, True))
+        self.assertGreater(s["initiative"], 0)
+
+    def test_tapped_at_the_sensors_and_the_mouth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent, llm, sensor, mem, clock, out = world_agent(tmp)
+            ini = Initiative(self.cfg, mem.db, clock=clock)
+            ini.attach(agent)
+            agent.say("ねえ、北海道で停電だって")
+            clock.t += 100
+            sensor.queue.append(("user_message", "北海道の停電、本当？"))
+            llm.appraise.append({"situation": "", "claims": [], "remark": "", "remark_importance": "none"})
+            agent.step()
+            r = mem.db.execute("SELECT proactive, engaged FROM spoken WHERE text LIKE 'ねえ%'").fetchone()
+            self.assertEqual(tuple(r), (1, 1))
+
+    def test_initiative_is_an_evolution_goal(self):
+        self.assertIn("initiative", GOALS)
+        self.assertIn("plugin", GOALS["initiative"]["levels"])
+        self.assertNotIn("仲間", GOALS["initiative"]["pressure"])       # 振る舞いは書かず、圧だけを書く
+
+
+# ---------------------------------------------------------------- 進化が新しい振る舞いを書き足す場所 (カーネル)
+PLUGIN = """
+import re
+
+def on_event(api, event):
+    if event["kind"] == "overheard_speech" and "停電" in event["content"]:
+        bid = api.wonder("停電は近くにも及んでいる", 0.6)
+        api.note("last", bid)
+
+def on_tick(api):
+    bid = api.note("last")
+    if bid is not None and api.note("done") is None:
+        res = api.think("短く答える", "停電について一言")
+        if res is not None:
+            api.say("停電のニュースが気になったよ: " + res, 0.9)
+            api.note("done", True)
+"""
+
+
+class PluginTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = self._tmp.name
+        os.makedirs(os.path.join(self.root, "evolvable", "plugins"))
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def host(self, code, name="edge"):
+        with open(os.path.join(self.root, "evolvable", "plugins", name + ".py"), "w", encoding="utf-8") as f:
+            f.write(code)
+        agent, llm, sensor, mem, clock, out = world_agent(self.root, plugin_max_errors=2, plugin_timeout_s=1.0)
+        metrics = Metrics(mem.db)
+        h = PluginHost(agent.cfg, agent, metrics, root=self.root)
+        return h, agent, llm, mem, metrics
+
+    def test_plugin_adds_a_behavior_through_the_narrow_api(self):
+        h, agent, llm, mem, metrics = self.host(PLUGIN)
+        self.assertEqual(h.load(), ["edge"])
+        h.tick()                                                   # 起点を決める
+        agent.perceive("voice", "overheard_speech", "テレビ: 北海道で停電")
+        h.tick()
+        self.assertTrue(any(b.origin == "plugin/edge" for b in mem.beliefs()))
+        u = mem.db.execute("SELECT kind, text FROM utterances WHERE kind='plugin'").fetchone()
+        self.assertIn("停電のニュースが気になったよ", u["text"])
+
+    def test_llm_budget_is_one_per_tick(self):
+        h, agent, llm, mem, metrics = self.host("def on_tick(api):\n    api.note('a', api.think('x', 'y'))\n"
+                                                "    api.note('b', api.think('x', 'y'))\n")
+        h.load()
+        h.tick()
+        self.assertIsNotNone(h.plugins["edge"]["api"].note("a"))
+        self.assertIsNone(h.plugins["edge"]["api"].note("b"))
+
+    def test_escapes_are_rejected(self):
+        for bad in ("def on_tick(api):\n    api._host.agent.memory.db.execute('DELETE FROM events')\n",
+                    "def on_tick(api):\n    getattr(api, '_host')\n",
+                    "def on_tick(api):\n    open('x.txt', 'w')\n",
+                    "import os\ndef on_tick(api):\n    os.remove('x')\n",
+                    "import tachikoma.text\ndef on_tick(api):\n    tachikoma.kernel\n"):
+            self.assertTrue(check_source("evolvable/plugins/x.py", bad, plugin=True), bad)
+        h, agent, llm, mem, metrics = self.host("import os\ndef on_tick(api):\n    pass\n")
+        self.assertEqual(h.load(), [])                              # 実行時にも読み込まない
+
+    def test_broken_or_stuck_plugins_are_stopped_not_fatal(self):
+        h, agent, llm, mem, metrics = self.host("def on_tick(api):\n    1 / 0\n")
+        h.load()
+        h.tick()
+        h.tick()
+        self.assertEqual(h.plugins, {})                             # 例外が続いたら止める
+        self.assertEqual(metrics.count("error", 0, float("inf")), 2)   # 例外は頑健さの進化の材料になる
+        os.remove(os.path.join(self.root, "evolvable", "plugins", "edge.py"))
+        h, agent, llm, mem, metrics = self.host("import time\ndef on_tick(api):\n    time.sleep(5)\n", "stuck")
+        h.load()
+        h.tick()
+        self.assertEqual(h.plugins, {})                             # 止まったプラグインを待たずに進む
 
 
 # ---------------------------------------------------------------- 周辺への好奇心

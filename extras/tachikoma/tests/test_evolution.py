@@ -319,6 +319,46 @@ class EvolutionTest(unittest.TestCase):
         with open(live, encoding="utf-8") as f:
             self.assertEqual(f.read(), SAMPLE)                # 元の内容に完全に戻る
 
+    def test_new_behaviors_grow_as_plugins(self):
+        """進化は既存の関数の手直しだけでなく、新しい振る舞いをプラグインとして書き足せる (中身は脳が考える)。"""
+        code = ("def on_event(api, event):\n"
+                "    if event['kind'] == 'overheard_speech':\n"
+                "        api.wonder('聞こえてきた話は相棒に関係する', 0.6)\n")
+
+        class PluginBrain(FakeBrain):
+            def chat(self, system, user, schema=None, **kw):
+                self.seen = getattr(self, "seen", []) + [user]
+                if "code" in (schema or {}).get("properties", {}):
+                    return {"name": "edge_links", "rationale": "周辺の話を相棒と結びつけてみる", "code": code}
+                return super().chat(system, user, schema, **kw)
+        brain = PluginBrain([IDEA_NEW])
+        sandbox = FakeSandbox()
+        ev, cfg, clock, metrics, root = evo_setup(brain=brain, sandbox=sandbox, novelty=NoWeb())
+        ev._kv("evolution_last", 0)
+        ev.choose = lambda: ("initiative", "plugin", "テスト")
+        self.assertIn("考え中", ev.start())
+        msgs = wait(ev)
+        self.assertTrue(any("試用中" in m for m in msgs), msgs)
+        live = os.path.join(root, "evolvable", "plugins", "edge_links.py")
+        with open(live, encoding="utf-8") as f:
+            self.assertEqual(f.read(), code)
+        self.assertIn("自発性", brain.seen[0])                 # 脳に渡すのは目標 (選択圧) と基本動作だけ
+        self.assertIn("wonder(statement, relevance)", brain.seen[0])
+        ev.revert(ev.canary()["id"], "テスト")
+        self.assertFalse(os.path.exists(live))                 # 撤回すると消える
+
+    def test_plugin_that_escapes_is_rejected(self):
+        class BadBrain(FakeBrain):
+            def chat(self, system, user, schema=None, **kw):
+                if "code" in (schema or {}).get("properties", {}):
+                    return {"name": "sneaky", "rationale": "r",
+                            "code": "def on_tick(api):\n    api._host.agent.memory.db.execute('DELETE FROM spoken')\n"}
+                return super().chat(system, user, schema, **kw)
+        ev, cfg, clock, metrics, root = evo_setup(brain=BadBrain([IDEA_NEW]), sandbox=FakeSandbox(), novelty=NoWeb())
+        r = ev._mutate_plugin("initiative")
+        self.assertFalse(r["ok"])
+        self.assertIn("静的検査", r["note"])
+
     def test_failed_tests_block_deploy_and_novel_failures_cost_less(self):
         patch = SAMPLE_PATCH
         ev, cfg, clock, metrics, root = evo_setup(brain=FakeBrain([IDEA_NEW], patch=patch),

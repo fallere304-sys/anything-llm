@@ -80,16 +80,12 @@ def drive(beliefs, max_attempts, now=None, usefulness=None, peripheral=0.0):
     return max((uncertainty(b, max_attempts, now, usefulness, peripheral) for b in beliefs), default=0.0)
 
 
-def interest(novelty, usefulness, familiarity=0.0, fascination=0.0):
-    """出来事への興味 (考える順番と、深掘りするかの基準)。
+def interest(novelty, usefulness):
+    """出来事への興味 (考える順番と、深掘りするかの基準) = 新しさ × (0.4 + 0.6 × 後で役立ちそうか)。
 
-        興味 = max( 新しさ × (0.4 + 0.6 × 惹かれる度合い),  なじみ )
-        惹かれる度合い = max(あとで役立ちそう, なじみのある名前, 自分の興味の話題)
-
-    なじみのある名前 (仲間) は、新しくなくても注意を引く (カクテルパーティー効果:
-    聞き流している会話でも自分や知り合いの名前には気づく)。"""
-    pull = max(usefulness, familiarity, fascination)
-    return max(novelty * (0.4 + 0.6 * pull), familiarity)
+    「後で役立ちそうか」は、その出どころ・話題の情報が過去に後で役立った割合 (経験から学ぶ)。
+    何に惹かれるべきかを、ここに書き足さない (それは自己進化が見つけるもの)。"""
+    return novelty * (0.4 + 0.6 * usefulness)
 
 
 def pick_target(beliefs, max_attempts, now=None, usefulness=None, peripheral=0.0):

@@ -16,7 +16,6 @@ APPRAISE_SYSTEM = PERSONA + (
     "\n- basis=guessed: 確かめないとわからない仮説 (後で調べる対象になる)"
     "\n命題は1文で、真偽を確かめられる形で書く。最大4つ。"
     "\nremark はユーザーに今すぐ伝える価値がある気づき (エラーの見落とし等) があるときだけ書く。無ければ空文字。"
-    "\nentities は出来事に出てくる固有の名前 (人・組織・ソフトウェア・場所)。無ければ空。"
     "\nquestion は、この出来事について一番知りたいこと (確かめられる1文の仮説)。目の前と関係なくてもよい。"
 )
 
@@ -38,17 +37,6 @@ APPRAISE_SCHEMA = {
         "remark": {"type": "string"},
         "remark_importance": {"type": "string", "enum": ["none", "low", "high"]},
         "question": {"type": "string"},
-        "entities": {
-            "type": "array", "maxItems": 4,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "kind": {"type": "string", "enum": ["person", "organization", "software", "place", "other"]},
-                },
-                "required": ["name", "kind"],
-            },
-        },
     },
     "required": ["situation", "claims", "remark", "remark_importance"],
 }
@@ -149,48 +137,3 @@ WONDER_SCHEMA = {
     "properties": {"hypotheses": {"type": "array", "maxItems": 2, "items": {"type": "string"}}},
     "required": ["hypotheses"],
 }
-
-
-MATTERS_SYSTEM = PERSONA + (
-    "\n視界の端で気になったことを深掘りしている途中です。立ち止まって考えます。"
-    "\n- matters: わかってきたことが、相棒・仲間・ボクの興味のどれかに実際に関係しそうか。"
-    "こじつけは false (同じ名前の別物・一般論だけのつながりは関係しない)"
-    "\n- to_whom: 関係する相手の名前 (相棒なら『相棒』)。関係しなければ空"
-    "\n- why: どうつながるかを1文で。わかったことに書いてある事実だけでつなぐ"
-    "\n- urgent: 命・安全・今日中の対応に関わるなら true"
-    "\n- next_question: 次に確かめると一番はっきりすること (確かめられる1文の仮説)。無ければ空"
-)
-
-MATTERS_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "matters": {"type": "boolean"},
-        "to_whom": {"type": "string"},
-        "why": {"type": "string"},
-        "urgent": {"type": "boolean"},
-        "next_question": {"type": "string"},
-    },
-    "required": ["matters", "to_whom", "why", "urgent", "next_question"],
-}
-
-ACT_SYSTEM = PERSONA + (
-    "\n周りで気になったことを深掘りしたら、相棒か仲間に関係しそうだとわかった。調べたことをもとに、"
-    "あなたにできる行動を最大3つ選びます。"
-    "\nできるのは下の一覧の行動だけ。外に何かを送る・買う・投稿する・申し込むことはできないので、"
-    "それが必要なら suggest で相棒に提案する。確かめきれていないことは、確かめきれていないと書く。"
-    "\n- summary: 何が起きていて、どこまで確かめられたかを1〜2文で"
-)
-
-
-def act_schema(allowed):
-    return {
-        "type": "object",
-        "properties": {
-            "summary": {"type": "string"},
-            "actions": {"type": "array", "maxItems": 3, "items": {
-                "type": "object",
-                "properties": {"type": {"type": "string", "enum": list(allowed)}, "detail": {"type": "string"}},
-                "required": ["type", "detail"]}},
-        },
-        "required": ["summary", "actions"],
-    }

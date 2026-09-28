@@ -99,11 +99,32 @@ GOALS = {
     "rapport": {"label": "関係", "metric": "good_ratio", "levels": ("param",),
                 "params": ("speak_threshold", "min_speak_interval_s", "persona_playfulness", "chat_temperature")},
     # 何を先に考えるか (情報の優先度) の当たり具合。周辺の情報をどれだけ拾うかも含めて進化させる
-    "foresight": {"label": "先見", "metric": "foresight_auc", "levels": ("param", "code"),
+    "foresight": {"label": "先見", "metric": "foresight_auc", "levels": ("param", "code", "plugin"),
                   "params": ("peripheral_share", "peripheral_weight", "peripheral_relevance", "novelty_threshold",
-                             "dig_threshold", "dig_leave_ratio", "dig_check_every"),
-                  "files": ("tachikoma/curiosity.py", "tachikoma/inquiry.py")},
+                             "dig_threshold", "dig_leave_ratio"),
+                  "files": ("tachikoma/curiosity.py", "tachikoma/inquiry.py"),
+                  "pressure": "周りで拾った情報のうち、後で相棒の役に立つものほど先に・深く考えられるようになる"},
+    # 自分から (話しかけられていないのに) 言ったことが、相棒の役に立つ。どう振る舞えばそうなるかは書かない
+    "initiative": {"label": "自発性", "metric": "initiative", "levels": ("param", "code", "plugin"),
+                   "params": ("speak_threshold", "min_speak_interval_s", "peripheral_share", "dig_threshold",
+                              "dig_leave_ratio"),
+                   "files": ("tachikoma/inquiry.py", "tachikoma/curiosity.py"),
+                   "pressure": "話しかけられていないのに自分から言ったことに、相棒が反応してくれる (役に立つ・"
+                               "関心を持たれる) ことが増える。うるさがられてはいけない"},
 }
+PLUGIN_SCHEMA = {"type": "object", "properties": {"name": {"type": "string"}, "rationale": {"type": "string"},
+                                                  "code": {"type": "string"}},
+                 "required": ["name", "rationale", "code"]}
+PLUGIN_SYSTEM = (
+    "あなたは Python の熟練者で、自分自身 (相棒AI『タチコマ』) に新しい振る舞いをプラグインとして書き足します。"
+    "\n- ファイル 1 つ。on_event(api, event) と on_tick(api) の少なくとも片方を定義する"
+    "\n- 外界と自分の中身には api の基本動作でだけ触れる。import できるのは re, math, json, statistics, collections,"
+    " itertools, functools, datetime, time, random, string, unicodedata と `from tachikoma.text import ...` だけ"
+    "\n- _ で始まる名前への接近、open / getattr / type などは使えない"
+    "\n- 推論 (api.think / api.investigate) は 1 tick に 1 回しか使えず、使えないときは None が返る。必ず None を想定する"
+    "\n- 毎 tick 呼ばれるので軽く。重い処理は api.note に状態を持って少しずつ進める"
+    "\n- name は英小文字と _ の 3〜30 文字"
+)
 MIGRATIONS = (("goal", "TEXT"), ("novelty", "REAL"), ("approach", "TEXT"))
 
 CODER_SYSTEM = (
@@ -252,6 +273,9 @@ class Evolution:
         n["rationality"] = 0.2 if s["brier"] is None else min(1.0, max(0.0, (s["brier"] - 0.1) / 0.2))
         n["power"] = 0.1 if s["watts_mean"] is None else min(1.0, max(0.0, (s["watts_mean"] - 40) / 80))
         n["rapport"] = 0.1 if s["good_ratio"] is None else 1.0 - s["good_ratio"]
+        # 自発性: 伸ばす余地は常にある。自分から言ったことが役に立っていないほど必要
+        prec = s.get("initiative_precision")
+        n["initiative"] = 0.4 if prec is None else min(1.0, 0.3 + 0.7 * (1.0 - prec))
         auc = s.get("foresight_auc")
         n["foresight"] = 0.0 if auc is None else min(1.0, max(0.0, (0.85 - auc) / 0.35))
         return n
@@ -263,7 +287,7 @@ class Evolution:
                 levels.append(lv)
             elif lv == "prompt" and self.brain_ok():
                 levels.append(lv)
-            elif lv == "code" and self.brain_ok() and self.sandbox is not None and self.sandbox.usable():
+            elif lv in ("code", "plugin") and self.brain_ok() and self.sandbox is not None and self.sandbox.usable():
                 levels.append(lv)
         return levels
 
@@ -321,7 +345,7 @@ class Evolution:
             return self._finish(eid, self._mutate_params(goal))
         self.busy, self.stage = True, level
         self._abort.clear()
-        fn = self._mutate_code if level == "code" else self._mutate_prompt
+        fn = {"code": self._mutate_code, "plugin": self._mutate_plugin}.get(level, self._mutate_prompt)
         self._thread = threading.Thread(target=lambda: self._results.put((eid, fn(goal, target))), daemon=True)
         self._thread.start()
         return f"自己改良を考え中: {why}"
@@ -428,7 +452,9 @@ class Evolution:
                         func = "\n".join(src.splitlines()[node.lineno - 1: node.end_lineno])
                         break
             return target["file"], func or src[:4000], src
-        files = GOALS[goal].get("files") or ()
+        files = tuple(GOALS[goal].get("files") or ())
+        if "plugin" in GOALS[goal]["levels"]:
+            files += tuple(self._plugin_files())          # 自分で書いたプラグインも改良の対象
         if not files:
             return None, None, None
         path = self.rng.choice(files)
@@ -436,6 +462,86 @@ class Evolution:
         funcs = [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef)]
         node = self.rng.choice(funcs)
         return path, "\n".join(src.splitlines()[node.lineno - 1: node.end_lineno]), src
+
+    def _plugin_files(self):
+        d = os.path.join(self.root, "evolvable", "plugins")
+        return sorted(f"evolvable/plugins/{f}" for f in os.listdir(d) if f.endswith(".py")) if os.path.isdir(d) else []
+
+    def _observations(self):
+        """新しい振る舞いを考える材料: 何が役に立ち、何が役に立たなかったか (カーネルの記録から)。"""
+        lines = []
+        rows = self.db.execute("SELECT text, engaged, annoyed FROM spoken WHERE proactive=1 ORDER BY id DESC LIMIT 12"
+                               ).fetchall() if self._has("spoken") else []
+        if rows:
+            lines.append("# 自分から言ったことと、相棒の反応 (新しい順)")
+            lines += [f"- {'反応あり' if r[1] else ('うるさがられた' if r[2] else '反応なし')}: {r[0][:80]}" for r in rows]
+        if self._has("info_items"):
+            st = self.db.execute("SELECT bucket, COUNT(*), SUM(used_ts IS NOT NULL) FROM info_items GROUP BY bucket"
+                                 " ORDER BY COUNT(*) DESC LIMIT 10").fetchall()
+            if st:
+                lines.append("# 拾った情報の出どころと、後で相棒の役に立った数")
+                lines += [f"- {b}: {n} 件中 {u or 0} 件" for b, n, u in st]
+        return "\n".join(lines) or "(まだ記録が少ない)"
+
+    def _has(self, table):
+        return self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
+
+    def _mutate_plugin(self, goal, target=None):
+        """まったく新しい振る舞いを、プラグインとして書き足す。何を書くかは選択圧と観察から自分で考える。"""
+        from .plugins import PluginAPI
+        existing = [f"- {p}" for p in self._plugin_files()] or ["(まだ無い)"]
+        ctx = (f"# 目標\n{GOALS[goal]['label']}: {GOALS[goal].get('pressure', '')}"
+               f"\n\n# プラグインが使える基本動作\n{PluginAPI.__doc__}"
+               f"\n\n# 今あるプラグイン\n" + "\n".join(existing) + f"\n\n{self._observations()}")
+        try:
+            self.stage = "アイデア出し (CPU)"
+            self.brain.use("code")
+            ideas = self.brain.chat(IDEAS_SYSTEM, ctx, schema=IDEAS_SCHEMA, max_tokens=700, temperature=0.9).get("ideas") or []
+            if not ideas:
+                return {"ok": False, "note": "アイデアが出なかった", "goal": goal}
+            self.stage = "新しさの評価 (論文・ネット検索)"
+            nov, idea, sc = self._pick_idea(ideas)
+            self.stage = "実装 (CPU)"
+            out = self.brain.chat(PLUGIN_SYSTEM, f"{ctx}\n\n# 採用したやり方\n{idea['name']}: {idea['description']}",
+                                  schema=PLUGIN_SCHEMA, max_tokens=2000, temperature=0.2)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "note": f"プラグイン生成失敗: {e}", "goal": goal}
+        base = {"goal": goal, "novelty": nov, "approach": dict(idea, novelty=sc)}
+        name = "".join(c for c in (out.get("name") or "").lower() if c.isalnum() or c == "_")[:30]
+        code = out.get("code") or ""
+        if len(name) < 3 or not code.strip():
+            return dict(base, ok=False, note="プラグインの名前か中身が無い")
+        path = f"evolvable/plugins/{name}.py"
+        if self._read(path) is not None:
+            return dict(base, ok=False, note=f"{path} は既にある (改良は code の階層で行う)")
+        edits = [{"file": path, "search": "", "replace": code}]
+        errors, sources = check_edits(edits, self._read)
+        if not errors and "def on_event" not in code and "def on_tick" not in code:
+            errors = ["on_event か on_tick を定義していない"]
+        if errors:
+            return dict(base, ok=False, note="静的検査で不合格: " + "; ".join(errors[:5]), edits=edits)
+        ok, output = self._sandbox_test(sources)
+        if not ok:
+            return dict(base, ok=False, note="テスト不合格:\n" + output[-1200:], edits=edits)
+        return dict(base, ok=True, sources=sources, rationale=f"新しい振る舞い {name}: {out.get('rationale', '')}",
+                    restart=True, edits=edits)
+
+    def _sandbox_test(self, sources):
+        """変更を当てた写しで、全テスト (プラグインの動作確認を含む) を隔離環境で走らせる。"""
+        self.stage = "サンドボックスでテスト (CPU・RAM 上限つき)"
+        work = os.path.join(self.dir, "work")
+        if os.path.exists(work):
+            shutil.rmtree(work)
+        shutil.copytree(self.root, work, ignore=lambda d, names: [n for n in names if n in EXCLUDE
+                                                                   or n.endswith((".db", ".pyc"))])
+        for rp, text in sources.items():
+            fp = os.path.join(work, rp)
+            os.makedirs(os.path.dirname(fp), exist_ok=True)
+            with open(fp, "w", encoding="utf-8") as f:
+                f.write(text)
+        ok, output = self.sandbox.run_tests(work, timeout=self.cfg["sandbox_timeout_s"])
+        shutil.rmtree(work, ignore_errors=True)
+        return ok, output
 
     def _mutate_code(self, goal, target=None):
         path, func, src = self._code_target(goal, target)
@@ -448,7 +554,8 @@ class Evolution:
             task = (f"# 目標\nこの関数は思考ループ 1 回で {target['seconds']:.3f} 秒使っている。"
                     "入出力と副作用を一切変えずに速くする。")
         else:
-            task = f"# 目標\n{GOALS[goal]['label']}を上げる (指標: {GOALS[goal]['metric']})"
+            task = (f"# 目標\n{GOALS[goal]['label']}を上げる (指標: {GOALS[goal]['metric']})"
+                    + (f"\n{GOALS[goal]['pressure']}" if GOALS[goal].get("pressure") else ""))
         ctx = f"{task}\n\n# 対象ファイル: {path}\n# 対象の関数\n{func}"
         try:
             self.stage = "アイデア出し (CPU)"
@@ -470,19 +577,7 @@ class Evolution:
         errors, sources = check_edits(edits, self._read)
         if errors:
             return dict(base, ok=False, note="静的検査で不合格: " + "; ".join(errors[:5]), edits=edits)
-        self.stage = "サンドボックスでテスト (CPU・RAM 上限つき)"
-        work = os.path.join(self.dir, "work")
-        if os.path.exists(work):
-            shutil.rmtree(work)
-        shutil.copytree(self.root, work, ignore=lambda d, names: [n for n in names if n in EXCLUDE
-                                                                   or n.endswith((".db", ".pyc"))])
-        for rp, text in sources.items():
-            fp = os.path.join(work, rp)
-            os.makedirs(os.path.dirname(fp), exist_ok=True)
-            with open(fp, "w", encoding="utf-8") as f:
-                f.write(text)
-        ok, output = self.sandbox.run_tests(work, timeout=self.cfg["sandbox_timeout_s"])
-        shutil.rmtree(work, ignore_errors=True)
+        ok, output = self._sandbox_test(sources)
         if not ok:
             return dict(base, ok=False, note="テスト不合格:\n" + output[-1200:], edits=edits)
         return dict(base, ok=True, sources=sources, rationale=f"{idea['name']}: {out.get('rationale', '')}",

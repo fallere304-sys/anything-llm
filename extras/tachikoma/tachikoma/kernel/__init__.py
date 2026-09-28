@@ -43,7 +43,7 @@ EVOLVABLE_PATHS = (
     "tachikoma/prompts.py", "tachikoma/persona.py", "tachikoma/epistemics.py", "tachikoma/attention.py",
     "tachikoma/text.py", "tachikoma/probes.py", "tachikoma/asr.py",
     "tachikoma/idle.py", "tachikoma/expression.py",
-    "tachikoma/bonds.py", "tachikoma/inquiry.py",
+    "tachikoma/inquiry.py",
     "evolvable/",
 )
 

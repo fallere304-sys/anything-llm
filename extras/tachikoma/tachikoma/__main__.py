@@ -136,12 +136,20 @@ def main(argv=None):
     from .kernel.novelty import NoveltyJudge
     from .kernel.sandbox import Sandbox
     from .kernel.foresight import Foresight
+    from .kernel.initiative import Initiative
+    from .kernel.plugins import PluginHost
     budget = Budget(cfg)
     metrics = Metrics(memory.db)
     # 先見の帳簿: 拾った情報が後で役立ったか (カーネルが記録し、思考のコードには読み出しだけ渡す)
     foresight = Foresight(cfg, memory.db)
     agent.usefulness = foresight.usefulness
     agent.foresight_rates = foresight.rates
+    # 自発性の測定: 自分から言ったことに相棒が反応したか (発話と入力の口でカーネルが直接記録する)
+    Initiative(cfg, memory.db).attach(agent)
+    plugins = None
+    if cfg["plugins"]:
+        plugins = PluginHost(cfg, agent, metrics, log=agent.log)
+        plugins.load()
     brain = CpuBrain(cfg, budget)
     evolution = None
     if cfg["evolution_enabled"] and config.frozen():
@@ -168,7 +176,7 @@ def main(argv=None):
     try:
         agent.say("起動しました。見てます。")
         code = runtime.run(agent, cfg, metrics, evolution=evolution, brain=brain if evolution else None,
-                           power=power, foresight=foresight)
+                           power=power, foresight=foresight, plugins=plugins)
         if code == runtime.RESTART_CODE:
             agent.say("自分を改良したので、少し再起動するね！")
             for lr in agent.learners():

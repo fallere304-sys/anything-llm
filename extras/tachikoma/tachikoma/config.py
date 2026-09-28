@@ -119,14 +119,20 @@ DEFAULTS = {
     "foresight_explore": 0.5,         # よく知らない出どころをどれだけ楽観的に見るか
     "foresight_canary_horizon_s": 6 * 3600,   # 自己進化の試用期間で先見を測るときの期限
 
-    # --- ニュースと仲間 (ニュースは視界の端にあるテレビ。仲間は深掘りの途中で「関係する」と気づく相手) ---
+    # --- 自発性の測定と、自己進化が書き足すプラグイン (カーネル) ---
+    "initiative_reply_window_s": 60,  # 相棒の入力からこの秒数以内の発話は「返事」(自分からではない)
+    "initiative_engage_window_s": 600,   # 自分から言ってからこの秒数以内に同じ話題で話しかけられたら「反応あり」
+    "plugins": True,                  # evolvable/plugins/ のプラグインを動かす
+    "plugin_max_errors": 5,           # 例外がこの回数続いたプラグインは止める
+    "plugin_timeout_s": 2.0,          # 1 tick にプラグイン 1 つが使ってよい時間
+
+    # --- ニュース (視界の端にあるテレビ) ---
     "news": False,                    # RSS を定期的に読む (ネットに出る。web と同じく opt-in)
     "news_feeds": ["https://www3.nhk.or.jp/rss/news/cat0.xml"],
     "news_interval_s": 1800,
     "news_max_items": 20,
     # 続報・別の報道を探すニュース検索 ({q} に検索語)。空なら検索しない
     "news_search_url": "https://news.google.com/rss/search?q={q}&hl=ja&gl=JP&ceid=JP:ja",
-    "bond_min_strength": 0.3,         # これ以上の絆がある相手を「仲間」とみなす (/friend で教えると 0.7)
 
     # --- 視界の端を深掘りする (inquiry.py) ---
     "background_windows": True,       # 前面以外のウィンドウのタイトル (画面の端)。中身は読まない
@@ -135,15 +141,8 @@ DEFAULTS = {
     "dig_relevance": 0.5,             # 深掘りの問いの初めの関連度
     "dig_max_threads": 2,             # 同時に掘る探究の糸の数
     "dig_min_steps": 2,               # 見切る前に最低限調べる回数
-    "dig_max_steps": 8,               # 関係が見つからない糸を掘る上限
+    "dig_max_steps": 8,               # 1 本の糸を掘る上限
     "dig_leave_ratio": 0.5,           # 掘って減らせる不確実性が、ふだんの平均のこの割合を下回ったら見切る
-    "dig_check_every": 2,             # 何回調べるごとに「誰かに関係するか」を考えるか
-    "dig_confirm_steps": 3,           # 関係に気づいてから、裏付けを探す回数の上限
-    "dig_timeout_s": 1800,            # 確かめきれなくても、この時間で相棒に知らせる
-    "dig_dismiss_p": 0.2,             # 反する根拠で確信がここまで下がったら「違った」とみなす
-    "dig_watch_days": 7,              # 続報を見張る日数
-    "dig_remind_s": 86400,            # 「あとで様子を確かめる」までの時間
-    "report_ttl_s": 3 * 86400,        # 深掘りから気づいた知らせは、相棒が戻るまでこの間取っておく
 
     # --- 独りの時間 (自習と耳の学習) ---
     "absent_after_s": 300,            # 声も人影もこの秒数なければ「独り」

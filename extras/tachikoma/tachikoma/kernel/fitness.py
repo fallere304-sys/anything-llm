@@ -13,9 +13,12 @@ train_samples の各表) からカーネルが直接計算する。利用者の�
     頑健さ        errors_per_kstep                                 低いほど良い
     関係          good_ratio (/good と /bad・訂正の比)             高いほど良い
     先見          foresight_auc (拾ったときの優先度が、後で役立った情報ほど高かったか)  高いほど良い
+    自発性        initiative (自分から言ったことに相棒が反応した回数 / 時間)       高いほど良い
+                  initiative_precision (そのうち反応があった割合) と annoyed (/bad) は悪化の見張り
 """
 
 from .foresight import window_auc
+from .initiative import window_initiative
 from .metrics import summary
 
 LOWER_IS_BETTER = {"brier", "step_p90", "latency_p90", "watts_mean", "errors_per_kstep"}
@@ -91,7 +94,15 @@ def window_stats(metrics, db, start, end):
         "knowledge_per_wh": knowledge / wh if wh > 0 else None,
         "watts_mean": _mean(watts),
         "foresight_auc": window_auc(db, start, end, metrics_horizon(end - start)),
+        **_initiative(db, start, end, hours),
     }
+
+
+def _initiative(db, start, end, hours):
+    w = window_initiative(db, start, end)
+    return {"initiative": w["engaged"] / hours, "proactive_n": w["proactive"],
+            "initiative_precision": w["engaged"] / w["proactive"] if w["proactive"] >= 5 else None,
+            "annoyed_per_h": w["annoyed"] / hours}
 
 
 def metrics_horizon(span_s):
@@ -114,6 +125,11 @@ def compare(before, after, cfg):
         return "revert", f"評価が下がった ({before['good_ratio']:.2f}→{after['good_ratio']:.2f})"
     if before["brier"] is not None and after["brier"] is not None and after["brier"] > before["brier"] + 0.05:
         return "revert", f"確信の較正が悪化した (Brier {before['brier']:.3f}→{after['brier']:.3f})"
+    bp, ap = before.get("initiative_precision"), after.get("initiative_precision")
+    if bp is not None and ap is not None and after["proactive_n"] >= 10 and ap < bp - 0.2:
+        return "revert", f"自分から言ったことが役に立たなくなった ({bp:.2f}→{ap:.2f})"
+    if after.get("annoyed_per_h", 0) > 2 * before.get("annoyed_per_h", 0) + 0.1:
+        return "revert", "自分から話しかけて、うるさがられることが増えた"
     if (before.get("knowledge_per_wh") and after.get("knowledge_per_wh") is not None
             and after["knowledge_per_wh"] < before["knowledge_per_wh"] * 0.75):
         return "revert", "1Wh あたりに増える知識が減った"
