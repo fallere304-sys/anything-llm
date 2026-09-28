@@ -79,7 +79,7 @@ def main():
             zf.writestr("app/" + rel, data)
             manifest["files"][rel] = {"sha": hashlib.sha256(data).hexdigest(), "evolvable": is_evolvable(rel)}
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1))
-    print(f"{args.out}: 版 {version}、本体 {len(manifest['files'])} ファイル、"
+    print(f"{args.out}: version {version}, {len(manifest['files'])} app files, "
           f"{os.path.getsize(args.out) / 2**20:.1f} MB")
 
 
