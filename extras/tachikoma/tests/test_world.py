@@ -1,4 +1,4 @@
-"""周辺への好奇心・先見の帳簿・仲間の危機 (ニュース → 知る → 集める → 行動する) の検証。"""
+"""視界の端への興味・深掘り・先見の帳簿・仲間の検証。"""
 
 import os
 import sys
@@ -7,14 +7,15 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tachikoma import curiosity  # noqa: E402
+from tachikoma import curiosity, prompts  # noqa: E402
 from tachikoma.bonds import Bonds  # noqa: E402
 from tachikoma.kernel.fitness import window_stats  # noqa: E402
 from tachikoma.kernel.foresight import Foresight, auc, related, terms  # noqa: E402
 from tachikoma.kernel.guard import check_source  # noqa: E402
 from tachikoma.kernel.metrics import Metrics  # noqa: E402
-from tachikoma.memory import INFERENCE, SPECULATION, Memory  # noqa: E402
+from tachikoma.memory import Memory  # noqa: E402
 from tachikoma.news import NewsSensor, parse_feed  # noqa: E402
+from tachikoma.sensors import BackgroundWindowsSensor  # noqa: E402
 from test_core import Clock, FakeLLM, make_agent  # noqa: E402
 
 RSS = """<?xml version="1.0"?><rss><channel>
@@ -28,17 +29,18 @@ ATOM = """<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
 
 
 class WorldLLM(FakeLLM):
-    """仲間の危機の判定 (about_them) と行動 (actions) の台本も持つ。"""
+    """深掘りの振り返り (matters) と行動 (actions) の台本も持つ。"""
 
     def __init__(self, clock):
         super().__init__(clock)
-        self.trouble, self.act = [], []
+        self.matters, self.act = [], []
 
     def chat(self, system, user, schema=None, **kw):
         props = (schema or {}).get("properties", {})
-        if "about_them" in props:
+        if "matters" in props:
             self.calls.append((system, user))
-            return self.trouble.pop(0)
+            return self.matters.pop(0) if self.matters else {"matters": False, "to_whom": "", "why": "",
+                                                              "urgent": False, "next_question": ""}
         if "actions" in props:
             self.calls.append((system, user))
             return self.act.pop(0)
@@ -148,7 +150,7 @@ class ForesightTest(unittest.TestCase):
         self.assertTrue(check_source("tachikoma/agent.py", "x = 'UPDATE info_items SET used_ts=1'\n"))
         self.assertTrue(check_source("tachikoma/agent.py", "from .kernel import foresight\n"))
         self.assertTrue(check_source("tachikoma/agent.py", "from .kernel.foresight import Foresight\n"))
-        for f in ("bonds.py", "concern.py", "curiosity.py", "agent.py", "memory.py"):
+        for f in ("bonds.py", "inquiry.py", "curiosity.py", "agent.py", "memory.py"):
             path = os.path.join(os.path.dirname(__file__), "..", "tachikoma", f)
             with open(path, encoding="utf-8") as fh:
                 self.assertEqual(check_source("tachikoma/" + f, fh.read()), [], f)
@@ -221,92 +223,142 @@ class BondsTest(unittest.TestCase):
 
 
 # ---------------------------------------------------------------- 仲間の危機
-class ConcernTest(unittest.TestCase):
+class InquiryTest(unittest.TestCase):
+    """視界の端の情報に興味を持つ → 深掘りする → 途中で誰かに関係すると気づく → 裏付け → 行動する。"""
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = self._tmp.name
-        with open(os.path.join(self.tmp, "requirements.txt"), "w", encoding="utf-8") as f:
-            f.write("requests\nopenssl-python==1.0\n")
 
     def tearDown(self):
         self._tmp.cleanup()
 
-    def news_agent(self, results):
-        agent, llm, sensor, mem, clock, out = world_agent(self.tmp)
-        sensor.name = "news"
+    def dig_agent(self, results, **over):
+        # 一般の好奇心は止めて、深掘りの糸だけを見る
+        agent, llm, sensor, mem, clock, out = world_agent(self.tmp, curiosity_threshold=1.1, **over)
         agent.probes.news = FakeNews(results)
-        agent.on_command("/friend OpenSSL software")
+        agent.on_command("/friend 田中さん person")
+        mem.add_belief("田中さんは札幌に住んでいる", 0.95, "user")
         return agent, llm, sensor, mem, clock, out
 
-    def test_news_to_action(self):
-        """ニュースを見る → 仲間のピンチを知る → 情報を集める → 行動する。"""
-        agent, llm, sensor, mem, clock, out = self.news_agent(
-            ["- OpenSSL 脆弱性の修正版が公開: 更新を推奨 (https://www.security-next.com/1)"])
-        sensor.queue.append(("news", "OpenSSL に深刻な脆弱性 — 広く使われる暗号ライブラリ",
-                             {"link": "https://www3.nhk.or.jp/news/a1", "source": "nhk.or.jp"}))
-        llm.trouble.append({"about_them": True, "trouble": "security", "summary": "OpenSSLに深刻な脆弱性が見つかった",
-                            "urgent": False})
-        llm.judge.append({"verdict": "supports", "reason": "別の媒体も同じ脆弱性を報じている"})
-        llm.act.append({"summary": "OpenSSLに深刻な脆弱性。別の媒体でも確認できた",
-                        "actions": [{"type": "check_workspace", "detail": "openssl"},
-                                    {"type": "keep_watching", "detail": ""},
-                                    {"type": "suggest", "detail": "使っているライブラリを最新版に更新する"}]})
-        agent.step()                                   # 知る: 名前が出た → 判定 → 仮説
-        c = agent.concerns.recent()[0]
-        self.assertEqual(c["state"], "investigating")
-        b = mem.get_belief(c["belief_id"])
-        self.assertEqual(b.label(), SPECULATION)       # 1 本の報道だけでは確信しない
-        agent.step()                                   # 集める: 別の出どころで裏付け
-        self.assertIn("OpenSSL", agent.probes.news.queries[0])
-        self.assertEqual(mem.get_belief(c["belief_id"]).label(), INFERENCE)
-        agent.step()                                   # 動く
-        c = agent.concerns.recent()[0]
-        self.assertEqual(c["state"], "reported")
-        self.assertEqual(agent.probes.news.watching, {"OpenSSL": agent.cfg["concern_watch_days"]})
+    def appraisal(self, question):
+        return {"situation": "", "claims": [], "remark": "", "remark_importance": "none", "question": question}
+
+    def run_steps(self, agent, n):
+        for _ in range(n):
+            agent.step()
+
+    def test_edge_of_vision_to_action(self):
+        """テレビの停電のニュース (仲間の名前は出ない) → 掘る → 札幌の仲間に関係すると気づく → 動く。"""
+        agent, llm, sensor, mem, clock, out = self.dig_agent([
+            "- 北海道で大規模停電 札幌市でも約80万戸 (https://www.hokkaido-np.co.jp/a/1)",
+            "- 札幌の停電 復旧は明日以降の見通し (https://www3.nhk.or.jp/sapporo/2)"])
+        agent.perceive("voice", "overheard_speech", "テレビ: 北海道で大規模な停電が発生、復旧のめどは立っていません")
+        self.assertNotIn("田中", mem.pending_events()[0]["content"])      # 仲間の名前は出ていない
+        llm.appraise.append(self.appraisal("停電は札幌市内にも及んでいる"))
+        llm.plan += [{"probe": "news_search", "query": "北海道 停電 札幌"}] * 2
+        llm.judge += [{"verdict": "supports", "reason": "札幌も停電と報道"}] * 2
+        llm.matters = [{"matters": True, "to_whom": "田中さん", "why": "田中さんは札幌に住んでいて、札幌が停電している",
+                        "urgent": False, "next_question": ""}]
+        llm.act.append({"summary": "北海道の大停電が札幌にも及んでいて、田中さんが住む地域も停電しているみたい",
+                        "actions": [{"type": "draft_message", "detail": "田中さん、札幌が停電って聞いたけど大丈夫？"},
+                                    {"type": "remind_later", "detail": ""}]})
+        self.run_steps(agent, 12)
+        th = agent.inquiry.recent()[0]
+        self.assertEqual(th["state"], "reported")
+        self.assertGreaterEqual(th["steps"], 2)
+        reflection = [u for sys_, u in llm.calls if sys_ == prompts.MATTERS_SYSTEM][0]
+        self.assertIn("田中さんは札幌に住んでいる", reflection)       # 関係は、掘った結果と仲間の記憶を照らして気づく
         said = "\n".join(out)
-        self.assertIn("ねえねえ！ニュースで見たんだけど", said)
-        self.assertIn("requirements.txt", said)       # 作業フォルダで使っている箇所を見つけた
+        self.assertIn("聞こえてきた話が気になって調べてたんだけど", said)
         self.assertIn("[合理的推定]", said)
-        self.assertNotIn("まだ確かめきれてない", said)
-        self.assertNotIn("確かめた:", said)             # 一般の「確かめた」報告と二重にしない
+        self.assertIn("大丈夫？", said)
+        self.assertNotIn("確かめた:", said)                     # 途中の発見を 1 つずつ言わない
+        self.assertIsNotNone(th["remind_at"])
+
+    def test_unrelated_digging_ends_quietly(self):
+        agent, llm, sensor, mem, clock, out = self.dig_agent(["- 深海魚の図鑑 (https://example.org/fish)"] * 5)
+        agent.perceive("screen", "background_window", "背後のウィンドウ: 深海魚はなぜ光るのか - 動画")
+        llm.appraise.append(self.appraisal("深海魚が光るのは獲物を呼ぶためだ"))
+        llm.plan += [{"probe": "news_search", "query": "深海魚 光る"}] * 5
+        self.run_steps(agent, 16)                                 # 判定は既定で irrelevant → 掘っても減らない
+        th = agent.inquiry.recent()[0]
+        self.assertEqual(th["state"], "closed")
+        self.assertLessEqual(th["steps"], agent.cfg["dig_min_steps"] + 1)   # 収穫が無ければ早めに見切る
+        self.assertFalse(any("ねえねえ" in o for o in out))      # 誰にも関係しなければ黙って終わる
+
+    def test_keeps_digging_while_it_pays(self):
+        agent, llm, sensor, mem, clock, out = self.dig_agent(
+            [f"- 記事{i} (https://site{i}.example.com/x)" for i in range(10)])
+        agent.perceive("voice", "overheard_speech", "ラジオ: 新しい彗星が肉眼で見えるかもしれない")
+        llm.appraise.append(self.appraisal("今週は彗星が肉眼で見える"))
+        llm.plan += [{"probe": "news_search", "query": "彗星 肉眼"}] * 6
+        llm.judge += [{"verdict": "supports", "reason": "報道"}]
+        llm.wonder += [{"hypotheses": ["彗星は夜明け前の東の空に見える"]}, {"hypotheses": ["彗星は来週には暗くなる"]}]
+        llm.judge += [{"verdict": "supports", "reason": "報道"}] * 4
+        llm.matters = [{"matters": False, "to_whom": "", "why": "", "urgent": False, "next_question": ""}] * 3
+        self.run_steps(agent, 14)
+        th = agent.inquiry.recent()[0]
+        self.assertGreater(th["steps"], agent.cfg["dig_min_steps"])       # わかり続ける間は掘り続ける
+        self.assertGreaterEqual(len(agent.inquiry.beliefs(th["id"])), 2)  # 掘ってわかったことから次の問いを作った
 
     def test_unconfirmed_is_reported_as_unconfirmed(self):
-        agent, llm, sensor, mem, clock, out = self.news_agent([])
-        agent.perceive("voice", "overheard_speech", "テレビ: OpenSSL の開発団体で障害が起きているようです")
-        llm.trouble.append({"about_them": True, "trouble": "outage", "summary": "OpenSSLの開発団体で障害",
-                            "urgent": False})
-        llm.act.append({"summary": "テレビで障害と言っていたが、裏付けは見つからなかった", "actions": []})
-        for _ in range(6):
-            agent.step()
+        agent, llm, sensor, mem, clock, out = self.dig_agent(["- 札幌で停電か (https://a.example.com/1)"])
+        agent.perceive("news", "news", "北海道で停電の情報", {"link": "https://a.example.com/0", "source": "a.example.com"})
+        llm.appraise.append(self.appraisal("札幌が停電している"))
+        llm.plan += [{"probe": "news_search", "query": "札幌 停電"}] * 6
+        llm.judge += [{"verdict": "partially_supports", "reason": "一部報道"}]
+        llm.matters = [{"matters": True, "to_whom": "田中さん", "why": "札幌に住んでいる", "urgent": False,
+                        "next_question": ""}]
+        llm.act.append({"summary": "札幌が停電しているかもしれない", "actions": []})
+        self.run_steps(agent, 20)
         said = "\n".join(out)
+        self.assertIn("ニュースが気になって調べてたんだけど", said)
         self.assertIn("まだ確かめきれてない", said)
-        self.assertIn("[低確度仮説]", said)
 
-    def test_not_about_them_is_ignored(self):
-        agent, llm, sensor, mem, clock, out = self.news_agent([])
-        agent.perceive("news", "news", "OpenSSL 財団が新しい理事を発表")
-        llm.trouble.append({"about_them": True, "trouble": "none", "summary": "", "urgent": False})
-        agent.step()
-        self.assertEqual(agent.concerns.recent(), [])
-
-    def test_refuted_concern_is_withdrawn(self):
-        agent, llm, sensor, mem, clock, out = self.news_agent(
-            ["- OpenSSL: 報道は誤りと開発者が否定 (https://example.org/x)"] * 3)
-        agent.perceive("news", "news", "OpenSSL 開発終了か", {"link": "https://a.example/1", "source": "a.example"})
-        llm.trouble.append({"about_them": True, "trouble": "other", "summary": "OpenSSLの開発が終了する",
-                            "urgent": True})
-        llm.judge += [{"verdict": "contradicts", "reason": "開発者が否定"}] * 3
-        for _ in range(5):
-            agent.step()
-        c = agent.concerns.recent()[0]
-        self.assertEqual(c["state"], "dismissed")
+    def test_wrong_alarm_is_withdrawn(self):
+        agent, llm, sensor, mem, clock, out = self.dig_agent(
+            ["- 札幌で停電の速報 (https://b.example.org/1)", "- 停電の続報 (https://b.example.org/2)"]   # 同じ媒体
+            + [f"- 停電は誤報と電力会社 その{i} (https://c{i}.example.com/x)" for i in range(4)])
+        agent.perceive("voice", "overheard_speech", "テレビ: 札幌で大規模停電との情報")
+        llm.appraise.append(self.appraisal("札幌が停電している"))
+        llm.plan += [{"probe": "news_search", "query": "札幌 停電"}] * 8
+        llm.judge += [{"verdict": "partially_supports", "reason": "速報"}] * 2 + [{"verdict": "contradicts", "reason": "誤報"}] * 4
+        llm.matters = [{"matters": True, "to_whom": "田中さん", "why": "札幌に住んでいる", "urgent": True,
+                        "next_question": ""}]
+        self.run_steps(agent, 20)
         said = "\n".join(out)
-        self.assertIn("いま調べてるね", said)          # 急ぎの知らせは先に一言
+        self.assertIn("いま調べてるね", said)          # 急ぎなら先に一言
         self.assertIn("違ったみたい", said)             # 言ったことは撤回まで責任を持つ
+        self.assertEqual(agent.inquiry.recent()[0]["state"], "dismissed")
+
+    def test_familiar_name_catches_attention(self):
+        self.assertEqual(curiosity.interest(0.1, 0.2, familiarity=0.7), 0.7)      # 新しくなくても名前には気づく
+        self.assertLess(curiosity.interest(0.1, 0.2), 0.1)
+        agent, llm, sensor, mem, clock, out = self.dig_agent([])
+        agent.perceive("voice", "overheard_speech", "隣の人: 田中さんって最近どうしてるんだろうね")
+        self.assertGreaterEqual(mem.pending_events()[0]["priority"], agent.cfg["dig_threshold"])
+
+    def test_glance_at_the_edge(self):
+        agent, llm, sensor, mem, clock, out = self.dig_agent([])
+        agent.probes.camera = object()
+        agent.probes.run = lambda name, q: "机の奥のテレビに『大雨特別警報』のテロップ" if name == "look" else None
+        clock.t += agent.cfg["glance_interval_s"] + 1
+        self.assertTrue(agent.maybe_glance())
+        ev = mem.pending_events()[0]
+        self.assertEqual((ev["source"], ev["kind"]), ("camera", "glance"))
+
+    def test_background_windows(self):
+        titles = [["メモ帳", "YouTube - 台風情報"], ["メモ帳", "YouTube - 台風情報", "Slack - 田中さん"]]
+        clock = Clock()
+        s = BackgroundWindowsSensor(interval_s=30, clock=clock, titles_fn=lambda: titles.pop(0))
+        self.assertEqual(len(s.poll()), 2)
+        clock.t += 31
+        self.assertEqual(s.poll(), [("background_window", "背後のウィンドウ: Slack - 田中さん")])
 
     def test_report_waits_for_the_partner(self):
-        agent, llm, sensor, mem, clock, out = self.news_agent([])
-        mem.add_utterance("concern", "ねえねえ！ニュースで見たんだけど…", 0.95)
+        agent, llm, sensor, mem, clock, out = self.dig_agent([])
+        mem.add_utterance("report", "ねえねえ！聞こえてきた話が気になって…", 0.95)
         mem.add_utterance("remark", "ふつうの気づき", 0.95)
         clock.t += 3600
         agent.maybe_speak()

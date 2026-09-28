@@ -119,7 +119,7 @@ DEFAULTS = {
     "foresight_explore": 0.5,         # よく知らない出どころをどれだけ楽観的に見るか
     "foresight_canary_horizon_s": 6 * 3600,   # 自己進化の試用期間で先見を測るときの期限
 
-    # --- ニュースと仲間 (ニュースを見る → 仲間のピンチを知る → 調べる → 行動する) ---
+    # --- ニュースと仲間 (ニュースは視界の端にあるテレビ。仲間は深掘りの途中で「関係する」と気づく相手) ---
     "news": False,                    # RSS を定期的に読む (ネットに出る。web と同じく opt-in)
     "news_feeds": ["https://www3.nhk.or.jp/rss/news/cat0.xml"],
     "news_interval_s": 1800,
@@ -127,13 +127,23 @@ DEFAULTS = {
     # 続報・別の報道を探すニュース検索 ({q} に検索語)。空なら検索しない
     "news_search_url": "https://news.google.com/rss/search?q={q}&hl=ja&gl=JP&ceid=JP:ja",
     "bond_min_strength": 0.3,         # これ以上の絆がある相手を「仲間」とみなす (/friend で教えると 0.7)
-    "concern_merge_s": 3 * 86400,     # 同じ仲間の似た報道は同じ出来事として扱う期間
-    "concern_max_searches": 3,        # 裏付けを探す回数の上限
-    "concern_timeout_s": 1800,        # 確かめきれなくても、この時間で相棒に知らせる
-    "concern_dismiss_p": 0.2,         # 反する報道で確信がここまで下がったら「違った」とみなす
-    "concern_watch_days": 7,          # 続報を見張る日数
-    "concern_remind_s": 86400,        # 「あとで様子を確かめる」までの時間
-    "concern_report_ttl_s": 3 * 86400,   # 仲間のピンチの知らせは、相棒が戻るまでこの間取っておく
+
+    # --- 視界の端を深掘りする (inquiry.py) ---
+    "background_windows": True,       # 前面以外のウィンドウのタイトル (画面の端)。中身は読まない
+    "glance_interval_s": 900,         # カメラがあるとき、目の端に何が映っているかを眺める間隔
+    "dig_threshold": 0.45,            # 周辺の出来事への興味がこれ以上なら、問いを立てて深掘りする
+    "dig_relevance": 0.5,             # 深掘りの問いの初めの関連度
+    "dig_max_threads": 2,             # 同時に掘る探究の糸の数
+    "dig_min_steps": 2,               # 見切る前に最低限調べる回数
+    "dig_max_steps": 8,               # 関係が見つからない糸を掘る上限
+    "dig_leave_ratio": 0.5,           # 掘って減らせる不確実性が、ふだんの平均のこの割合を下回ったら見切る
+    "dig_check_every": 2,             # 何回調べるごとに「誰かに関係するか」を考えるか
+    "dig_confirm_steps": 3,           # 関係に気づいてから、裏付けを探す回数の上限
+    "dig_timeout_s": 1800,            # 確かめきれなくても、この時間で相棒に知らせる
+    "dig_dismiss_p": 0.2,             # 反する根拠で確信がここまで下がったら「違った」とみなす
+    "dig_watch_days": 7,              # 続報を見張る日数
+    "dig_remind_s": 86400,            # 「あとで様子を確かめる」までの時間
+    "report_ttl_s": 3 * 86400,        # 深掘りから気づいた知らせは、相棒が戻るまでこの間取っておく
 
     # --- 独りの時間 (自習と耳の学習) ---
     "absent_after_s": 300,            # 声も人影もこの秒数なければ「独り」

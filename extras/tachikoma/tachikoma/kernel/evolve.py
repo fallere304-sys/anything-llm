@@ -100,8 +100,9 @@ GOALS = {
                 "params": ("speak_threshold", "min_speak_interval_s", "persona_playfulness", "chat_temperature")},
     # 何を先に考えるか (情報の優先度) の当たり具合。周辺の情報をどれだけ拾うかも含めて進化させる
     "foresight": {"label": "先見", "metric": "foresight_auc", "levels": ("param", "code"),
-                  "params": ("peripheral_share", "peripheral_weight", "peripheral_relevance", "novelty_threshold"),
-                  "files": ("tachikoma/curiosity.py",)},
+                  "params": ("peripheral_share", "peripheral_weight", "peripheral_relevance", "novelty_threshold",
+                             "dig_threshold", "dig_leave_ratio", "dig_check_every"),
+                  "files": ("tachikoma/curiosity.py", "tachikoma/inquiry.py")},
 }
 MIGRATIONS = (("goal", "TEXT"), ("novelty", "REAL"), ("approach", "TEXT"))
 

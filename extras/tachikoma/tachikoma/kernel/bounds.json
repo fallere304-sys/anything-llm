@@ -67,5 +67,17 @@
   "peripheral_relevance": [
     0.1,
     0.8
+  ],
+  "dig_threshold": [
+    0.2,
+    0.8
+  ],
+  "dig_leave_ratio": [
+    0.2,
+    1.0
+  ],
+  "dig_check_every": [
+    1,
+    4
   ]
 }

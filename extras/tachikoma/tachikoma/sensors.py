@@ -150,6 +150,51 @@ class ActiveWindowSensor(Sensor):
         return []
 
 
+class BackgroundWindowsSensor(Sensor):
+    """画面の端: 前面以外で開いているウィンドウのタイトル (背後のブラウザのタブ・動画・チャットなど)。
+    新しく現れたタイトルだけを出来事にする。中身は読まない。Windows のみ (titles_fn を渡せば他でも試せる)。"""
+    name = "screen"
+
+    def __init__(self, interval_s=30, clock=None, titles_fn=None, max_per_poll=5):
+        import time as _time
+        self.clock = clock or _time.time
+        self.interval_s, self.max_per_poll = interval_s, max_per_poll
+        self._titles = titles_fn or (self._win_titles if sys.platform == "win32" else (lambda: []))
+        self._seen, self._next = set(), 0.0
+
+    @staticmethod
+    def _win_titles():
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        fg = user32.GetForegroundWindow()
+        out = []
+        buf = ctypes.create_unicode_buffer(512)
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def each(hwnd, _):
+            if hwnd != fg and user32.IsWindowVisible(hwnd) and not user32.IsIconic(hwnd):
+                user32.GetWindowTextW(hwnd, buf, 512)
+                if buf.value.strip():
+                    out.append(buf.value.strip())
+            return True
+        user32.EnumWindows(each, 0)
+        return out
+
+    def poll(self):
+        now = self.clock()
+        if now < self._next:
+            return []
+        self._next = now + self.interval_s
+        try:
+            titles = set(self._titles())
+        except OSError:
+            return []
+        new = [t for t in titles if t not in self._seen]
+        self._seen = titles
+        return [("background_window", f"背後のウィンドウ: {clip(t, 200)}") for t in sorted(new)[: self.max_per_poll]]
+
+
 class ClipboardSensor(Sensor):
     name = "clipboard"
 
@@ -222,6 +267,8 @@ def build(cfg, with_console=True):
         sensors.append(LogTailSensor(cfg["terminal_logs"]))
     if cfg["active_window"]:
         sensors.append(ActiveWindowSensor())
+    if cfg.get("background_windows"):
+        sensors.append(BackgroundWindowsSensor())
     if cfg["clipboard"]:
         sensors.append(ClipboardSensor())
     if with_console:
