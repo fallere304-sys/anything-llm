@@ -35,6 +35,15 @@ GitHub Actions ("Build Tachikoma.exe") の実行結果ページの **Artifacts �
 - キャッシュ (pip・Hugging Face・PyTorch) も Hugging Face のログイン情報 (`Tachikoma.exe --hf-login`) もインストール先の中に置く。
   PC のほかの場所を汚さないため
 
+### うまく動かないとき
+
+| 画面に出るもの | 原因と直し方 |
+|---|---|
+| `llama-server process has terminated: exit status 0xc0000409 … CUDA error: the provided PTX was compiled with an unsupported toolchain` | GPU 用の部品 (Ollama の CUDA 版) が、NVIDIA のドライバより新しい。[NVIDIA のドライバ](https://www.nvidia.com/ja-jp/drivers/) を最新にして PC を再起動する。**それまでは自動で CPU だけの Ollama (127.0.0.1:11435、GPU を見せない) に切り替えて動く** (返事は遅い)。ドライバを新しくすれば、次の起動から自動で GPU に戻る |
+| `Ollama に接続できません` | Ollama が起動していない / モデルが無い。Ollama を起動し、`ollama pull gemma4:e2b` |
+
+準備が整っていないとき (Ollama につながらないなど) は、起動し直しを繰り返さずに案内を出して止まる。
+
 ### 取り除く (完全アンインストール・原状回復)
 
 `TachikomaUninstall.exe` (同じ Artifacts に入っている) を実行する。`Tachikoma.exe --uninstall` や、

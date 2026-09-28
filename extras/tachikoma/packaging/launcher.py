@@ -413,10 +413,16 @@ class App:
         self.open_ui_when_ready()
         say("タチコマを起動します (終わるときは Ctrl+C)。")
         try:
-            return subprocess.call([self.py, "supervisor.py", "--config", self.cfg_path, "--verbose"],
+            code = subprocess.call([self.py, "supervisor.py", "--config", self.cfg_path, "--verbose"],
                                    cwd=self.app, env=self.env())
         except KeyboardInterrupt:
             return 0
+        if code != 0 and self.interactive:      # 窓がすぐ閉じて案内が読めない、を防ぐ
+            try:
+                input("\n止まりました。上の案内を読んだら Enter で閉じます… ")
+            except EOFError:
+                pass
+        return code
 
     def selftest(self):
         say("同梱の Python でテスト一式を走らせます…")

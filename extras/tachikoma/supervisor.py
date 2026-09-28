@@ -4,6 +4,7 @@
 
 - 終了コード 75: 自己改良を反映するための再起動 → すぐ起動し直す
 - 異常終了が 10 分以内に 3 回: 最新の自己改良 (コード) を自動で撤回してから起動し直す
+- 終了コード 3: 準備が整っていない (Ollama につながらないなど)。起動し直しても直らないので、案内を残して止まる
 - Ctrl+C / 正常終了: 終わる
 """
 
@@ -13,6 +14,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+SETUP_CODE = 3        # tachikoma/__main__.py の SETUP_CODE
 sys.path.insert(0, HERE)
 
 from tachikoma import config  # noqa: E402
@@ -46,6 +48,9 @@ def main(argv=None, popen=subprocess.call, clock=time.time, max_runs=None):
             continue
         if code in (0, 130, -2, 3221225786):     # 正常終了 / Ctrl+C (Windows の STATUS_CONTROL_C_EXIT 含む)
             return 0
+        if code == SETUP_CODE:
+            say("[supervisor] 準備が整っていないので止めます (上の案内を見てください)")
+            return code
         now = clock()
         crashes = [t for t in crashes if now - t < 600] + [now]
         say(f"[supervisor] 異常終了 (code={code})")

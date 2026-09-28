@@ -16,6 +16,9 @@ from .memory import Memory
 from .probes import Probes
 
 
+SETUP_CODE = 3     # 準備が整っていない (見守り役は起動し直さずに止まる)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="tachikoma")
     ap.add_argument("--config", default="config.json")
@@ -36,12 +39,14 @@ def main(argv=None):
         if os.path.isdir(p) and p not in sys.path:
             sys.path.append(p)
 
-    llm = OllamaClient(cfg)
+    # 推論サーバーにつなぐ。GPU の部品が落ちる PC (NVIDIA のドライバが古いなど) では、CPU だけの Ollama に切り替える
+    from .kernel import ollama_host
     try:
-        llm.chat("Reply with OK.", "ping", max_tokens=4)
+        llm, llm_note = ollama_host.connect(cfg, OllamaClient,
+                                            lambda c: c.chat("Reply with OK.", "ping", max_tokens=4))
     except LLMError as e:
         print(f"Ollama に接続できません。`ollama serve` と `ollama pull {cfg['model']}` を確認してください。\n{e}")
-        return 1
+        return SETUP_CODE
 
     memory = Memory(cfg["db_path"])
     # 外への関所: ここから先、外へ出せるのは個人情報を含まない文字の問い合わせだけ (egress.log に記録)
@@ -128,6 +133,8 @@ def main(argv=None):
                       tts=tts, study=study, asr_learner=asr_learner, eyes=eyes, eye_learner=eye_learner,
                       idle=idle, ui=ui, power=power)
     log.append(agent.log)
+    if llm_note:
+        agent.log(llm_note)
     if evolved or evolved_prompts:
         agent.log(f"自己進化の結果を反映: {evolved} {evolved_prompts}")
 
