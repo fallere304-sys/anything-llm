@@ -1,7 +1,8 @@
 """情報収集行為 (プローブ) の実装。すべて読み取り専用。
 
 任意のコマンド実行は意図的に持たない。自律エージェントが「調べる」だけなら、壊すものは何もない。
-外に出るのは web_search / research / challenge の検索語だけで、個人情報らしき語は web.sanitize() が止める。
+外に出るのは web_search / research / challenge / news_search の検索語だけ。関所 (kernel/egress.py) が
+個人情報を含まない一般的な問いに直す。「見る」(カメラ) の画像はこの PC の中のモデルだけが見て、外には出さない。
 
 research / challenge は (根拠テキスト, メタ情報) を返す。メタ情報には根拠の種類から決めた
 信頼度 (reliability) と、因果を示せる研究デザインか (causal_design) が入る。

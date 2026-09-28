@@ -9,6 +9,7 @@ import sys
 from . import config, sensors
 from .agent import Tachikoma
 from .dataset import TrainingData
+from .kernel import egress
 from .learner import Learner
 from .llm import LLMError, OllamaClient
 from .memory import Memory
@@ -43,6 +44,9 @@ def main(argv=None):
         return 1
 
     memory = Memory(cfg["db_path"])
+    # 外への関所: ここから先、外へ出せるのは個人情報を含まない文字の問い合わせだけ (egress.log に記録)
+    privacy = egress.install(cfg, memory.db,
+                             log_path=os.path.join(os.path.dirname(os.path.abspath(cfg["db_path"])), "egress.log"))
     data = TrainingData(memory)
     learner = Learner(cfg, data, llm)
     llm.model = learner.active_model()      # 前回までに採用した学習済みの版があればそれを使う
@@ -176,7 +180,7 @@ def main(argv=None):
     try:
         agent.say("起動しました。見てます。")
         code = runtime.run(agent, cfg, metrics, evolution=evolution, brain=brain if evolution else None,
-                           power=power, foresight=foresight, plugins=plugins)
+                           power=power, foresight=foresight, plugins=plugins, privacy=privacy)
         if code == runtime.RESTART_CODE:
             agent.say("自分を改良したので、少し再起動するね！")
             for lr in agent.learners():

@@ -2,7 +2,7 @@
 
 1. 変更してよいのは進化可能な「思考」のファイルだけ (カーネル・テストは不可)
 2. 思考のコードは外界に直接触れない: プロセス起動・ネットワーク・OS 操作・動的実行を禁止
-   (外界に触れる必要があるときは、カーネルの狭い API を通す)
+   (外界に触れる必要があるときは、カーネルの狭い API を通す)。外への関所 (egress) にも触れられない
 3. プラグインはさらに厳しく、許可したモジュールしか import できない
 4. 構文として正しいこと
 """
@@ -20,9 +20,10 @@ FORBIDDEN_MODULES = {
 FORBIDDEN_INTERNAL = {"tachikoma.kernel.evolve", "tachikoma.kernel.sandbox", "tachikoma.kernel.guard",
                       "tachikoma.kernel.runtime", "tachikoma.kernel.cpu_brain", "tachikoma.learner",
                       "tachikoma.asr_learner", "tachikoma.eye_learner", "tachikoma.config",
-                      "tachikoma.kernel.foresight", "tachikoma.kernel.initiative", "tachikoma.kernel.plugins"}
+                      "tachikoma.kernel.foresight", "tachikoma.kernel.initiative", "tachikoma.kernel.plugins",
+                      "tachikoma.kernel.egress"}
 # 先見の帳簿 (後で役に立ったか) の表。思考のコードが「役に立った」を水増しできないように、名前にも触れさせない
-PROTECTED_TABLES = ("info_items", "foresight_kv")
+PROTECTED_TABLES = ("info_items", "foresight_kv", "privacy_terms")
 # 学習結果の採否・進化の停止スイッチなど、選択の環境が使う記録の名前。思考のコードからは書けない
 PROTECTED_KEYS = {"active_model", "active_asr", "active_ocr", "evolution_frozen", "evolution_last",
                   "asr_versions", "ocr_versions", "finetune_backoff_until", "asr_backoff_until", "ocr_backoff_until"}
@@ -34,6 +35,9 @@ FORBIDDEN_ATTRS = {"system", "popen", "remove", "unlink", "rmdir", "removedirs",
 PLUGIN_FORBIDDEN_NAMES = {"open", "getattr", "setattr", "delattr", "vars", "dir", "globals", "locals", "type",
                           "object", "super", "memoryview", "help", "exit", "quit", "classmethod", "staticmethod",
                           "property", "id", "hash", "iter", "next", "callable"}
+# 外への関所を回り込む道 (他のモジュール経由で urllib などに届く属性も含めて閉じる)
+EGRESS_NAMES = {"egress", "_gate", "_orig_open", "_guarded_open", "OpenerDirector", "HTTPConnection",
+                "HTTPSConnection", "create_connection"}
 PLUGIN_ALLOWED = {"re", "math", "json", "statistics", "collections", "itertools", "functools",
                   "datetime", "time", "random", "string", "unicodedata", "tachikoma.text"}
 
@@ -95,6 +99,10 @@ def check_source(relpath, source, plugin=False):
             errors.append(f"{relpath}:{node.lineno}: プラグインは内部 (_ で始まる名前) に触れられない: {node.attr}")
         if plugin and isinstance(node, ast.Name) and node.id in PLUGIN_FORBIDDEN_NAMES:
             errors.append(f"{relpath}:{node.lineno}: プラグインでは使えない: {node.id}")
+        if isinstance(node, ast.Attribute) and (node.attr in EGRESS_NAMES or node.attr in FORBIDDEN_MODULES):
+            errors.append(f"{relpath}:{node.lineno}: 外への関所・外界に回り込む属性には触れられない: {node.attr}")
+        if isinstance(node, ast.Name) and node.id in EGRESS_NAMES:
+            errors.append(f"{relpath}:{node.lineno}: 外への関所には触れられない: {node.id}")
         if isinstance(node, ast.Attribute) and node.attr in ("__subclasses__", "__globals__", "__builtins__"):
             errors.append(f"{relpath}:{node.lineno}: 内部属性への接近は禁止: {node.attr}")
     return errors

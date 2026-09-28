@@ -3,32 +3,24 @@
 ネットは「世界の一般知識」の裏付けにはなるが、「目の前で何が起きているか」の裏付けにはならない。
 そのため出所は web (確信の上限 0.85) とし、[観測事実] にはしない。
 
-外に出る唯一の経路なので、検索語に個人情報らしきもの (パス・メール・長い数字・URL・
-トークン風の文字列) が含まれていたら送らない。
+検索語は外に出る前に、関所 (kernel/egress.py) で個人情報を含まない一般的な問いに直す。
+直せなければ送らない。関所は urllib の通信すべてにも掛かっている。
 """
 
 import json
-import re
 import urllib.parse
 import urllib.request
 
+from .kernel import egress
 from .text import clip
 
-UA = "Tachikoma/0.1 (local personal assistant; https://github.com/)"
-_PRIVATE = [
-    re.compile(r"[A-Za-z]:\\|/(home|Users|mnt|var|etc)/"),     # ファイルパス
-    re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),                    # メール
-    re.compile(r"\d{6,}"),                                     # 電話・口座・ID など
-    re.compile(r"https?://"),
-    re.compile(r"[A-Za-z0-9_\-]{24,}"),                        # トークン・鍵
-]
+UA = "Tachikoma/0.1"          # 送るのは名前だけ (利用者や環境を特定できる情報は付けない)
 
 
 def sanitize(query, limit=80):
-    q = re.sub(r"\s+", " ", query or "").strip()
-    if not q or any(p.search(q) for p in _PRIVATE):
-        return None
-    return q[:limit]
+    """検索語を、個人情報を含まない一般的な問いにする (関所の規則)。送れなければ None。"""
+    q, _ = egress.clean(query, limit)
+    return q
 
 
 class WebSearch:

@@ -11,7 +11,7 @@ import time
 from .. import config
 from ..agent import Tachikoma
 from ..dataset import TrainingData
-from ..kernel import runtime
+from ..kernel import egress, runtime
 from ..kernel.evolve import Evolution, apply_params, apply_prompts
 from ..kernel.foresight import Foresight
 from ..kernel.initiative import Initiative
@@ -72,6 +72,7 @@ class App:
         applied = apply_params(cfg, home)
         apply_prompts(home)
         self.memory = Memory(cfg["db_path"])
+        self.privacy = egress.install(cfg, self.memory.db, log_path=os.path.join(home, "egress.log"))
         self.data = TrainingData(self.memory)
         battery_ok = lambda: bool(bridge.batteryOk(int(cfg["android_battery_min"])))   # noqa: E731
         self.llm = LocalLLM(cfg, engine, power_ok=battery_ok)
@@ -139,7 +140,7 @@ class App:
         self.agent.say("起動したよ。見てるし、聞いてる！")
         while not self.stopped:
             code = runtime.run(self.agent, self.cfg, self.metrics, evolution=self.evolution, power=self.power,
-                               foresight=self.foresight, plugins=self.plugins, sleep=sleep,
+                               foresight=self.foresight, plugins=self.plugins, privacy=self.privacy, sleep=sleep,
                                max_steps=max_steps, stop=lambda: self.stopped)
             if max_steps is not None or code != runtime.RESTART_CODE:
                 break

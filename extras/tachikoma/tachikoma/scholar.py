@@ -6,7 +6,8 @@
 - 政府文書   … SearXNG があれば site:go.jp / site:gov 等で検索 (Docker で自前起動できる)
 
 見つけた根拠は epistemics.classify_text で種類を判定し、信頼度と「因果を示せる研究デザインか」を付ける。
-外に出るのは検索語だけで、個人情報らしき語を含むものは web.sanitize で止める。
+外に出るのは検索語だけで、関所 (kernel/egress.py) が個人情報を含まない一般的な問いに直す (直せなければ送らない)。
+連絡先 (メールアドレス) などの利用者の情報は、どの問い合わせにも付けない。
 """
 
 import json
@@ -74,8 +75,7 @@ class Scholar:
         return found[:k]
 
     def openalex(self, q):
-        mail = f"&mailto={urllib.parse.quote(self.cfg['contact_email'])}" if self.cfg.get("contact_email") else ""
-        data = self._get("https://api.openalex.org/works?per_page=5&search=" + urllib.parse.quote(q) + mail)
+        data = self._get("https://api.openalex.org/works?per_page=5&search=" + urllib.parse.quote(q))
         out = []
         for w in data.get("results", []):
             src = ((w.get("primary_location") or {}).get("source") or {})

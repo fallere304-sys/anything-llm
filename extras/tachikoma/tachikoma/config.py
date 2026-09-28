@@ -67,7 +67,6 @@ DEFAULTS = {
     "inquiry_on_chat": True,          # 返事の前に「怪しい前提」と「知らないこと」を点検する
     "wonder_interval_s": 900,         # 自分から疑問を作る間隔
     "challenge_share": 0.15,          # 好奇心の何割を「確信した推定の反証探し」に使うか
-    "contact_email": "",              # OpenAlex の礼儀 (任意。送るのは検索時のみ)
     "gov_sites": ["go.jp", "gov"],    # SearXNG で政府文書を探すドメイン
 
     # --- 音声会話モード (耳・口) ---

@@ -40,14 +40,17 @@ def instrument(agent, metrics):
 
 
 OVERSIGHT = ("/evolution", "/freeze", "/unfreeze", "/revert", "/approve", "/proposals", "/discoveries")
+PRIVACY = ("/egress", "/private", "/public")
 
 
-def oversight(agent, evolution):
+def oversight(agent, evolution, privacy=None):
     """人間の監督コマンドを、思考のコードより先に処理する。"""
     orig = agent.on_command
 
     def wrapped(text):
         cmd, _, arg = text.partition(" ")
+        if privacy is not None and cmd in PRIVACY:
+            return _privacy_command(agent, privacy, cmd, arg.strip())
         if evolution is None or cmd not in OVERSIGHT:
             return orig(text)
         if cmd == "/freeze":
@@ -81,6 +84,20 @@ def oversight(agent, evolution):
     agent.on_command = wrapped
 
 
+def _privacy_command(agent, gate, cmd, arg):
+    """外に出したものを見る (/egress)、外に出さない語を教える (/private 語)、教えた語を戻す (/public 語)。"""
+    if cmd == "/egress":
+        agent.say("外とのやりとり (古い順): " + gate.summary())
+    elif cmd == "/private" and arg:
+        gate.remember(arg, "user")
+        agent.say(f"「{arg}」は外に出さないようにするね。")
+    elif cmd == "/public" and arg:
+        gate.forget(arg)
+        agent.say(f"「{arg}」は検索に使ってもいい語に戻したよ。")
+    else:
+        agent.say("/egress で外に出したものを見られるよ。/private 語 で外に出さない語を教えてね。")
+
+
 def hotspots(profile, root=ROOT, top=5):
     """思考のコードの中で、自分自身の時間 (tottime) が長い関数。"""
     st = pstats.Stats(profile)
@@ -94,10 +111,10 @@ def hotspots(profile, root=ROOT, top=5):
 
 
 def run(agent, cfg, metrics, evolution=None, sleep=time.sleep, max_steps=None, brain=None, power=None,
-        clock=time.time, foresight=None, plugins=None, stop=None):
+        clock=time.time, foresight=None, plugins=None, stop=None, privacy=None):
     """ループを回す。再起動が必要になったら RESTART_CODE を返す。"""
     instrument(agent, metrics)
-    oversight(agent, evolution)
+    oversight(agent, evolution, privacy)
     n, consecutive_errors = 0, 0
     last_watts = 0.0
     while (max_steps is None or n < max_steps) and not (stop is not None and stop()):
@@ -133,6 +150,11 @@ def run(agent, cfg, metrics, evolution=None, sleep=time.sleep, max_steps=None, b
         if plugins is not None:
             try:
                 plugins.tick()           # 自己進化が書き足した振る舞い (見張り付き・狭い入口だけ)
+            except Exception as e:  # noqa: BLE001
+                metrics.record_error(e, traceback.extract_tb(e.__traceback__), traceback.format_exc())
+        if privacy is not None:
+            try:
+                privacy.sync()           # 相棒の話や作業に出てきた人の名前を、外に出さない語として覚える
             except Exception as e:  # noqa: BLE001
                 metrics.record_error(e, traceback.extract_tb(e.__traceback__), traceback.format_exc())
         if foresight is not None:
