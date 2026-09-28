@@ -49,11 +49,13 @@ jobs:
       - name: "Smoke test (start without Ollama, it must set up and stop with a clear message)"
         run: |
           $home_dir = "$env:RUNNER_TEMP\tachikoma-home"
-          $out = dist\Tachikoma.exe --home $home_dir --no-shortcut 2>&1 | Out-String
-          Write-Output $out
-          if ($LASTEXITCODE -ne 3) { throw "expected exit code 3 without Ollama, got $LASTEXITCODE" }
+          $p = Start-Process -FilePath dist\Tachikoma.exe -ArgumentList "--home", $home_dir, "--no-shortcut" `
+            -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$env:RUNNER_TEMP\smoke.txt"
+          Get-Content "$env:RUNNER_TEMP\smoke.txt"
+          if ($p.ExitCode -ne 3) { throw "expected exit code 3 without Ollama, got $($p.ExitCode)" }
           if (-not (Test-Path "$home_dir\app\config.json")) { throw "config.json was not created" }
           if (-not (Test-Path "$home_dir\python\python.exe")) { throw "python was not installed" }
+          exit 0
 
       - uses: actions/upload-artifact@v4
         with:
