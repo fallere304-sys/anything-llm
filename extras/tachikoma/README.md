@@ -43,7 +43,7 @@ GitHub Actions ("Build Tachikoma APK") の実行結果ページの **Artifacts �
 
 | | PC 版 | Android 版 |
 |---|---|---|
-| 考える力 | Gemma 4 E2B (GPU・Ollama) | **TinySwallow-1.5B-Instruct** (日本語に強い 1.5B・約 1GB) を端末の CPU で (llama.cpp)。もっと軽い Qwen2.5-0.5B (約 0.4GB) も選べる |
+| 考える力 | Gemma 4 E2B (GPU・Ollama) | **TinySwallow-1.5B-Instruct** (日本語に強い 1.5B・公式の Q5_K_M 約 1.1GB) を端末の CPU で (llama.cpp)。もっと軽い Qwen2.5-0.5B (約 0.4GB) も選べる |
 | 入力 | 文字・マイク・カメラ・ネット・画面・ファイル | 文字・**マイク** (端末の音声認識。呼びかけ語「タチコマ」)・**カメラ** (人がいるか・映っている物と文字)・ネット (論文・ニュース) |
 | 出力 | 声・画面 | **文字だけ** (チャット画面と通知) |
 | 思考・記憶・学習データ・較正・深掘り・先見・自発性・プラグイン | ← 同じ Python のコード | ← 同じ |

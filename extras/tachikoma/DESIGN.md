@@ -865,7 +865,8 @@ Gemma の量子化の種類や GPU/CPU の層の分け方を自動で試す実�
 ### 19.2 モデルの選択 (RAM 4GB)
 
 - [合理的推定] RAM 4GB の端末では、OS と他のアプリが 1.5〜2GB を使う。モデルに回せるのは 1〜1.5GB 程度
-- 既定: **TinySwallow-1.5B-Instruct** (Sakana AI、Qwen2.5-1.5B を日本語で鍛えたもの) の Q4_K_M 約 1GB。
+- 既定: **TinySwallow-1.5B-Instruct** (Sakana AI、Qwen2.5-1.5B を日本語で鍛えたもの)。公式の GGUF に Q4_K_M は無く、
+  いちばん軽い Q5_K_M (約 1.1GB [推定]) を使う ([観測事実] CI で Hugging Face の一覧から選ばれたのは tinyswallow-1.5b-instruct-q5_k_m.gguf)。
   文脈 2048 の KV は約 60MB [合理的推定: 28 層 × KV 2 頭 × 128 次元 × f16 から計算]
 - 軽量版: Qwen2.5-0.5B-Instruct Q4_K_M 約 0.4GB (速いが日本語の質は下がる)
 - ファイル名は Hugging Face の API で一覧を取り、量子化の優先順位 (Q4_K_M → Q4_0 → Q5_K_M → Q8_0) で選ぶ

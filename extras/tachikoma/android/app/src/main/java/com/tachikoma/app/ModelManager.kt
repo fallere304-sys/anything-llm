@@ -10,7 +10,7 @@ import java.net.URL
 /**
  * 考える力 (GGUF の小型モデル) の置き場所と取得。RAM 4GB の端末を想定して、1GB 前後以下のものを選ぶ。
  *
- *   standard  TinySwallow-1.5B-Instruct (Sakana AI、Qwen2.5 を日本語で鍛えた 1.5B) Q4_K_M 約 1GB
+ *   standard  TinySwallow-1.5B-Instruct (Sakana AI、Qwen2.5 を日本語で鍛えた 1.5B)。公式の GGUF の Q5_K_M 約 1.1GB
  *   light     Qwen2.5-0.5B-Instruct Q4_K_M 約 0.4GB (もっと軽く・速く。日本語の質は下がる)
  *
  * ファイル名は Hugging Face の API で一覧を取って選ぶ (量子化の種類の優先順位つき)。
@@ -20,7 +20,7 @@ object ModelManager {
     data class Choice(val key: String, val label: String, val repos: List<String>)
 
     val choices = listOf(
-        Choice("standard", "日本語に強い 1.5B (TinySwallow・約 1GB)",
+        Choice("standard", "日本語に強い 1.5B (TinySwallow・約 1.1GB)",
             listOf("SakanaAI/TinySwallow-1.5B-Instruct-GGUF", "Qwen/Qwen2.5-1.5B-Instruct-GGUF")),
         Choice("light", "もっと軽い 0.5B (Qwen2.5・約 0.4GB)", listOf("Qwen/Qwen2.5-0.5B-Instruct-GGUF")),
     )

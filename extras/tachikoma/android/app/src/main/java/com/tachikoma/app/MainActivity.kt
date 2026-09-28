@@ -29,7 +29,7 @@ import java.io.File
 
 /**
  * 画面: 文字だけのチャット。タチコマの発話・相棒の入力・(任意で) 思考ログを並べる。
- * 考える力のモデルが無ければ、最初に取得する (約 1GB / 軽い版は約 0.4GB)。
+ * 考える力のモデルが無ければ、最初に取得する (約 1.1GB / 軽い版は約 0.4GB)。
  */
 class MainActivity : ComponentActivity() {
     private lateinit var list: LinearLayout
