@@ -16,6 +16,8 @@ final class AppSettings {
     final int sensitivity;
     final int postRecordSec;
     final int segmentMin;
+    /** Burn the date and time into recordings. */
+    final boolean timestamp;
     final boolean useSdCard;
     final long minFreeBytes;
     final int port;
@@ -42,6 +44,7 @@ final class AppSettings {
         postRecordSec = clamp(parseInt(p.getString("post_record_sec", "10"), 10), 1, 600);
         // 0 = no split: one file per motion event (see CameraPipeline for the size safety limit).
         segmentMin = clamp(parseInt(p.getString("segment_min", "0"), 0), 0, 60);
+        timestamp = p.getBoolean("timestamp", true);
         useSdCard = p.getBoolean("use_sd", true);
         minFreeBytes = clamp(parseInt(p.getString("min_free_mb", "500"), 500), 100, 100_000) * 1024L * 1024L;
         port = clamp(parseInt(p.getString("port", "8080"), 8080), 1024, 65535);
@@ -118,7 +121,7 @@ final class AppSettings {
         AppSettings s = (AppSettings) o;
         return width == s.width && height == s.height && fps == s.fps && rotation == s.rotation
                 && sensitivity == s.sensitivity && postRecordSec == s.postRecordSec
-                && segmentMin == s.segmentMin && useSdCard == s.useSdCard
+                && segmentMin == s.segmentMin && timestamp == s.timestamp && useSdCard == s.useSdCard
                 && minFreeBytes == s.minFreeBytes && port == s.port
                 && password.equals(s.password) && autostart == s.autostart
                 && remoteEnabled == s.remoteEnabled && remotePort == s.remotePort && upnp == s.upnp

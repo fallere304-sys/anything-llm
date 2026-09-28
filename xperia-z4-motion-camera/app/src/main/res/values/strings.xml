@@ -20,6 +20,8 @@
     <string name="pref_sensitivity">検知感度</string>
     <string name="pref_post_record">動きが止まってから録画を続ける秒数</string>
     <string name="pref_segment">1ファイルの最大長</string>
+    <string name="pref_timestamp">動画に日時を入れる</string>
+    <string name="pref_timestamp_summary">録画の左下に撮影日時（端末の時計）を表示します。負荷はごくわずかです</string>
     <string name="pref_segment_summary">%s（突然の電源断では録画中のファイルが失われるため、長いほど失う時間も長くなります）</string>
     <string name="pref_cat_storage">ストレージ</string>
     <string name="pref_use_sd">SDカードを優先して保存</string>

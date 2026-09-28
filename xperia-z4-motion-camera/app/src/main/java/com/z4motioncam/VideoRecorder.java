@@ -28,12 +28,14 @@ final class VideoRecorder {
     private final int bitrate;
     private final int fps;
     private final int rotation;
+    private final boolean timestamp;
     private final String codecName;
     private final int colorFormat;
     private byte[] converted;
     /** Encoder input layout: row stride and rows per plane (may exceed the frame, e.g. 1080 -> 1088). */
     private int stride;
     private int sliceHeight;
+    private TimeStamper stamper;
 
     private MediaCodec codec;
     private MediaMuxer muxer;
@@ -45,12 +47,13 @@ final class VideoRecorder {
     private File partFile;
     private long startedAtMs;
 
-    VideoRecorder(int width, int height, int bitrate, int fps, int rotation) throws IOException {
+    VideoRecorder(int width, int height, int bitrate, int fps, int rotation, boolean timestamp) throws IOException {
         this.width = width;
         this.height = height;
         this.bitrate = bitrate;
         this.fps = fps;
         this.rotation = rotation;
+        this.timestamp = timestamp;
         int[] chosen = new int[1];
         this.codecName = pickEncoder(chosen);
         this.colorFormat = chosen[0];
@@ -87,6 +90,7 @@ final class VideoRecorder {
             }
             int size = stride * sliceHeight * 3 / 2;
             if (converted == null || converted.length != size) converted = new byte[size];
+            stamper = timestamp ? new TimeStamper(width, height, stride, sliceHeight, colorFormat, rotation) : null;
             muxer = new MediaMuxer(part.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
             muxer.setOrientationHint(rotation);
         } catch (IOException | RuntimeException e) {
@@ -107,8 +111,12 @@ final class VideoRecorder {
         startedAtMs = nowMs;
     }
 
-    /** Queues one frame; drops it silently when the encoder has no free input buffer. */
-    void encode(byte[] nv21, long ptsUs) {
+    /**
+     * Queues one frame; drops it silently when the encoder has no free input buffer.
+     *
+     * @param wallMs capture time on the device clock, burned into the picture when enabled
+     */
+    void encode(byte[] nv21, long ptsUs, long wallMs) {
         if (codec == null) return;
         if (ptsUs <= lastPtsUs) ptsUs = lastPtsUs + 1;
         int idx = codec.dequeueInputBuffer(0);
@@ -119,6 +127,7 @@ final class VideoRecorder {
                 codec.queueInputBuffer(idx, 0, 0, ptsUs, 0);
             } else {
                 convert(nv21, converted, width, height, stride, sliceHeight, colorFormat);
+                if (stamper != null) stamper.stamp(converted, wallMs);
                 in.clear();
                 in.put(converted, 0, size);
                 codec.queueInputBuffer(idx, 0, size, ptsUs, 0);

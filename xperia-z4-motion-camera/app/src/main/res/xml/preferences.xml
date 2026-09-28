@@ -51,6 +51,11 @@
             android:key="segment_min"
             android:summary="@string/pref_segment_summary"
             android:title="@string/pref_segment" />
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="timestamp"
+            android:summary="@string/pref_timestamp_summary"
+            android:title="@string/pref_timestamp" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="@string/pref_cat_storage">

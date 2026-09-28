@@ -171,7 +171,8 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
             liveFrame = liveScale == 1 ? null : new byte[(width / 2) * (height / 2) * 3 / 2];
             liveRect = new Rect(0, 0, width / liveScale, height / liveScale);
             detector = MotionDetector.forFrame(width, height);
-            recorder = new VideoRecorder(width, height, settings.bitrate(), settings.fps, settings.rotation);
+            recorder = new VideoRecorder(width, height, settings.bitrate(), settings.fps, settings.rotation,
+                    settings.timestamp);
 
             sink = new PreviewSink(handler);
             camera.setPreviewTexture(sink.texture());
@@ -278,7 +279,7 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
                 // Small tolerance so camera timing jitter does not halve the frame rate.
                 if (recorder.isRecording() && now - lastEncodeMs >= frameInterval - 15) {
                     lastEncodeMs = now;
-                    recorder.encode(frame, (now - recorder.startedAtMs()) * 1000L);
+                    recorder.encode(frame, (now - recorder.startedAtMs()) * 1000L, System.currentTimeMillis());
                 }
             }
         }

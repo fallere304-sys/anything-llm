@@ -39,7 +39,7 @@ final class SettingsApi {
         SharedPreferences p = prefs();
         Object[][] groups = {
                 {R.string.pref_cat_camera, new String[] {"resolution", "fps", "rotation"}},
-                {R.string.pref_cat_motion, new String[] {"sensitivity", "post_record_sec", "segment_min"}},
+                {R.string.pref_cat_motion, new String[] {"sensitivity", "post_record_sec", "segment_min", "timestamp"}},
                 {R.string.pref_cat_storage, new String[] {"use_sd", "min_free_mb"}},
                 {R.string.pref_cat_network, new String[] {"port"}},
                 {R.string.pref_cat_remote, new String[] {"remote_enabled", "password", "external_host", "remote_port",
@@ -105,6 +105,7 @@ final class SettingsApi {
             case "sensitivity": return R.string.pref_sensitivity;
             case "post_record_sec": return R.string.pref_post_record;
             case "segment_min": return R.string.pref_segment;
+            case "timestamp": return R.string.pref_timestamp;
             case "use_sd": return R.string.pref_use_sd;
             case "min_free_mb": return R.string.pref_min_free;
             case "port": return R.string.pref_port;
