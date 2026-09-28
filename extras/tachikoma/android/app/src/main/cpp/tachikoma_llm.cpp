@@ -66,8 +66,14 @@ jbyteArray to_bytes(JNIEnv * env, const std::string & s) {
     return a;
 }
 
+// 本物のエラーだけを出す (読み込み中の進捗の「.」は CONT (前の行の続き) なので、前の行がエラーのときだけ)
+ggml_log_level g_last_level = GGML_LOG_LEVEL_NONE;
+
 void log_cb(ggml_log_level level, const char * text, void *) {
-    if (level >= GGML_LOG_LEVEL_ERROR) {
+    if (level != GGML_LOG_LEVEL_CONT) {
+        g_last_level = level;
+    }
+    if (g_last_level == GGML_LOG_LEVEL_ERROR) {
         LOGE("%s", text);
     }
 }

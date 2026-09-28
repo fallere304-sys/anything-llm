@@ -36,6 +36,31 @@ GitHub Actions ("Build Tachikoma.exe") の実行結果ページの **Artifacts �
 > exe は署名していないので、初回に Windows SmartScreen の警告が出ることがある (「詳細情報」→「実行」)。
 > Ollama と Docker Desktop はそれぞれ独立したアプリなので、Tachikoma.exe の中には入れられない (案内とダウンロードのページを開くところまで行う)。
 
+## Android 版: Tachikoma.apk (RAM 4GB の端末を想定)
+
+GitHub Actions ("Build Tachikoma APK") の実行結果ページの **Artifacts → Tachikoma-android** から `Tachikoma.apk` を取り出して、
+端末に入れる (提供元不明のアプリのインストールを許可する)。考える力は端末の中で動く小型モデルで、**出力は文字だけ**。
+
+| | PC 版 | Android 版 |
+|---|---|---|
+| 考える力 | Gemma 4 E2B (GPU・Ollama) | **TinySwallow-1.5B-Instruct** (日本語に強い 1.5B・約 1GB) を端末の CPU で (llama.cpp)。もっと軽い Qwen2.5-0.5B (約 0.4GB) も選べる |
+| 入力 | 文字・マイク・カメラ・ネット・画面・ファイル | 文字・**マイク** (端末の音声認識。呼びかけ語「タチコマ」)・**カメラ** (人がいるか・映っている物と文字)・ネット (論文・ニュース) |
+| 出力 | 声・画面 | **文字だけ** (チャット画面と通知) |
+| 思考・記憶・学習データ・較正・深掘り・先見・自発性・プラグイン | ← 同じ Python のコード | ← 同じ |
+| 自己進化 | パラメータ・指示文・コード・プラグイン | パラメータの調整 (コードを書く CPU の脳と隔離テストは端末に載らない)。PC で育ったプラグインはそのまま動く |
+| 重みの学習 | 睡眠中に自動 (GPU) | 学習データを書き出し → **PC で学習** → アダプタを取り込むと、端末が PC 版と同じ規則で採否を決める |
+
+使い方:
+1. 初回に考える力 (モデル) を選んで取得する (Wi-Fi 推奨)。手元の GGUF を選んで取り込むこともできる
+2. 「耳」「目」のボタンで、マイクとカメラを使うかを決める (画像も音声も保存・送信しない)。画面を閉じても、通知を出して考え続ける。
+   電池が 30% 未満で充電していないときは、自分からは考えない (話しかけには答える)
+3. 重みの学習: 「…」→「学習データを書き出す」で zip を保存し、PC で
+   `python finetune/android_adapter.py tachikoma-train-*.zip --llama-cpp C:/llama.cpp` を実行してできた `.gguf` を、
+   「…」→「学習したアダプタを取り込む」で取り込む。悪くなっていなければ採用され、`/rollback` で戻せる
+
+自分でビルドするには Android SDK/NDK が要る: `extras/tachikoma/android` に llama.cpp を置いて (`.github/workflows/tachikoma-apk.yml` の版)、
+`gradle assembleDebug`。設計の詳細は DESIGN.md §19。
+
 ## ソースから動かす (Windows 10)
 
 1. Ollama をインストールし、モデルを取得:

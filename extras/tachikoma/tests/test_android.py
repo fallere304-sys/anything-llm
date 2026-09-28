@@ -216,18 +216,25 @@ class AppTest(unittest.TestCase):
     """起動から、話しかけ → 返事、学習データの書き出し、アダプタの取り込みと採否まで。"""
 
     def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.home = self._tmp.name
+        self.apps = []
         with open(os.path.join(self.home, "config.json"), "w", encoding="utf-8") as f:
             json.dump({"web": False, "news": False, "finetune_min_holdout": 1, "min_speak_interval_s": 0}, f)
 
     def tearDown(self):
+        for a in self.apps:                   # Windows は開いたままのファイルを消せない
+            if a.learner._thread is not None:
+                a.learner._thread.join(10)
+            a.memory.db.close()
         self._tmp.cleanup()
 
     def app(self):
         from tachikoma.android.main import App
         b, e = FakeBridge(), FakeEngine()
-        return App(b, e, self.home, "tinyswallow.gguf"), b, e
+        a = App(b, e, self.home, "tinyswallow.gguf")
+        self.apps.append(a)
+        return a, b, e
 
     def test_conversation_and_export(self):
         app, b, e = self.app()
@@ -275,6 +282,34 @@ class AppTest(unittest.TestCase):
         self.assertIsNone(app.data.get("active_model"))
         self.assertTrue(any("採用しません" in s or "失敗" in s for s in b.said), b.said)
         self.assertEqual(os.listdir(app.cfg["adapters_dir"]), [])   # 採用しない版は残さない
+
+
+class AdapterScriptTest(unittest.TestCase):
+    """PC 側: 端末の書き出し (zip) から、同じ基盤モデルで学習して GGUF のアダプタにする手順。"""
+
+    def test_trains_on_the_phone_base_and_converts(self):
+        sys.path.insert(0, os.path.join(HERE, "finetune"))
+        import android_adapter
+        with tempfile.TemporaryDirectory() as tmp:
+            z = os.path.join(tmp, "tachikoma-train-1.zip")
+            with zipfile.ZipFile(z, "w") as zf:
+                zf.writestr("train.jsonl", json.dumps({"messages": [], "weight": 1}) + "\n")
+                zf.writestr("holdout.jsonl", "")
+                zf.writestr("base_model.txt", "SakanaAI/TinySwallow-1.5B-Instruct\n")
+            calls = []
+            orig = android_adapter.subprocess.run
+            android_adapter.subprocess.run = lambda args, check: calls.append(args)
+            try:
+                self.assertEqual(android_adapter.main([z, "--llama-cpp", "/opt/llama.cpp"]), 0)
+            finally:
+                android_adapter.subprocess.run = orig
+            train, convert = calls
+            self.assertTrue(train[1].endswith("train_lora.py"))
+            self.assertEqual(train[train.index("--base") + 1], "SakanaAI/TinySwallow-1.5B-Instruct")
+            self.assertIn("--load-4bit", train)
+            self.assertTrue(convert[1].endswith("convert_lora_to_gguf.py"))
+            self.assertEqual(convert[convert.index("--outfile") + 1], os.path.join(tmp, "tachikoma-train-1-lora.gguf"))
+            self.assertIn("--base-model-id", convert)
 
 
 class BootTest(unittest.TestCase):
