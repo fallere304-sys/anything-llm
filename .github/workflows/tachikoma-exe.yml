@@ -44,7 +44,7 @@ jobs:
           dist\Tachikoma.exe --home $home_dir --selftest
           if ($LASTEXITCODE -ne 0) { throw "self-test failed ($LASTEXITCODE)" }
 
-      - name: Smoke test (start without Ollama: it must set up and stop with a clear message)
+      - name: "Smoke test (start without Ollama, it must set up and stop with a clear message)"
         run: |
           $home_dir = "$env:RUNNER_TEMP\tachikoma-home"
           $out = dist\Tachikoma.exe --home $home_dir --no-shortcut 2>&1 | Out-String
