@@ -94,13 +94,13 @@ def hotspots(profile, root=ROOT, top=5):
 
 
 def run(agent, cfg, metrics, evolution=None, sleep=time.sleep, max_steps=None, brain=None, power=None,
-        clock=time.time, foresight=None, plugins=None):
+        clock=time.time, foresight=None, plugins=None, stop=None):
     """ループを回す。再起動が必要になったら RESTART_CODE を返す。"""
     instrument(agent, metrics)
     oversight(agent, evolution)
     n, consecutive_errors = 0, 0
     last_watts = 0.0
-    while max_steps is None or n < max_steps:
+    while (max_steps is None or n < max_steps) and not (stop is not None and stop()):
         n += 1
         t = time.perf_counter()
         prof = cProfile.Profile() if n % cfg["profile_every"] == 0 else None

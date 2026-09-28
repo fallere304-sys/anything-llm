@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 簡素な記号 (丸い体と 1 つ目)。タチコマの画像は著作物なので同梱しない -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FF2E6BD6"
+        android:pathData="M12,3a9,9 0,1 0,0.01 0z" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M12,8.5a3.5,3.5 0,1 0,0.01 0z" />
+    <path android:fillColor="#FF10224A"
+        android:pathData="M12,10.3a1.7,1.7 0,1 0,0.01 0z" />
+</vector>

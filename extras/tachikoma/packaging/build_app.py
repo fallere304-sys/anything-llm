@@ -23,7 +23,7 @@ PY_VERSION = "3.11.9"
 EMBED = f"https://www.python.org/ftp/python/{PY_VERSION}/python-{PY_VERSION}-embed-amd64.zip"
 GET_PIP = "https://bootstrap.pypa.io/get-pip.py"
 # 本体に要らないもの (作り方・検証用の物)
-SKIP = ("packaging/", "build/", "dist/")
+SKIP = ("packaging/", "build/", "dist/", "android/")
 
 
 def fetch(url):
@@ -57,17 +57,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(HERE, "build", "payload.zip"))
     ap.add_argument("--stage", default=os.path.join(HERE, "build", "stage"))
+    ap.add_argument("--no-python", action="store_true",
+                    help="本体のソースだけにする (Android 版: Python は Chaquopy が持つ)")
     args = ap.parse_args()
     sys.path.insert(0, HERE)
     from tachikoma.kernel import is_evolvable
 
-    py = build_python(args.stage)
+    py = None if args.no_python else build_python(args.stage)
     sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=HERE, capture_output=True, text=True).stdout.strip()
     version = f"{datetime.date.today():%Y.%m.%d}-{sha or 'local'}"
     manifest = {"version": version, "python": PY_VERSION, "files": {}}
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with zipfile.ZipFile(args.out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-        for root, _, names in os.walk(py):
+        for root, _, names in os.walk(py) if py else ():
             for n in names:
                 if "__pycache__" in root:
                     continue

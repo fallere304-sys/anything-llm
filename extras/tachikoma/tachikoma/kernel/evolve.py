@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS evolutions (
 );
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 """
-EXCLUDE = {"__pycache__", ".git", "finetune_runs", "study", "lab", "evolution", "anchors", ".venv", "venv"}
+EXCLUDE = {"__pycache__", ".git", "finetune_runs", "study", "lab", "evolution", "anchors", ".venv", "venv",
+           "llama.cpp", ".gradle", ".cxx", "build"}
 PROMPT_TARGETS = ("APPRAISE_SYSTEM", "PLAN_SYSTEM", "JUDGE_SYSTEM", "DIGEST_SYSTEM",
                   "INQUIRY_SYSTEM", "WONDER_SYSTEM")
 

@@ -1,0 +1,128 @@
+name: Build Tachikoma APK
+
+# extras/tachikoma の Android 版 (タチコマ.apk) を作り、エミュレータで「起動 → 話しかけ → 返事」まで確かめる。
+# 出来た APK は Actions の実行結果ページの "Artifacts" (Tachikoma-android) からダウンロードできる。
+on:
+  push:
+    paths:
+      - "extras/tachikoma/**"
+      - ".github/workflows/tachikoma-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONIOENCODING: utf-8
+  # 推論層 (tachikoma_llm.cpp) が合わせてある llama.cpp の版
+  LLAMA_CPP_COMMIT: 4df29be4f4c3673f428170fda944a5b19f743bb8
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extras/tachikoma
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Test (Python)
+        run: python -m unittest discover -s tests
+
+      - name: Fetch llama.cpp
+        run: |
+          git init android/llama.cpp
+          cd android/llama.cpp
+          git remote add origin https://github.com/ggml-org/llama.cpp
+          git fetch --depth 1 origin "$LLAMA_CPP_COMMIT"
+          git checkout FETCH_HEAD
+
+      - name: Install Android NDK and CMake
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" "cmake;3.22.1" "platforms;android-35" "build-tools;35.0.0" > /dev/null
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Build APK
+        working-directory: extras/tachikoma/android
+        run: gradle assembleDebug --stacktrace -Ptachikoma.python=python
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk out/Tachikoma.apk
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tachikoma-android
+          path: extras/tachikoma/out/Tachikoma.apk
+          retention-days: 30
+
+  emulator:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Tachikoma-android
+          path: apk
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Fetch a small model (Qwen2.5-0.5B-Instruct GGUF) and check the default model source
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request
+          def files(repo):
+              with urllib.request.urlopen(f"https://huggingface.co/api/models/{repo}", timeout=60) as r:
+                  return [s["rfilename"] for s in json.load(r)["siblings"]]
+          def pick(names):
+              g = [n for n in names if n.lower().endswith(".gguf") and "-of-" not in n and "mmproj" not in n.lower()]
+              for p in ("q4_k_m", "q4_0", "q5_k_m", "q8_0"):
+                  for n in g:
+                      if p in n.lower():
+                          return n
+              return g[0] if g else None
+          for repo in ("SakanaAI/TinySwallow-1.5B-Instruct-GGUF", "Qwen/Qwen2.5-1.5B-Instruct-GGUF"):
+              try:
+                  print("default model source:", repo, "->", pick(files(repo)))
+              except Exception as e:
+                  print("default model source:", repo, "-> unavailable:", e)
+          repo = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
+          name = pick(files(repo))
+          print("test model:", name)
+          urllib.request.urlretrieve(f"https://huggingface.co/{repo}/resolve/main/{name}", "model.gguf")
+          PY
+          ls -la model.gguf
+
+      - name: Run on the emulator (start, talk, get a reply)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          ram-size: 4096M
+          disk-size: 6000M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          disable-animations: true
+          script: bash extras/tachikoma/android/ci/emulator_test.sh apk/Tachikoma.apk model.gguf
