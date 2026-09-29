@@ -167,6 +167,10 @@ class Tools:
         return "\n".join(hits) or "(見つかりませんでした)"
 
     def run(self, command, timeout=300):
+        if self.shell and self.shell[0].lower().startswith("powershell"):
+            # PowerShell は既定では出力を古い文字コードで流す (日本語が ??? になる)。UTF-8 で受け渡す
+            command = ("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+                       "$OutputEncoding = [System.Text.Encoding]::UTF8; " + command)
         try:
             p = subprocess.run(self.shell + [command], cwd=self.root, env=self.env, capture_output=True,
                                timeout=max(5, min(int(timeout), 3600)),
@@ -180,7 +184,7 @@ class Tools:
 
 
 def _decode(b):
-    for enc in ("utf-8", "cp932" if sys.platform == "win32" else "latin-1"):
+    for enc in ("utf-8-sig", "cp932" if sys.platform == "win32" else "latin-1"):
         try:
             return b.decode(enc)
         except UnicodeDecodeError:
