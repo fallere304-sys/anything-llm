@@ -5,8 +5,10 @@
     LocalCoder.exe --task "…" --yes   1 つの頼みをやり切って終わる (確認なし)
     LocalCoder.exe --uninstall        取り除いて入れる前の姿に戻す (LocalCoderUninstall.exe と同じ)
 
+    LocalCoder.exe --gpu-memory normal  共有 GPU メモリを使わない (既定は shared: PC のメモリも GPU 用に使う)
+
 対話中のコマンド: /new (話を切り替える)  /cd フォルダ (作業フォルダ)  /auto (コマンドを毎回確かめない)
-                  /status  /help  /exit
+                  /gpu shared|normal (共有 GPU メモリを使うか。次の起動から)  /status  /help  /exit
 外へ出る通信は、準備のときの取得 (llama.cpp・モデル・Python) だけ。頼みごとやコードは外に出ない。
 """
 
@@ -43,7 +45,7 @@ def load(path=CONFIG):
 def save(cfg, path=CONFIG):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        json.dump({k: v for k, v in cfg.items() if not k.startswith("_")}, f, ensure_ascii=False, indent=2)
 
 
 def ask(q, default=""):
@@ -98,10 +100,12 @@ def setup(cfg, interactive, model_key=None, path=CONFIG):
         i = ask("番号:", "1")
         entry = models.CATALOG[int(i) - 1] if i.isdigit() and 0 < int(i) <= len(models.CATALOG) else models.CATALOG[0]
     entry = entry or models.CATALOG[0]
-    tools_ok = True
+    tools_ok, gpu = True, cfg.get("gpu_memory", "shared")
     if interactive:
         tools_ok = ask("プログラムを .exe にする道具 (Python・約 150MB) も用意しますか？ [Y/n]", "Y").lower() != "n"
-    cfg.update(home=home, model_key=entry["key"], model=None, toolchain=tools_ok)
+        gpu = "normal" if ask("GPU のメモリに入りきらない分を、PC のメモリ (共有 GPU メモリ) に置きますか？"
+                              " (大きいモデルを GPU で動かせる。速くなるとは限らない) [Y/n]", "Y").lower() == "n" else "shared"
+    cfg.update(home=home, model_key=entry["key"], model=None, toolchain=tools_ok, gpu_memory=gpu)
     save(cfg, path)
     return cfg
 
@@ -157,7 +161,15 @@ def repl(agent, tools, state, cfg):
             say("コマンドを毎回確かめません" if state["auto"] else "コマンドを実行する前に確かめます")
             continue
         if text == "/status":
-            say(f"置き場所 {cfg['home']} / モデル {os.path.basename(cfg.get('model') or '')} / 作業フォルダ {tools.root}")
+            say(f"置き場所 {cfg['home']} / モデル {os.path.basename(cfg.get('model') or '')} / 作業フォルダ {tools.root}"
+                f" / GPU {cfg.get('kind', '?')} 版・共有 GPU メモリ {'使用中' if cfg.get('shared_now') else '不使用'}")
+            continue
+        m = re.match(r"^/gpu\s+(shared|normal)$", text)
+        if m:
+            cfg["gpu_memory"] = m.group(1)
+            save(cfg, cfg.get("_path", CONFIG))
+            say("次に起動したときから、" + ("共有 GPU メモリも使います" if m.group(1) == "shared" else
+                                             "共有 GPU メモリを使いません (MoE の専門家は CPU 側に置きます)"))
             continue
         m = re.match(r"^/cd\s+(.+)$", text)
         if m:
@@ -176,6 +188,22 @@ def repl(agent, tools, state, cfg):
             say("\n(止めました)")
 
 
+def check_gpu(kinds, gpu_memory, info=None):
+    """NVIDIA の GPU とドライバを見て知らせ、実際に使う置き方を返す。共有 GPU メモリはドライバ 536.40 以降の機能。"""
+    info = info if info is not None else server.gpu_info()
+    if not info or not any(k in kinds for k in ("cuda", "vulkan")):
+        return gpu_memory
+    say(f"GPU: {info['name']} ({info['vram_mb'] / 1024:.0f}GB)・ドライバ {info['driver']}")
+    if gpu_memory == "shared":
+        if server.driver_has_sysmem_fallback(info["driver"]):
+            say("  共有 GPU メモリも使います (入りきらない分は PC のメモリへ。NVIDIA コントロールパネルの"
+                "「CUDA - システム メモリ フォールバック ポリシー」が「優先しない」になっていると使えません)")
+        else:
+            say("  このドライバは古く、共有 GPU メモリに置けません (536.40 以降が必要)。いつもの置き方で動かします")
+            return "normal"
+    return gpu_memory
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if "--uninstall" in argv:
@@ -191,6 +219,8 @@ def main(argv=None):
     ap.add_argument("--task", help="1 つの頼みをやり切って終わる")
     ap.add_argument("--yes", action="store_true", help="コマンドを確かめずに実行する")
     ap.add_argument("--no-toolchain", action="store_true", help=".exe にする道具を用意しない")
+    ap.add_argument("--gpu-memory", choices=["shared", "normal"],
+                    help="shared: GPU に入りきらない分を共有 GPU メモリ (PC のメモリ) に置く / normal: 置かない")
     ap.add_argument("--ctx", type=int, default=32768)
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--config", default=CONFIG)
@@ -223,13 +253,17 @@ def main(argv=None):
     except OSError as e:
         say(f"準備できませんでした: {e}")
         return 2
-    srv = server.Server(cfg["home"], port=args.port, ctx=args.ctx, say=say)
+    if args.gpu_memory:
+        cfg["gpu_memory"] = args.gpu_memory
+    gpu_memory = cfg.setdefault("gpu_memory", "shared")
+    gpu_memory = check_gpu(kinds, gpu_memory)
+    srv = server.Server(cfg["home"], port=args.port, ctx=args.ctx, say=say, gpu_memory=gpu_memory)
     order = [cfg["kind"]] + [k for k in kinds if k != cfg.get("kind")] if cfg.get("kind") in kinds else kinds
     kind = srv.start_best(model, order)
     if not kind:
         say(f"モデルを動かせませんでした。記録: {srv.log_path}")
         return 3
-    cfg["kind"] = kind
+    cfg["kind"], cfg["shared_now"], cfg["_path"] = kind, srv.shared, args.config
     save(cfg, args.config)
     state = {"auto": bool(args.yes)}
     ws = args.workspace or os.path.join(cfg["home"], "workspace", "default")

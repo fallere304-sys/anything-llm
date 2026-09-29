@@ -6,6 +6,10 @@
   MoE モデルは「専門家」の重みを CPU 側 (メモリ・SSD) に置き、共通部分と文脈 (KV) を GPU に置く
 - 読み込めても、最初の 1 回の推論で落ちる GPU がある (古いドライバ)。短い推論で確かめてから使い、
   だめなら次の組に切り替える
+- 共有 GPU メモリ (gpu_memory="shared"): 専門家も含めて全部を GPU 側に置く。GPU のメモリ (6GB) に入りきらない分は、
+  NVIDIA のドライバ (536.40 以降) の「システム メモリ フォールバック」で PC のメモリ (共有 GPU メモリ) に置かれる。
+  入りきらないと失敗するドライバ・設定なら、自動でいつもの置き方 (--cpu-moe) に戻す。
+  速くなるとは限らない (GPU が PC のメモリを読むのは PCIe 越しで、CPU が読むより遅いことがある)
 """
 
 import json
@@ -140,11 +144,39 @@ def find_server(folder):
     return None
 
 
-def server_args(kind, model, port, ctx, threads, minimal=False):
+SYSMEM_FALLBACK_DRIVER = (536, 40)       # NVIDIA のドライバがシステム メモリ フォールバックを持つ版
+OUT_OF_MEMORY = re.compile(r"out of memory|cudaMalloc failed|failed to allocate|ErrorOutOfDeviceMemory|"
+                           r"unable to allocate|OOM", re.I)
+
+
+def gpu_info(run=subprocess.run):
+    """NVIDIA の GPU の {name, driver, vram_mb}。分からなければ None。"""
+    try:
+        r = run(["nvidia-smi", "--query-gpu=name,driver_version,memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = (r.stdout or "").strip().splitlines()[:1]
+    parts = [x.strip() for x in line[0].split(",")] if line else []
+    if r.returncode != 0 or len(parts) < 3:
+        return None
+    try:
+        vram = int(float(parts[2]))
+    except ValueError:
+        vram = 0
+    return {"name": parts[0], "driver": parts[1], "vram_mb": vram}
+
+
+def driver_has_sysmem_fallback(driver):
+    m = re.match(r"(\d+)\.(\d+)", driver or "")
+    return bool(m) and (int(m.group(1)), int(m.group(2))) >= SYSMEM_FALLBACK_DRIVER
+
+
+def server_args(kind, model, port, ctx, threads, minimal=False, shared=False):
     a = ["-m", model, "--host", "127.0.0.1", "--port", str(port), "-c", str(ctx), "--jinja", "-t", str(threads)]
     if kind != "cpu":
         a += ["-ngl", "99"]
-        if not minimal:
+        if not minimal and not shared:
             a += ["--cpu-moe"]          # MoE の専門家はメモリ・SSD 側に。GPU (6GB) には共通部分と文脈を置く
     if not minimal:
         a += ["-fa", "auto"]
@@ -153,8 +185,10 @@ def server_args(kind, model, port, ctx, threads, minimal=False):
 
 class Server:
     def __init__(self, home, port=8090, ctx=32768, threads=None, say=print, popen=subprocess.Popen,
-                 opener=urllib.request.urlopen, sleep=time.sleep):
+                 opener=urllib.request.urlopen, sleep=time.sleep, gpu_memory="normal"):
         self.home, self.port, self.ctx = home, port, ctx
+        self.gpu_memory = gpu_memory
+        self.shared = False             # いま共有 GPU メモリの置き方で動いているか
         self.threads = threads or max(1, (os.cpu_count() or 4) // 2)
         self.say, self.popen, self.opener, self.sleep = say, popen, opener, sleep
         self.proc, self.kind = None, None
@@ -192,10 +226,14 @@ class Server:
         if not exe:
             return False
         os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
-        for minimal in (False, True):
+        # (共有 GPU メモリの置き方, 最小の引数) の順に試す
+        tries = [(False, False), (False, True)]
+        if self.gpu_memory == "shared" and kind != "cpu":
+            tries.insert(0, (True, False))
+        for shared, minimal in tries:
             self.stop()
             log = open(self.log_path, "w", encoding="utf-8", errors="replace")
-            self.proc = self.popen([exe] + server_args(kind, model, self.port, self.ctx, self.threads, minimal),
+            self.proc = self.popen([exe] + server_args(kind, model, self.port, self.ctx, self.threads, minimal, shared),
                                    cwd=os.path.dirname(exe), stdout=log, stderr=subprocess.STDOUT,
                                    creationflags=CREATE_NO_WINDOW)
             t0 = time.time()
@@ -208,12 +246,19 @@ class Server:
             log.close()
             if self.proc.poll() is None and self._health():
                 if self._probe():
-                    self.kind = kind
+                    self.kind, self.shared = kind, shared
                     return True
+                if shared and OUT_OF_MEMORY.search(self._tail()):
+                    self.say(f"  {kind} 版: 共有 GPU メモリに置けなかったので、いつもの置き方に戻します")
+                    continue
                 self.say(f"  {kind} 版は読み込めたが、推論で失敗した")
                 self.stop()
                 return False
             tail = self._tail()
+            if shared:
+                self.say(f"  {kind} 版: 共有 GPU メモリの置き方では起動できなかったので、いつもの置き方に戻します"
+                         + (" (GPU のメモリ不足)" if OUT_OF_MEMORY.search(tail) else ""))
+                continue
             if not minimal and re.search(r"invalid argument|unknown argument|unrecognized|error: (invalid|unknown)",
                                          tail, re.I):
                 continue                 # 古い / 新しい llama.cpp で使えない引数があった: 最小の引数でもう一度
@@ -228,7 +273,7 @@ class Server:
                 continue
             self.say(f"モデルを読み込んでいます ({kind} 版)… 大きいモデルは数分かかります")
             if self.start(kind, model):
-                self.say(f"準備できました ({kind} 版)")
+                self.say(f"準備できました ({kind} 版" + ("・共有 GPU メモリも使う" if self.shared else "") + ")")
                 return kind
         return None
 

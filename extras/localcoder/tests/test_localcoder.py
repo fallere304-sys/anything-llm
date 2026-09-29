@@ -260,6 +260,68 @@ class ServerTest(unittest.TestCase):
         self.assertIn("--jinja", a)
         self.assertNotIn("-ngl", server.server_args("cpu", "m.gguf", 8090, 32768, 4))
         self.assertNotIn("--cpu-moe", server.server_args("vulkan", "m.gguf", 8090, 32768, 4, minimal=True))
+        shared = server.server_args("cuda", "m.gguf", 8090, 32768, 4, shared=True)
+        self.assertIn("-ngl", shared)
+        self.assertNotIn("--cpu-moe", shared)         # 専門家も GPU 側へ (入りきらない分は共有 GPU メモリ)
+
+    def test_driver_versions_and_gpu_info(self):
+        self.assertTrue(server.driver_has_sysmem_fallback("581.57"))
+        self.assertTrue(server.driver_has_sysmem_fallback("536.40"))
+        self.assertFalse(server.driver_has_sysmem_fallback("531.79"))
+        self.assertFalse(server.driver_has_sysmem_fallback(""))
+        import subprocess
+
+        def run(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 0, "NVIDIA GeForce GTX 1060 6GB, 581.57, 6144\n", "")
+        self.assertEqual(server.gpu_info(run), {"name": "NVIDIA GeForce GTX 1060 6GB", "driver": "581.57",
+                                                "vram_mb": 6144})
+
+        def missing(cmd, **kw):
+            raise FileNotFoundError(cmd[0])
+        self.assertIsNone(server.gpu_info(missing))
+        info = {"name": "GTX 1060", "driver": "531.79", "vram_mb": 6144}
+        self.assertEqual(cli.check_gpu(["cuda", "cpu"], "shared", info), "normal")    # 古いドライバでは使えない
+        self.assertEqual(cli.check_gpu(["cuda", "cpu"], "shared", dict(info, driver="581.57")), "shared")
+
+    def test_shared_gpu_memory_falls_back_to_the_usual_layout(self):
+        home = self.home_with("cuda")
+        calls = []
+
+        class Dead:
+            def poll(self):
+                return 1
+
+            def terminate(self):
+                pass
+
+            def wait(self, t=None):
+                return 1
+
+        class Alive(Dead):
+            def poll(self):
+                return None
+
+        def popen(cmd, stdout=None, **kw):
+            calls.append(cmd)
+            if "--cpu-moe" not in cmd:           # 共有 GPU メモリの置き方: ドライバの設定で入りきらず落ちる
+                stdout.write("CUDA error: out of memory\ncudaMalloc failed\n")
+                stdout.flush()
+                return Dead()
+            return Alive()
+        s = server.Server(home, say=lambda *a, **k: None, sleep=lambda s: None, popen=popen, gpu_memory="shared")
+        s.opener = lambda req, timeout=None: io.BytesIO(
+            b'{"status": "ok"}' if (req if isinstance(req, str) else req.full_url).endswith("/health")
+            else b'{"choices": []}')
+        self.assertTrue(s.start("cuda", "m.gguf"))
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("--cpu-moe", calls[0])
+        self.assertIn("--cpu-moe", calls[1])
+        self.assertFalse(s.shared)
+        calls.clear()
+        s.popen = lambda cmd, stdout=None, **kw: calls.append(cmd) or Alive()
+        self.assertTrue(s.start("cuda", "m.gguf"))
+        self.assertTrue(s.shared)
+        self.assertEqual(len(calls), 1)
 
     def home_with(self, *kinds):
         home = tempfile.mkdtemp()
