@@ -39,15 +39,14 @@ jobs:
         run: |
           $h = "$env:RUNNER_TEMP\lc"
           $ws = "$env:RUNNER_TEMP\ws"
-          $p = Start-Process -FilePath dist\LocalCoder.exe -Wait -PassThru -NoNewWindow `
-            -RedirectStandardOutput "$env:RUNNER_TEMP\e2e.txt" -RedirectStandardError "$env:RUNNER_TEMP\e2e-err.txt" `
-            -ArgumentList "--home", $h, "--config", "$env:RUNNER_TEMP\lc.json", "--model", "tiny", "--kinds", "cpu", `
-              "--no-toolchain", "--ctx", "8192", "--workspace", $ws, "--yes", `
-              "--task", "hello.txt というファイルを作って、中身を「こんにちは」の 1 行にしてください。"
+          $a = @("--home", $h, "--config", "$env:RUNNER_TEMP\lc.json", "--model", "tiny", "--kinds", "cpu",
+                 "--no-toolchain", "--ctx", "8192", "--workspace", $ws, "--yes",
+                 "--task", "hello.txt というファイルを作って、中身を「こんにちは」の 1 行にしてください。")
+          & dist\LocalCoder.exe @a 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\e2e.txt"
+          $code = $LASTEXITCODE
           Get-Content "$env:RUNNER_TEMP\e2e.txt"
-          Get-Content "$env:RUNNER_TEMP\e2e-err.txt"
           if (Test-Path "$h\logs\llama-server.log") { Get-Content "$h\logs\llama-server.log" -Tail 20 }
-          if ($p.ExitCode -ne 0) { throw "LocalCoder failed ($($p.ExitCode))" }
+          if ($code -ne 0) { throw "LocalCoder failed ($code)" }
           if (-not (Test-Path "$ws\hello.txt")) { throw "hello.txt was not created" }
           Get-Content "$ws\hello.txt"
           exit 0
