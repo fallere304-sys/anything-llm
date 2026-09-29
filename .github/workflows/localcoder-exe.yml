@@ -44,7 +44,7 @@ jobs:
         run: |
           $h = "$env:RUNNER_TEMP\lc"
           $ws = "$env:RUNNER_TEMP\ws"
-          $a = @("--home", $h, "--config", "$env:RUNNER_TEMP\lc.json", "--model", "tiny", "--kinds", "cpu",
+          $a = @("--home", $h, "--config", "$env:RUNNER_TEMP\lc.json", "--model", "small", "--kinds", "cpu",
                  "--no-toolchain", "--ctx", "8192", "--workspace", $ws, "--yes",
                  "--task", "hello.txt というファイルを作って、中身を「こんにちは」の 1 行にしてください。")
           & dist\LocalCoder.exe @a 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\e2e.txt"

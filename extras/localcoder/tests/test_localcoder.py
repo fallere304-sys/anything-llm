@@ -145,10 +145,34 @@ class RepeatTest(AgentTest):
         self.assertFalse(a.finished)
         users = [m["content"] for m in a.messages if m["role"] == "user"][1:]
         self.assertIn("[道具 write_file の結果]", users[0])                 # ふつうの言葉で結果を返す
-        self.assertIn("直前と同じ", users[1])                               # 2 回目は促す
+        self.assertIn("少し前にもしました", users[1])                       # 2 回目は促す
         self.assertFalse(any(m["role"] == "tool" for m in a.messages))
         self.assertTrue(any("繰り返している" in line for line in self.lines))   # 3 回目で止める
         self.assertEqual(len(FakeModel.seen), 3)
+
+    def test_alternating_actions_are_caught(self):
+        a_call = '```json\n{"name": "run", "arguments": {"command": "echo a"}}\n```'
+        b_call = '```json\n{"name": "run", "arguments": {"command": "echo b"}}\n```'
+        FakeModel.script = [{"text": a_call}, {"text": b_call}, {"text": a_call}, {"text": b_call}, {"text": a_call}]
+        a = self.agent()
+        a.ask("やって")
+        self.assertFalse(a.finished)
+        self.assertEqual(len(FakeModel.seen), 5)                 # A,B,A(促す),B(促す),A(止める)
+
+    def test_context_overflow_is_trimmed_and_retried(self):
+        calls = []
+
+        class Tight:
+            def chat(self, messages, tools=None, on_text=None):
+                calls.append(sum(len(m.get("content") or "") for m in messages))
+                if len(calls) == 1:
+                    from localcoder.agent import ModelError
+                    raise ModelError('HTTP 400: {"error": "request exceeds the available context size"}')
+                return {"content": "できました", "tool_calls": [], "timings": None}
+        a = Agent(Tight(), Tools(self.tmp), out=lambda m: None, write=lambda s: None, ctx_chars=20000)
+        a.messages += [{"role": "user", "content": "前"}, {"role": "tool", "content": "x" * 15000}]
+        self.assertEqual(a.ask("続けて"), "できました")
+        self.assertLess(calls[1], calls[0])
 
     def test_finishes_after_a_text_call(self):
         FakeModel.script = [{"text": '<tool_call>{"name": "write_file", "arguments": {"path": "a.txt", "content": "x"}}'

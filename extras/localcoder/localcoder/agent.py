@@ -160,11 +160,11 @@ class Agent:
         """頼みを 1 つやり切る。最後の報告 (本文) を返す。"""
         self.messages.append({"role": "user", "content": text})
         self.finished = False
-        last, repeats = None, 0
+        history = []
         for step in range(self.max_steps):
             self._compact()
             t0 = time.time()
-            reply = self.client.chat(self.messages, tools=SCHEMAS, on_text=self.write)
+            reply = self._chat()
             native = reply["tool_calls"]
             calls = native or rescue_calls(reply["content"])
             self._speed(reply.get("timings"), time.time() - t0)
@@ -175,16 +175,16 @@ class Agent:
                 return reply["content"]
             if reply["content"]:
                 self.write("\n")
-            # 同じ操作の繰り返し (小さいモデルに多い): 2 回目は促し、3 回目で止める
+            # 同じ操作の繰り返し (A,A,A や A,B,A,B。小さいモデルに多い): 2 回目は促し、3 回目で止める
             key = json.dumps([(c["function"]["name"], c["function"].get("arguments")) for c in calls], sort_keys=True)
-            repeats = repeats + 1 if key == last else 0
-            last = key
+            history.append(key)
+            repeats = history[-8:].count(key) - 1
             if repeats >= 2:
                 self.messages.append({"role": "assistant", "content": reply["content"]})
                 self.out("(同じ操作を繰り返しているので止めました。結果を確かめて、必要なら頼み方を変えてください)")
                 return ""
-            nudge = ("\n(この操作は、直前と同じです。もう終わっているなら、道具を使わずに日本語で報告してください)"
-                     if repeats == 1 else "")
+            nudge = ("\n(この操作は、少し前にもしました。同じことを繰り返していないか見直して、"
+                     "もう終わっているなら、道具を使わずに日本語で報告してください)" if repeats == 1 else "")
             results = [(c, self._do(c) + nudge) for c in calls]
             if native:
                 self.messages.append({"role": "assistant", "content": reply["content"], "tool_calls": calls})
@@ -199,6 +199,19 @@ class Agent:
                     + "\n\n続きが要るなら次の操作を、終わったなら道具を使わずに日本語で報告してください。"})
         self.out(f"(道具を {self.max_steps} 回使っても終わらなかったので、いったん止めます。続けるなら「続けて」)")
         return ""
+
+    def _chat(self):
+        """文脈がモデルの枠を超えたと言われたら、縮めてやり直す。"""
+        for _ in range(4):
+            try:
+                return self.client.chat(self.messages, tools=SCHEMAS, on_text=self.write)
+            except ModelError as e:
+                if "context" not in str(e).lower() or self.ctx_chars < 4000:
+                    raise
+                self.ctx_chars = int(self.ctx_chars * 0.7)
+                self.out(f"  (話が長くなったので、古いところを縮めます: 上限 {self.ctx_chars} 字)")
+                self._compact()
+        return self.client.chat(self.messages, tools=SCHEMAS, on_text=self.write)
 
     def _do(self, call):
         name = call["function"]["name"]

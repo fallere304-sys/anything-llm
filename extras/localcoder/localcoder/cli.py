@@ -224,7 +224,9 @@ def main(argv=None):
     state = {"auto": bool(args.yes)}
     ws = args.workspace or os.path.join(cfg["home"], "workspace", "default")
     tools = Tools(ws, env=toolchain.env(cfg["home"]))
-    agent = Agent(Client(srv.url), tools, confirm=confirm_factory(state, interactive), out=say)
+    # 文脈の上限 (字): 日本語は 1 トークン ≒ 1〜1.5 字。指示文と道具の説明 (約 2000 トークン) の分を残す
+    agent = Agent(Client(srv.url), tools, confirm=confirm_factory(state, interactive), out=say,
+                  ctx_chars=max(4000, int((args.ctx - 2500) * 1.2)))
     say(f"作業フォルダ: {tools.root}")
     try:
         if args.task:
