@@ -60,6 +60,19 @@ jobs:
       - name: "Toolchain: install Python into the chosen folder and build an .exe with it"
         run: |
           $h = "$env:RUNNER_TEMP\lc"
+          & {
+            "--- $args"
+            "toolcache python.exe: $(Test-Path "$env:pythonLocation\python.exe")"
+            foreach ($hive in "HKLM:", "HKCU:") {
+              foreach ($k in "$hive\SOFTWARE\Python\PythonCore\3.12\InstallPath") {
+                if (Test-Path $k) { "$k = $((Get-ItemProperty $k).'(default)')" }
+              }
+              foreach ($u in "$hive\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", "$hive\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall") {
+                if (Test-Path $u) { Get-ChildItem $u | Where-Object { $_.GetValue("DisplayName") -like "Python 3.12*" } |
+                  ForEach-Object { "$($_.PSChildName) | $($_.GetValue('DisplayName')) | $($_.GetValue('BundleCachePath'))$($_.GetValue('InstallLocation'))" } }
+              }
+            }
+          } "before toolchain"
           python -c "import sys; sys.path.insert(0, '.'); from localcoder import toolchain; exe = toolchain.ensure(r'$h'); print(exe); assert exe"
           $py = "$h\python\python.exe"
           if (-not (Test-Path $py)) { throw "python was not installed into the folder" }
@@ -69,6 +82,19 @@ jobs:
           $out = & "$env:RUNNER_TEMP\dist\hi.exe"
           if ($out -ne "hi from exe") { throw "built exe printed: $out" }
           & $py -c "import tkinter; print('tkinter ok')"
+          & {
+            "--- $args"
+            "toolcache python.exe: $(Test-Path "$env:pythonLocation\python.exe")"
+            foreach ($hive in "HKLM:", "HKCU:") {
+              foreach ($k in "$hive\SOFTWARE\Python\PythonCore\3.12\InstallPath") {
+                if (Test-Path $k) { "$k = $((Get-ItemProperty $k).'(default)')" }
+              }
+              foreach ($u in "$hive\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", "$hive\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall") {
+                if (Test-Path $u) { Get-ChildItem $u | Where-Object { $_.GetValue("DisplayName") -like "Python 3.12*" } |
+                  ForEach-Object { "$($_.PSChildName) | $($_.GetValue('DisplayName')) | $($_.GetValue('BundleCachePath'))$($_.GetValue('InstallLocation'))" } }
+              }
+            }
+          } "after toolchain"
 
       - name: "Uninstall: back to the state before LocalCoder"
         run: |
@@ -94,6 +120,13 @@ jobs:
             Where-Object { $_.GetValue("DisplayName") -like "Python 3.12.10*" }
           $left | ForEach-Object { "left: $($_.GetValue('DisplayName'))" }
           if ($left) { throw "Python is still in the Apps list" }
+          & {
+            "toolcache python.exe: $(Test-Path "$env:pythonLocation\python.exe")"
+            foreach ($hive in "HKLM:", "HKCU:") {
+              $k = "$hive\SOFTWARE\Python\PythonCore\3.12\InstallPath"
+              if (Test-Path $k) { "$k = $((Get-ItemProperty $k).'(default)')" }
+            }
+          }
           python --version                     # もとからあった Python は無事
           & "$env:RUNNER_TEMP\un\LocalCoderUninstall.exe" --home $h --yes 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\un3.txt"
           Get-Content "$env:RUNNER_TEMP\un3.txt"
