@@ -86,7 +86,7 @@ class SelfModel:
     def days_alive(self):
         return int((self.clock() - self.get("born", self.clock())) // 86400)
 
-    def system_prompt(self, cfg, voice=False, calibration=None):
+    def system_prompt(self, cfg, voice=False, calibration=None, senses=None):
         play = cfg.get("persona_playfulness", 0.6)
         sk = cfg.get("persona_skepticism", 0.6)
         text = STYLE.format(
@@ -95,6 +95,8 @@ class SelfModel:
                   "- 感情表現は豊かに。うれしいときは素直に喜ぶ。" if play > 0.7 else ""),
             skeptic=("\n6. とくに慎重に。断定は確かめたことだけ。" if sk > 0.75 else ""))
         about = [f"\n# ボク自身 (生まれて {self.days_alive()} 日目)"]
+        if senses:
+            about.append(f"- ボクの体: {senses}")
         if self.top_interests():
             about.append("- 最近の興味: " + "、".join(self.top_interests()))
         if self.recent_memories():

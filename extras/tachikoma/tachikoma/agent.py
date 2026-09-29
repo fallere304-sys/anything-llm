@@ -246,17 +246,19 @@ class Tachikoma:
                 if verdict.get("verdict") != "irrelevant":
                     self.apply_verdict(b, verdict, "user", 1.0, "ユーザー回答: " + clip(text, 200))
                     self.asked = None
-        user = self.context_text() + "\n\n# ユーザーの発言\n" + text
-        check = self.inquire(text) if self.cfg["inquiry_on_chat"] else ""
+        eyes = self.eyes_for(text)         # 見ることを聞かれたら、その場で見てから答える
+        user = self.context_text() + eyes + "\n\n# ユーザーの発言\n" + text
+        # 見て答えるときは点検を飛ばす (「カメラにアクセスできるか」を疑い出して、見たものを話さなくなる)
+        check = self.inquire(text) if self.cfg["inquiry_on_chat"] and not eyes else ""
         # 即効層: 学習前でも、過去に裏付けの取れた例をプロンプトに添える
         shots = "\n".join(x for x in (self.data.examples("knowledge", text),
                                        self.data.examples("chat", text)) if x)
-        system = self.selfm.system_prompt(self.cfg, voice=voice, calibration=self.calib.stats())
-        images, eyes = self.eyes_for(text)
+        system = self.selfm.system_prompt(self.cfg, voice=voice, calibration=self.calib.stats(),
+                                          senses=self.senses_text())
         try:
-            reply = self.llm.chat(system, (shots + "\n\n" if shots else "") + user + check + eyes,
+            reply = self.llm.chat(system, (shots + "\n\n" if shots else "") + user + check,
                                   max_tokens=160 if voice else 400,
-                                  temperature=self.cfg.get("chat_temperature", 0.5), images=images)
+                                  temperature=self.cfg.get("chat_temperature", 0.5))
         except LLMError as e:
             self.say(f"(推論に失敗しました: {e})")
             return
@@ -267,29 +269,44 @@ class Tachikoma:
         self.memory.add_event("self", "reply", reply, 0.0)
         self.data.remember_chat(system, user, reply)
 
-    def eyes_for(self, text):
-        """見ることを聞かれたら、いまのカメラの 1 枚を撮って返事に添える (画像, プロンプトに足す文)。
-
-        カメラが無い・相棒が切っている・まだ映像が無いときは、そう正直に言えるように事情を添える。"""
-        if not _LOOK.search(text or ""):
-            return None, ""
-        head = "\n\n# 自分の目 (カメラ)\n"
+    def senses_text(self):
+        """自分の体 (目と耳) の今の状態。人格の指示に書いて「カメラなんて無い」と思い込まないようにする。"""
         cam = getattr(self.probes, "camera", None)
         if cam is None:
-            return None, head + "いまはカメラが使えない (部品が無いか、つながっていない)。見えていないと短く正直に言う"
+            eye = "カメラ (目) は、いまは使えない"
+        elif getattr(cam, "paused", False):
+            eye = "カメラ (目) はあるが、相棒がスイッチで切っている"
+        else:
+            eye = "カメラ (目) がある。見ることを聞かれたら、その場でカメラで見てから答える"
+        ear = "マイク (耳) がある" if self.cfg.get("voice") else "マイク (耳) は、いまは使えない"
+        return f"{eye}。{ear}。画面の文字でも話せる"
+
+    def eyes_for(self, text):
+        """見ることを聞かれたら、その場でカメラで見て、見たものを文章にして返す (返事のプロンプトに足す)。
+
+        見るのは画像の説明だけを頼む狭い問い (人が現れたときと同じ)。返事はその説明をもとに作る。
+        カメラが無い・相棒が切っている・読めないときは、その事情を返して正直に言わせる。何をしたかは必ずログに出す。"""
+        if not _LOOK.search(text or ""):
+            return ""
+        head = "\n\n# ボクの目 (カメラ) で、いま見たもの\n"
+        cam = getattr(self.probes, "camera", None)
+        if cam is None:
+            self.log("目: カメラが使えないので見られない (部品が無いか、カメラがつながっていない)")
+            return head + "カメラがいまは使えないので、何も見えていない。見えないと短く正直に言う"
         if getattr(cam, "paused", False):
-            return None, head + ("相棒がカメラのスイッチを切っているので、何も見えない。見えないと短く言い、"
-                                 "見てほしいなら画面のカメラのスイッチを入れてね、と伝える")
-        grab = getattr(cam, "capture_b64", None) or getattr(cam, "snapshot_b64", None)
-        if grab is None:        # 画像を扱えない頭 (Android 版): 端末が文章にしたカメラの様子を添える
-            desc = self.probes.run("look", text)
-            return None, head + (f"{desc}\nこれを見たこととして、具体的に話す" if desc else
-                                 "カメラの映像がまだ取れていない。見えていないと短く正直に言う")
-        img = grab()
-        if img is None:
-            return None, head + "カメラの映像がまだ取れていない。見えていないと短く正直に言う"
-        return [img], head + ("添付の画像が、いま自分のカメラに映っているもの。画像に写っているものだけを、"
-                              "具体的に話す (写っていないものを作らない。人がいれば様子を話すが、誰かは決めつけない)")
+            self.log("目: カメラのスイッチが切れているので見ない")
+            return head + ("相棒がカメラのスイッチを切っているので、何も見えない。見えないと短く言い、"
+                           "見てほしいなら画面のカメラのスイッチを入れてね、と伝える")
+        try:
+            desc = self.probes.run("look", "いま見えているもの全体 (人の様子・物・画面や紙の文字・部屋の様子)")
+        except LLMError as e:
+            self.log(f"目: カメラの画像を読めなかった: {e}")
+            return head + f"カメラで見ようとしたが、画像を読めなかった ({clip(str(e), 120)})。そう正直に言う"
+        if not desc:
+            self.log("目: カメラの映像がまだ取れていない")
+            return head + "カメラの映像がまだ取れていない。見えていないと短く正直に言う"
+        self.log(f"目: カメラで見た → {clip(desc, 100)}")
+        return head + desc + "\nこれは自分の目で実際に見たもの。これをもとに具体的に話す (写っていないものは作らない)"
 
     def inquire(self, text):
         """答える前の点検: 怪しい前提と、知らないことを洗い出して「調べる対象」にする。

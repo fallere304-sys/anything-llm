@@ -177,45 +177,76 @@ if __name__ == "__main__":
 
 
 class LookWhenAskedTest(unittest.TestCase):
-    """「カメラから何が見える？」と聞かれたら、その場で撮った 1 枚を返事に添える。"""
+    """「カメラから何が見える？」と聞かれたら、その場でカメラで見て、見たものをもとに答える。"""
 
-    def agent(self, camera):
+    def agent(self, camera, vision="机の上にノートPCとマグカップ。奥に本棚。"):
         sys.path.insert(0, os.path.dirname(__file__))
         from test_core import make_agent
         agent, llm, *_ = make_agent(tempfile.mkdtemp())
-        seen = []
+        replies, looks, logs = [], [], []
         orig = llm.chat
 
         def chat(system, user, schema=None, **kw):
+            if kw.get("images"):
+                looks.append(kw["images"])
+                return vision
             if schema is None:
-                seen.append((user, kw.get("images")))
+                replies.append((system, user))
             return orig(system, user, schema=schema, **kw)
         llm.chat = chat
+        agent.probes.llm = llm
         agent.probes.camera = camera
-        return agent, seen
+        agent.cfg["verbose"] = True
+        agent.out = logs.append
+        return agent, replies, looks, logs
 
-    def test_takes_a_fresh_picture(self):
+    def test_looks_first_then_answers_from_what_it_saw(self):
         class Cam:
             paused = False
 
             def capture_b64(self):
                 return "JPEG"
-        agent, seen = self.agent(Cam())
+        agent, replies, looks, logs = self.agent(Cam())
         agent.on_user_message("カメラから君が見えている状況を解説して")
-        user, images = seen[-1]
-        self.assertEqual(images, ["JPEG"])
-        self.assertIn("いま自分のカメラに映っているもの", user)
+        self.assertEqual(looks, [["JPEG"]])                            # その場で撮った 1 枚を見た
+        system, user = replies[-1]
+        self.assertIn("ボクの目 (カメラ) で、いま見たもの", user)
+        self.assertIn("マグカップ", user)                                # 見たものをもとに答える
+        self.assertIn("カメラ (目) がある", system)                      # 自分に目があると知っている
+        self.assertTrue(any("目: カメラで見た" in line for line in logs))
 
     def test_switched_off_or_missing_camera_is_said_honestly(self):
         class Off:
             paused = True
-        agent, seen = self.agent(Off())
+        agent, replies, looks, logs = self.agent(Off())
         agent.on_user_message("今なにが見えてる？")
-        self.assertIsNone(seen[-1][1])
-        self.assertIn("スイッチを切っている", seen[-1][0])
-        agent, seen = self.agent(None)
+        self.assertEqual(looks, [])
+        self.assertIn("スイッチを切っている", replies[-1][1])
+        self.assertTrue(any("スイッチが切れている" in line for line in logs))
+        agent, replies, looks, logs = self.agent(None)
         agent.on_user_message("目の前に何がある？")
-        self.assertIn("カメラが使えない", seen[-1][0])
+        self.assertIn("カメラがいまは使えない", replies[-1][1])
+
+    def test_unreadable_image_is_reported(self):
+        from tachikoma.llm import LLMError
+
+        class Cam:
+            paused = False
+
+            def capture_b64(self):
+                return "JPEG"
+        agent, replies, looks, logs = self.agent(Cam())
+
+        def broken(system, user, schema=None, **kw):
+            if kw.get("images"):
+                raise LLMError('HTTP 500: {"error":"this model is missing data required for image input"}')
+            replies.append((system, user))
+            return "了解。"
+        agent.llm.chat = broken
+        agent.probes.llm = agent.llm
+        agent.on_user_message("カメラで見て")
+        self.assertIn("画像を読めなかった", replies[-1][1])
+        self.assertTrue(any("image input" in line for line in logs))
 
     def test_other_talk_does_not_use_the_camera(self):
         class Cam:
@@ -223,6 +254,6 @@ class LookWhenAskedTest(unittest.TestCase):
 
             def capture_b64(self):
                 raise AssertionError("撮らない")
-        agent, seen = self.agent(Cam())
+        agent, replies, looks, logs = self.agent(Cam())
         agent.on_user_message("今日の予定を教えて")
-        self.assertIsNone(seen[-1][1])
+        self.assertEqual(looks, [])

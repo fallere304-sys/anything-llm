@@ -105,7 +105,8 @@ class Probes:
         """カメラの今の 1 枚を Gemma に見せ、問いに沿って説明させる (画像は保存しない)。"""
         if self.camera is None or self.llm is None:
             return None
-        img = self.camera.snapshot_b64()
+        grab = getattr(self.camera, "capture_b64", None) or self.camera.snapshot_b64   # 撮り直せるなら今の 1 枚
+        img = grab()
         if img is None:
             return None
         from . import prompts
