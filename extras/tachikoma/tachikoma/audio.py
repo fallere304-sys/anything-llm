@@ -79,7 +79,7 @@ class VoiceSensor:
     """マイクから「聞こえた発話」を出来事にする感覚器。"""
     name = "voice"
 
-    def __init__(self, cfg, asr, tts=None, prompt_fn=None):
+    def __init__(self, cfg, asr, tts=None, prompt_fn=None, listen=True):
         self.cfg, self.asr, self.tts = cfg, asr, tts
         self.prompt_fn = prompt_fn or (lambda: None)
         self.q = queue.Queue()
@@ -87,14 +87,42 @@ class VoiceSensor:
         self.vad = make_vad(cfg["vad_aggressiveness"])
         self.heard_voice_at = 0.0
         self._muted_until = 0.0
+        self.enabled = threading.Event()
+        if listen:
+            self.enabled.set()
+        self.error = None
         threading.Thread(target=self._run, daemon=True).start()
 
+    # マイクのスイッチ: 切ると録音の流れ (InputStream) を閉じる = Windows の「マイク使用中」も消える
+    def pause(self):
+        self.enabled.clear()
+        self.seg = Segmenter(end_silence_ms=self.cfg["vad_end_silence_ms"])
+        while not self.q.empty():
+            self.q.get_nowait()
+
+    def resume(self):
+        self.enabled.set()
+
+    @property
+    def paused(self):
+        return not self.enabled.is_set()
+
     def _run(self):
+        while True:
+            self.enabled.wait()
+            try:
+                self._listen()
+            except Exception as e:  # noqa: BLE001  (マイクが外れた・使えない。少し待って開き直す)
+                self.error = str(e)
+                time.sleep(3)
+
+    def _listen(self):
         import numpy as np
         import sounddevice as sd
         with sd.InputStream(samplerate=RATE, channels=1, dtype="int16", blocksize=FRAME,
                             device=self.cfg.get("mic_device")) as stream:
-            while True:
+            self.error = None
+            while self.enabled.is_set():
                 data, _ = stream.read(FRAME)
                 frame = np.frombuffer(data, dtype=np.int16) if not hasattr(data, "reshape") else data.reshape(-1)
                 speaking = self.tts is not None and self.tts.speaking
@@ -118,7 +146,7 @@ class VoiceSensor:
 
     def poll(self):
         out = []
-        while not self.q.empty():
+        while not self.q.empty() and not self.paused:
             audio = self.q.get_nowait()
             t = self.asr.transcribe(audio, prompt=self.prompt_fn())
             if t.text and t.no_speech_prob < 0.8:

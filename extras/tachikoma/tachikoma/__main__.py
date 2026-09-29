@@ -57,6 +57,10 @@ def main(argv=None):
     llm.model = learner.active_model()      # 前回までに採用した学習済みの版があればそれを使う
     senses = sensors.build(cfg)
     log = []                                 # agent ができる前のログ中継
+    # カメラとマイクのスイッチ (画面で切り替える。前に選んだ状態を覚えている)
+    from .kernel.switches import Switches
+    switches = Switches(store=data, log=lambda m: log[0](m) if log else print(m))
+    voice_why = camera_why = ""
     tts = asr = study = asr_learner = camera = web = scholar = None
     eyes = eye_learner = ui = None
 
@@ -68,6 +72,7 @@ def main(argv=None):
             print(f"音声認識を使えないので音声会話と自習を無効にします: {e}\n"
                   "(依存は requirements-voice.txt。初回は Whisper モデルのダウンロードが必要)")
             cfg["voice"] = cfg["study"] = False
+            voice_why = f"音声認識を使えません ({e})"
     if cfg["voice"]:
         from . import tts as tts_mod
         from .audio import VoiceSensor
@@ -78,15 +83,19 @@ def main(argv=None):
         study = Study(cfg, memory, asr, log=lambda m: log[0](m) if log else print(m))
         if cfg["asr_finetune_enabled"]:
             asr_learner = AsrLearner(cfg, study, data, asr, lambda m: FasterWhisperASR(cfg, m), llm=llm)
+    voice = None
     if cfg["voice"]:
-        senses.append(VoiceSensor(cfg, asr, tts, prompt_fn=study.prompt if study else None))
-    if cfg["camera"]:
+        voice = VoiceSensor(cfg, asr, tts, prompt_fn=study.prompt if study else None,
+                            listen=switches.wanted("mic", True))
+        senses.append(voice)
+    if cfg["camera"] and switches.wanted("camera", True):
         try:
             from .camera import PresenceSensor
             camera = PresenceSensor(cfg)
             senses.append(camera)
         except Exception as e:  # noqa: BLE001
             print(f"カメラを使えません: {e}")
+            camera_why = str(e)
     if cfg["eye"]:
         try:
             from .eye_learner import EyeLearner
@@ -133,6 +142,7 @@ def main(argv=None):
                       tts=tts, study=study, asr_learner=asr_learner, eyes=eyes, eye_learner=eye_learner,
                       idle=idle, ui=ui, power=power)
     log.append(agent.log)
+    wire_switches(switches, cfg, agent, voice, camera, voice_why, camera_why, ui)
     if llm_note:
         agent.log(llm_note)
     if evolved or evolved_prompts:
@@ -207,6 +217,40 @@ def main(argv=None):
         if evolution is not None:
             brain.stop()
     return 0
+
+
+def wire_switches(switches, cfg, agent, voice, camera, voice_why, camera_why, ui):
+    """カメラとマイクのスイッチをつなぐ。カメラは起動時に切ってあっても、入れたときに開く。"""
+    import importlib.util
+    setup = "`Tachikoma.exe --setup` で「音声会話と耳の自習」を選ぶと入ります"
+    if voice is not None:
+        switches.register("mic", "マイク", voice.resume, voice.pause, on=not voice.paused)
+    else:
+        switches.register("mic", "マイク", why=voice_why or f"音声の部品が入っていないか、音声会話が切ってあります。{setup}")
+    cam = {"sensor": camera}
+
+    def camera_on():
+        if cam["sensor"] is None:
+            from .camera import PresenceSensor
+            cam["sensor"] = PresenceSensor(cfg)
+            agent.sensors.append(cam["sensor"])
+            agent.probes.camera = cam["sensor"]
+        else:
+            cam["sensor"].resume()
+
+    def camera_off():
+        if cam["sensor"] is not None:
+            cam["sensor"].pause()
+    if importlib.util.find_spec("cv2") is None:
+        switches.register("camera", "カメラ", why=f"カメラの部品 (opencv) が入っていません。{setup}")
+    else:
+        switches.register("camera", "カメラ", camera_on, camera_off, on=camera is not None)
+        if camera_why:
+            switches.devices["camera"]["why"] = f"開けませんでした: {camera_why}"
+    if ui is not None:
+        switches.push = lambda state: ui.push(dict({"type": "state"}, **state))
+        ui.switches = switches
+        switches.push(switches.state())
 
 
 def first_run_config(path):

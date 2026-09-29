@@ -1,72 +1,159 @@
 :root {
   --bg: #eef3f8; --panel: #ffffff; --ink: #1d2733; --muted: #607080; --line: #d6dee8;
   --accent: #2f7de1; --accent-ink: #ffffff; --me: #e3eefc; --you: #f4f6f9;
+  --on: #1f9d55; --rec: #e0413b; --off: #b8c2cd; --shadow: rgba(20, 30, 45, .22);
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #0f1620; --panel: #172230; --ink: #e4ebf3; --muted: #8fa0b3; --line: #273546;
-          --accent: #5aa0ff; --accent-ink: #0b1220; --me: #1e3552; --you: #1c2837; }
+          --accent: #5aa0ff; --accent-ink: #0b1220; --me: #1e3552; --you: #1c2837;
+          --on: #3ccf7f; --rec: #ff6b61; --off: #4a5a6c; --shadow: rgba(0, 0, 0, .45); }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body { background: var(--bg); color: var(--ink); font-family: "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
        display: flex; flex-direction: column; }
-.layout { flex: 1; display: grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.2fr); gap: 16px;
+.layout { flex: 1; display: grid; grid-template-columns: minmax(300px, 1fr) minmax(320px, 1.2fr); gap: 16px;
           padding: 16px; min-height: 0; }
 @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+button { font: inherit; color: inherit; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ---------- ステージ ---------- */
 .stage { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; position: relative;
-         display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; min-height: 360px; }
-.avatar-wrap { position: relative; width: min(70%, 340px); aspect-ratio: 1; display: grid; place-items: center;
-               transform-origin: 50% 90%; }
+         display: flex; flex-direction: column; align-items: stretch; padding: 12px 16px 16px; min-height: 420px; overflow: hidden; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; position: relative; z-index: 3; }
+.spacer { flex: 1; }
+.note { margin: 6px 0 0; font-size: 13px; color: var(--muted); position: relative; z-index: 3; }
+
+/* スイッチ (カメラ・マイク) */
+.switch { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px 6px 6px; border-radius: 999px;
+          border: 1px solid var(--line); background: var(--bg); cursor: pointer; min-height: 36px; }
+.switch .track { width: 38px; height: 22px; border-radius: 999px; background: var(--off); position: relative;
+                 transition: background .2s; flex: none; }
+.switch .knob { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff;
+                box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .2s; }
+.switch[aria-checked="true"] .track { background: var(--on); }
+.switch[aria-checked="true"] .knob { transform: translateX(16px); }
+.switch .sw-label { font-weight: 600; font-size: 14px; }
+.switch .sw-state { font-size: 12px; color: var(--muted); min-width: 3.5em; }
+.switch[aria-checked="true"] .sw-state { color: var(--rec); }
+.switch[aria-checked="true"] .sw-state::before { content: "●"; margin-right: 3px; animation: rec 1.6s ease-in-out infinite; }
+.switch[aria-busy="true"] { opacity: .6; cursor: progress; }
+.switch:disabled { cursor: not-allowed; opacity: .55; }
+.tool { padding: 7px 12px; border-radius: 10px; border: 0; background: var(--accent); color: var(--accent-ink); cursor: pointer; font-size: 14px; }
+.tool.quiet { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+@keyframes rec { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+.bubble { position: absolute; top: 0; left: 0; right: 0; background: var(--me); border-radius: 14px; z-index: 2;
+          padding: 10px 14px; line-height: 1.6; max-height: 30%; overflow: auto; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.activity { margin-top: 8px; color: var(--muted); font-size: 14px; text-align: center; min-height: 1.4em; }
+
+/* ---------- タチコマ ---------- */
+/* floor: 歩き回る床 / mover: 歩く・振り向く / avatar-wrap: 表情の動き / img: 画像 / sheen: 画像の形だけに光を乗せる */
+.floor { flex: 1; position: relative; display: grid; place-items: end center; min-height: 300px; padding: 8px 0 18px; }
+.mover { --x: 0px; --dir: 1; position: relative; width: min(60%, 330px); transform: translateX(var(--x)) scaleX(var(--dir));
+         transition: transform 2.4s cubic-bezier(.45, .05, .35, 1); }
+.mover.turning { transition: transform .35s ease; }
+.avatar-wrap { position: relative; width: 100%; aspect-ratio: 1; display: grid; place-items: center; transform-origin: 50% 92%; }
 .avatar-wrap img { width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none;
                    transition: filter .4s, opacity .4s; }
-.bubble { position: absolute; top: 16px; left: 16px; right: 16px; background: var(--me); border-radius: 14px;
-          padding: 12px 14px; line-height: 1.6; max-height: 40%; overflow: auto; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
-.activity { margin-top: 12px; color: var(--muted); font-size: 14px; text-align: center; min-height: 1.4em; }
-.badge { position: absolute; right: 4%; top: 6%; font-size: 34px; filter: drop-shadow(0 2px 2px rgba(0,0,0,.2)); }
-.zzz, .dots { position: absolute; display: none; color: var(--muted); }
-.zzz { right: 10%; top: 8%; font-size: 22px; letter-spacing: 4px; animation: float 3s ease-in-out infinite; }
-.dots { top: 4%; left: 50%; transform: translateX(-50%); gap: 6px; }
-.dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); display: inline-block;
-          animation: blink 1.2s infinite; }
+.sheen { position: absolute; inset: 0; pointer-events: none; opacity: 0;
+         -webkit-mask: var(--mask) center / contain no-repeat; mask: var(--mask) center / contain no-repeat; }
+.shadow { position: absolute; left: 18%; right: 18%; bottom: -6px; height: 16px; border-radius: 50%;
+          background: radial-gradient(ellipse at center, var(--shadow) 0%, transparent 70%); transform-origin: 50% 50%; }
+/* 記号は振り向いても裏返らないように、mover の向きを打ち消す */
+.badge, .zzz, .dots, .waves { transform: scaleX(var(--dir, 1)); }
+.badge { position: absolute; right: 2%; top: 4%; font-size: 34px; font-weight: 700; color: var(--accent);
+         filter: drop-shadow(0 2px 2px rgba(0,0,0,.2)); }
+.zzz, .dots, .waves { position: absolute; display: none; color: var(--muted); }
+.zzz { right: -2%; top: -6%; font-size: 22px; letter-spacing: 4px; animation: float 3s ease-in-out infinite; }
+.dots { top: 0; left: 42%; gap: 6px; }
+.dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); display: inline-block; animation: blinkdot 1.2s infinite; }
 .dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }
+.waves { left: -4%; top: 34%; width: 36px; height: 60px; }
+.waves i { position: absolute; left: 0; top: 50%; width: 14px; height: 14px; border: 3px solid var(--accent); border-right: 0; border-top-color: transparent;
+           border-bottom-color: transparent; border-radius: 50%; transform: translateY(-50%); opacity: 0; animation: wave 1s ease-out infinite; }
+.waves i:nth-child(2) { animation-delay: .33s; } .waves i:nth-child(3) { animation-delay: .66s; }
 
-/* ---------- 表情 (どんな画像でも動くよう、画像全体の変形で表す) ---------- */
+/* ---------- 状態ごとの動き (どんな画像でも動くよう、画像全体の変形と光で表す) ---------- */
 .expr-idle     { animation: breathe 4s ease-in-out infinite; }
-.expr-talk     { animation: bob .35s ease-in-out infinite; }
-.expr-happy    { animation: bounce .6s ease-in-out 3, breathe 4s 1.8s ease-in-out infinite; }
-.expr-proud    { animation: bounce .5s ease-in-out 2, sway 2.4s 1s ease-in-out infinite; }
+.expr-talk     { animation: chatter .32s ease-in-out infinite; }
+.expr-happy    { animation: hop .55s ease-in-out 3, breathe 4s 1.7s ease-in-out infinite; }
+.expr-happy .badge::after { content: "♪"; }
+.expr-proud    { animation: hop .5s ease-in-out 2, sway 2.4s 1s ease-in-out infinite; }
+.expr-proud .badge::after { content: "！"; }
 .expr-curious  { animation: tilt 1.6s ease-in-out infinite; }
+.expr-curious .badge::after { content: "？"; }
 .expr-puzzled  { animation: tiltLeft 2s ease-in-out infinite; }
-.expr-puzzled .badge::after { content: "?"; font-weight: 700; color: var(--accent); }
-.expr-surprised{ animation: jump .4s ease-out 1, breathe 4s .4s ease-in-out infinite; }
+.expr-puzzled .badge::after { content: "？？"; font-size: 26px; }
+.expr-surprised{ animation: jump .45s ease-out 1, breathe 4s .45s ease-in-out infinite; }
+.expr-surprised .badge::after { content: "！！"; color: var(--rec); }
 .expr-sorry    { animation: droop 2s ease-in-out infinite; }
+.expr-sorry img { filter: saturate(.75) brightness(.95); }
+.expr-sorry .badge::after { content: "💧"; font-size: 26px; }
 .expr-thinking { animation: sway 3s ease-in-out infinite; }
 .expr-thinking .dots { display: flex; }
-.expr-listening{ animation: breathe 2s ease-in-out infinite; }
-.expr-listening img { filter: drop-shadow(0 0 16px var(--accent)); }
+.expr-thinking .sheen { opacity: 1; background: linear-gradient(100deg, transparent 38%, rgba(150, 235, 255, .95) 50%, transparent 62%);
+                        background-size: 300% 100%; animation: scan 1.5s linear infinite; mix-blend-mode: screen; }
+.expr-listening { animation: breathe 2s ease-in-out infinite; }
+.expr-listening img { filter: drop-shadow(0 0 14px var(--accent)); }
+.expr-listening .sheen { opacity: 1; background: rgba(90, 160, 255, .28); animation: pulse 1.4s ease-in-out infinite; }
 .expr-studying_ear, .expr-studying_eye, .expr-reading { animation: nod 2.2s ease-in-out infinite; }
+.expr-studying_ear .badge::after { content: "🎧"; }
+.expr-studying_eye .badge::after, .expr-reading .badge::after { content: "📄"; }
 .expr-training { animation: shiver .15s linear infinite; }
 .expr-training img { filter: saturate(.7); }
-.expr-sleeping { animation: breathe 5s ease-in-out infinite; }
-.expr-sleeping img { opacity: .6; filter: grayscale(.4); }
+.expr-training .badge::after { content: "⚙"; display: inline-block; animation: spin 2s linear infinite; }
+.expr-training .sheen { opacity: 1; background: linear-gradient(0deg, transparent 40%, rgba(255, 210, 90, .6) 50%, transparent 60%);
+                        background-size: 100% 300%; animation: scanV 1.2s linear infinite; mix-blend-mode: screen; }
+.expr-sleeping { animation: sleep 5s ease-in-out infinite; }
+.expr-sleeping img { opacity: .65; filter: grayscale(.45); }
 .expr-sleeping .zzz { display: block; }
-.talking { animation: bob .3s ease-in-out infinite !important; }
+.expr-sleeping + .shadow { opacity: .6; }
 
-@keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.02); } }
-@keyframes bob     { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
-@keyframes bounce  { 0%,100% { transform: translateY(0); } 40% { transform: translateY(-22px) scale(1.03); } }
-@keyframes jump    { 0% { transform: translateY(0); } 30% { transform: translateY(-30px) scale(1.06); } 100% { transform: translateY(0); } }
-@keyframes tilt    { 0%,100% { transform: rotate(0); } 50% { transform: rotate(8deg); } }
-@keyframes tiltLeft{ 0%,100% { transform: rotate(0); } 50% { transform: rotate(-10deg); } }
-@keyframes sway    { 0%,100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
-@keyframes droop   { 0%,100% { transform: translateY(4px) rotate(-2deg) scale(.98); } 50% { transform: translateY(8px) rotate(-4deg) scale(.97); } }
-@keyframes nod     { 0%,100% { transform: rotate(0); } 50% { transform: rotate(4deg) translateY(3px); } }
-@keyframes shiver  { 0% { transform: translateX(-1px); } 50% { transform: translateX(1px); } 100% { transform: translateX(-1px); } }
-@keyframes float   { 0%,100% { transform: translateY(0); opacity: .6; } 50% { transform: translateY(-8px); opacity: 1; } }
-@keyframes blink   { 0%,100% { opacity: .2; } 50% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .avatar-wrap, .avatar-wrap * { animation: none !important; } }
+/* 話している: 体を揺らし、音の波と光の明滅を出す */
+.talking { animation: chatter .3s ease-in-out infinite !important; }
+.talking .waves, .expr-talk .waves { display: block; }
+.talking .sheen { opacity: 1; background: rgba(255, 255, 255, .5); animation: talkflash .26s ease-in-out infinite alternate !important;
+                  mix-blend-mode: soft-light; }
+
+/* 歩く (独りの時間に調べもの・練習をしているとき、ときどき歩き回る) */
+.mover.walking .avatar-wrap { animation: walk .34s ease-in-out infinite !important; }
+.mover.walking .shadow { animation: shadowWalk .34s ease-in-out infinite; }
+/* 気まぐれの小さな動き */
+.avatar-wrap.fidget-hop { animation: hop .5s ease-in-out 1 !important; }
+.avatar-wrap.fidget-wiggle { animation: wiggle .7s ease-in-out 1 !important; }
+.avatar-wrap.blink img { filter: brightness(.82); }
+/* 本体とつながっていない */
+body.offline .avatar-wrap img { filter: grayscale(1) opacity(.5); }
+body.offline .avatar-wrap { animation: none !important; }
+
+@keyframes breathe  { 0%,100% { transform: scale(1, 1); } 50% { transform: scale(1.012, 1.028); } }
+@keyframes chatter  { 0%,100% { transform: translateY(0) rotate(0); } 25% { transform: translateY(-5px) rotate(-1deg); } 75% { transform: translateY(-2px) rotate(1deg); } }
+@keyframes hop      { 0%,100% { transform: translateY(0) scale(1, 1); } 15% { transform: scale(1.06, .92); } 45% { transform: translateY(-26px) scale(.97, 1.04); } 80% { transform: scale(1.04, .95); } }
+@keyframes jump     { 0% { transform: translateY(0); } 25% { transform: translateY(-34px) scale(1.06); } 60% { transform: translateY(0) scale(1.05, .93); } 100% { transform: none; } }
+@keyframes tilt     { 0%,100% { transform: rotate(0); } 50% { transform: rotate(8deg); } }
+@keyframes tiltLeft { 0%,100% { transform: rotate(0); } 50% { transform: rotate(-10deg); } }
+@keyframes sway     { 0%,100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+@keyframes droop    { 0%,100% { transform: translateY(4px) rotate(-2deg) scale(1, .97); } 50% { transform: translateY(8px) rotate(-4deg) scale(1, .95); } }
+@keyframes nod      { 0%,100% { transform: rotate(0); } 50% { transform: rotate(4deg) translateY(3px); } }
+@keyframes shiver   { 0% { transform: translateX(-1px); } 50% { transform: translateX(1px); } 100% { transform: translateX(-1px); } }
+@keyframes sleep    { 0%,100% { transform: translateY(6px) scale(1.02, .94); } 50% { transform: translateY(8px) scale(1.03, .92); } }
+@keyframes walk     { 0%,100% { transform: translateY(0) rotate(-1.5deg); } 50% { transform: translateY(-5px) rotate(1.5deg); } }
+@keyframes wiggle   { 0%,100% { transform: rotate(0); } 25% { transform: rotate(-6deg); } 75% { transform: rotate(6deg); } }
+@keyframes shadowWalk { 0%,100% { transform: scaleX(1); } 50% { transform: scaleX(.9); } }
+@keyframes scan     { 0% { background-position: 100% 0; } 100% { background-position: 0% 0; } }
+@keyframes scanV    { 0% { background-position: 0 100%; } 100% { background-position: 0 0%; } }
+@keyframes pulse    { 0%,100% { opacity: .15; } 50% { opacity: .9; } }
+@keyframes talkflash{ 0% { opacity: .1; } 100% { opacity: .75; } }
+@keyframes wave     { 0% { opacity: .9; transform: translate(0, -50%) scale(.6); } 100% { opacity: 0; transform: translate(-22px, -50%) scale(1.6); } }
+@keyframes float    { 0%,100% { transform: translateY(0) scaleX(var(--dir, 1)); opacity: .6; } 50% { transform: translateY(-8px) scaleX(var(--dir, 1)); opacity: 1; } }
+@keyframes blinkdot { 0%,100% { opacity: .2; } 50% { opacity: 1; } }
+@keyframes spin     { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .mover { transition: none; }
+  .avatar-wrap, .avatar-wrap *, .mover * { animation: none !important; }
+}
 
 /* ---------- 会話 ---------- */
 .talk { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; min-height: 0; }
@@ -77,7 +164,7 @@ body { background: var(--bg); color: var(--ink); font-family: "BIZ UDPGothic", "
 .log li.system { color: var(--muted); font-size: 13px; align-self: center; background: none; }
 .input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
 .input input { flex: 1; font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
-               background: var(--bg); color: var(--ink); }
+               background: var(--bg); color: var(--ink); min-width: 0; }
 .input button { font: inherit; padding: 10px 16px; border-radius: 10px; border: 0; background: var(--accent);
                 color: var(--accent-ink); cursor: pointer; }
 .status { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 8px 16px 12px; color: var(--muted); font-size: 13px; }

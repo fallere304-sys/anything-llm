@@ -23,10 +23,8 @@ class PresenceSensor:
     def __init__(self, cfg, clock=time.monotonic):
         import cv2
         self.cv2, self.cfg, self.clock = cv2, cfg, clock
-        backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
-        self.cap = cv2.VideoCapture(cfg["camera_index"], backend)
-        if not self.cap.isOpened():
-            raise RuntimeError(f"カメラ {cfg['camera_index']} を開けません")
+        self.cap = None
+        self._open()
         self._init_detectors()
         self.present = False
         self.frame = None
@@ -34,6 +32,32 @@ class PresenceSensor:
         self._next = 0.0
         self._n = 0
         self._last_seen = 0.0
+
+    def _open(self):
+        cv2 = self.cv2
+        backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
+        cap = cv2.VideoCapture(self.cfg["camera_index"], backend)
+        if not cap.isOpened():
+            cap.release()
+            raise RuntimeError(f"カメラ {self.cfg['camera_index']} を開けません")
+        self.cap = cap
+
+    @property
+    def paused(self):
+        return self.cap is None
+
+    def pause(self):
+        """カメラを手放す (点灯が消える)。切っている間は 1 枚も取らない。"""
+        if self.cap is not None:
+            self.cap.release()
+        self.cap = None
+        self.frame = self._prev = None
+        self.present = False
+
+    def resume(self):
+        if self.cap is None:
+            self._open()
+            self._next = 0.0
 
     def _init_detectors(self):
         cv2 = self.cv2
@@ -72,7 +96,7 @@ class PresenceSensor:
 
     def poll(self):
         now = self.clock()
-        if now < self._next:
+        if self.cap is None or now < self._next:
             return []
         self._next = now + self.cfg["camera_interval_s"]
         ok, frame = self.cap.read()
@@ -90,7 +114,7 @@ class PresenceSensor:
         return []
 
     def snapshot_b64(self):
-        if self.frame is None:
+        if self.cap is None or self.frame is None:
             return None
         ok, buf = self.cv2.imencode(".jpg", self.frame, [self.cv2.IMWRITE_JPEG_QUALITY, 80])
         return base64.b64encode(buf.tobytes()).decode("ascii") if ok else None

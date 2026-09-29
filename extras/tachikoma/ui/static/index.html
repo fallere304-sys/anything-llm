@@ -9,12 +9,35 @@
 <body>
 <main class="layout">
   <section class="stage" aria-label="タチコマ">
-    <div class="bubble" id="bubble" hidden></div>
-    <div class="avatar-wrap expr-idle" id="avatar">
-      <img id="avatar-img" src="/static/avatar.svg" alt="タチコマ">
-      <span class="badge" id="badge" aria-hidden="true"></span>
-      <span class="zzz" aria-hidden="true">z z Z</span>
-      <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+    <div class="toolbar" role="group" aria-label="カメラとマイク">
+      <button class="switch" type="button" role="switch" aria-checked="false" data-dev="camera" disabled>
+        <span class="track"><span class="knob"></span></span>
+        <span class="sw-label">カメラ</span><span class="sw-state">-</span>
+      </button>
+      <button class="switch" type="button" role="switch" aria-checked="false" data-dev="mic" disabled>
+        <span class="track"><span class="knob"></span></span>
+        <span class="sw-label">マイク</span><span class="sw-state">-</span>
+      </button>
+      <span class="spacer"></span>
+      <button class="tool" type="button" id="pick" title="タチコマの画像を選ぶ (背景はこの PC の中で自動で抜きます)">画像を変える</button>
+      <button class="tool quiet" type="button" id="reset" title="同梱の仮の絵に戻す">元に戻す</button>
+      <input type="file" id="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+    </div>
+    <p class="note" id="note" hidden></p>
+
+    <div class="floor" id="floor">
+      <div class="bubble" id="bubble" hidden></div>
+      <div class="mover" id="mover">
+        <div class="avatar-wrap expr-idle" id="avatar">
+          <img id="avatar-img" src="/static/avatar.svg" alt="タチコマ" draggable="false">
+          <div class="sheen" id="sheen" aria-hidden="true"></div>
+          <span class="badge" id="badge" aria-hidden="true"></span>
+          <span class="zzz" aria-hidden="true">z z Z</span>
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="waves" aria-hidden="true"><i></i><i></i><i></i></span>
+        </div>
+        <div class="shadow" aria-hidden="true"></div>
+      </div>
     </div>
     <div class="activity" id="activity">起動中…</div>
   </section>
