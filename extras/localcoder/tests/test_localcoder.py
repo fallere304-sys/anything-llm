@@ -136,6 +136,28 @@ class AgentTest(unittest.TestCase):
         self.assertIn("そんな道具はありません", results[1])
 
 
+class RepeatTest(AgentTest):
+    def test_text_calls_get_plain_results_and_repeats_stop(self):
+        block = '```json\n{"name": "write_file", "arguments": {"path": "hello.txt", "content": "こんにちは"}}\n```'
+        FakeModel.script = [{"text": block}, {"text": block}, {"text": block}]
+        a = self.agent()
+        self.assertEqual(a.ask("hello.txt を作って"), "")
+        self.assertFalse(a.finished)
+        users = [m["content"] for m in a.messages if m["role"] == "user"][1:]
+        self.assertIn("[道具 write_file の結果]", users[0])                 # ふつうの言葉で結果を返す
+        self.assertIn("直前と同じ", users[1])                               # 2 回目は促す
+        self.assertFalse(any(m["role"] == "tool" for m in a.messages))
+        self.assertTrue(any("繰り返している" in line for line in self.lines))   # 3 回目で止める
+        self.assertEqual(len(FakeModel.seen), 3)
+
+    def test_finishes_after_a_text_call(self):
+        FakeModel.script = [{"text": '<tool_call>{"name": "write_file", "arguments": {"path": "a.txt", "content": "x"}}'
+                                     '</tool_call>'}, {"text": "a.txt を作りました。"}]
+        a = self.agent()
+        self.assertEqual(a.ask("a.txt を作って"), "a.txt を作りました。")
+        self.assertTrue(a.finished)
+
+
 class RescueAndContextTest(unittest.TestCase):
     def test_rescue_tool_calls_written_in_text(self):
         calls = rescue_calls('では書きます。<tool_call>{"name": "write_file", "arguments": {"path": "a.txt", '

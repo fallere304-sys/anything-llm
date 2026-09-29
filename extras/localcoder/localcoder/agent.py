@@ -126,6 +126,7 @@ class Agent:
         self.write = write or (lambda s: print(s, end="", flush=True))
         self.ctx_chars, self.max_steps = ctx_chars, max_steps
         self.messages = [{"role": "system", "content": SYSTEM}]
+        self.finished = False
 
     def reset(self):
         self.messages = self.messages[:1]
@@ -158,24 +159,44 @@ class Agent:
     def ask(self, text):
         """頼みを 1 つやり切る。最後の報告 (本文) を返す。"""
         self.messages.append({"role": "user", "content": text})
+        self.finished = False
+        last, repeats = None, 0
         for step in range(self.max_steps):
             self._compact()
             t0 = time.time()
             reply = self.client.chat(self.messages, tools=SCHEMAS, on_text=self.write)
-            calls = reply["tool_calls"] or rescue_calls(reply["content"])
+            native = reply["tool_calls"]
+            calls = native or rescue_calls(reply["content"])
             self._speed(reply.get("timings"), time.time() - t0)
-            msg = {"role": "assistant", "content": reply["content"]}
-            if calls:
-                msg["tool_calls"] = calls
-            self.messages.append(msg)
             if not calls:
+                self.messages.append({"role": "assistant", "content": reply["content"]})
                 self.write("\n")
+                self.finished = True
                 return reply["content"]
             if reply["content"]:
                 self.write("\n")
-            for c in calls:
-                self.messages.append({"role": "tool", "tool_call_id": c.get("id") or c["function"]["name"],
-                                      "content": self._do(c)})
+            # 同じ操作の繰り返し (小さいモデルに多い): 2 回目は促し、3 回目で止める
+            key = json.dumps([(c["function"]["name"], c["function"].get("arguments")) for c in calls], sort_keys=True)
+            repeats = repeats + 1 if key == last else 0
+            last = key
+            if repeats >= 2:
+                self.messages.append({"role": "assistant", "content": reply["content"]})
+                self.out("(同じ操作を繰り返しているので止めました。結果を確かめて、必要なら頼み方を変えてください)")
+                return ""
+            nudge = ("\n(この操作は、直前と同じです。もう終わっているなら、道具を使わずに日本語で報告してください)"
+                     if repeats == 1 else "")
+            results = [(c, self._do(c) + nudge) for c in calls]
+            if native:
+                self.messages.append({"role": "assistant", "content": reply["content"], "tool_calls": calls})
+                for c, r in results:
+                    self.messages.append({"role": "tool", "tool_call_id": c.get("id") or c["function"]["name"],
+                                          "content": r})
+            else:
+                # 本文に書かれた道具呼び出しを拾った場合: 結果はふつうの言葉で返す (小さいモデルが自分の操作を見失わないように)
+                self.messages.append({"role": "assistant", "content": reply["content"]})
+                self.messages.append({"role": "user", "content": "\n\n".join(
+                    f"[道具 {c['function']['name']} の結果]\n{r}" for c, r in results)
+                    + "\n\n続きが要るなら次の操作を、終わったなら道具を使わずに日本語で報告してください。"})
         self.out(f"(道具を {self.max_steps} 回使っても終わらなかったので、いったん止めます。続けるなら「続けて」)")
         return ""
 

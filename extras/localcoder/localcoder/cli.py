@@ -230,7 +230,7 @@ def main(argv=None):
         if args.task:
             say(f"\nあなた> {args.task}\n")
             agent.ask(args.task)
-            return 0
+            return 0 if agent.finished else 5          # 報告まで行かなかった (繰り返し・回数切れ)
         repl(agent, tools, state, cfg)
         return 0
     except ModelError as e:
