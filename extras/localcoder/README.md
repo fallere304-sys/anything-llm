@@ -24,7 +24,10 @@
    | Qwen2.5-Coder 1.5B (試用) | 約 1GB | 動作確認用。簡単なことしかできない |
 
 3. **.exe にする道具**: python.org の正式な Python を置き場所の中 (`python\`) に入れ、PyInstaller を足す
-   (PC にもともと入っている Python には触れない。Windows の「アプリ」一覧に Python が載る)
+   (Windows の「アプリ」一覧に Python が載る)。
+   ただし **PC にもう Python 3.12 系があるときは、正式な入れる道具を使わない**。入れる道具が、もとの Python を
+   新しい場所へ移して、もとの場所から消してしまうため (GitHub の Windows 機で実際に起きたのを確かめた)。
+   その場合は、もとの Python から置き場所の中に仮想環境 (venv) を作り、そこに PyInstaller を入れる (もとの Python には何も足さない)
 
 llama.cpp は GitHub の最新版を取ってくる。GPU は **CUDA 版 → Vulkan 版 → CPU 版** の順に試し、
 読み込めても最初の推論で落ちる (古い NVIDIA ドライバの「PTX … unsupported toolchain」など) ときは次の版に切り替える。
@@ -53,7 +56,7 @@ LocalCoderUninstall.exe             取り除いて、入れる前の姿に戻�
 | 消すもの | どうやって |
 |---|---|
 | 動いている llama.cpp・LocalCoder・作ったプログラム | 止める |
-| 置き場所に入れた Python (「設定 → アプリ」の一覧に載っているもの) | Python 自身の取り除き方 (`/uninstall`) で。登録・部品の記録ごと消える。置き場所の中の Python だと確かめたときだけ (もとからある Python には触れない) |
+| 置き場所に入れた Python (「設定 → アプリ」の一覧に載っているもの) | Python 自身の取り除き方 (`/uninstall`) で。登録・部品の記録ごと消える。置き場所の中の Python だと確かめたときだけ。ほかにも Python 3.12 があるときは、巻き込まないよう取り除かずに知らせる |
 | 置き場所の中のモデル・llama.cpp・記録・キャッシュ | 消す。置き場所のフォルダは空になったときだけ消す (もともとあったファイルには触れない) |
 | 設定 (`%LOCALAPPDATA%\LocalCoder`) | 消す |
 | pip / PyInstaller のキャッシュ | 初回に取った「入れる前の姿」の記録を見て、入れる前に無かったものだけ消す |

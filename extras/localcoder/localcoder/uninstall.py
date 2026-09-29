@@ -27,7 +27,7 @@ import tempfile
 import time
 
 from .server import download
-from .toolchain import INSTALLER, PY_VERSION
+from .toolchain import INSTALLER, PY_VERSION, registered_pythons
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 OWNED = ("llama", "models", "downloads", "logs", "python", "cache")    # 置き場所の中で LocalCoder が作るもの
@@ -308,8 +308,16 @@ class Uninstaller:
                 return key, cache
         return None
 
+    def _other_pythons(self, home):
+        """置き場所の外にある、同じ系の Python の登録 (あれば、取り除きがそれを巻き込むおそれがある)。"""
+        return [p for v, p in registered_pythons(PY_SHORT) if not (p and _inside(p, os.path.join(home, "python")))]
+
     def _remove_python(self, home):
         """Python 自身の取り除き方 (/uninstall) で取り除く。登録・部品の記録も一緒に消える。"""
+        others = [p for p in self._other_pythons(home) if p]
+        if others:
+            raise RuntimeError(f"ほかにも Python {PY_SHORT} ({', '.join(others)}) があるので、巻き込まないよう "
+                               f"Python の取り除きはしませんでした。「設定 → アプリ」で場所を確かめて取り除いてください")
         for pid, p in self.sys.processes():
             if _inside(p, os.path.join(home, "python")):
                 self.sys.kill(pid)

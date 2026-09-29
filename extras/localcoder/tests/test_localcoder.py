@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from localcoder import cli, models, server, uninstall  # noqa: E402
+from localcoder import cli, models, server, toolchain, uninstall  # noqa: E402
 from localcoder.agent import Agent, Client, rescue_calls  # noqa: E402
 from localcoder.tools import ToolError, Tools  # noqa: E402
 
@@ -355,6 +355,28 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(cfg["home"], os.path.join(d, "LocalCoder"))
         self.assertEqual(cfg["model_key"], "tiny")
         self.assertEqual(cli.load(cfg_path)["model_key"], "tiny")
+
+
+class ToolchainTest(unittest.TestCase):
+    def test_existing_python_312_is_not_upgraded_a_venv_is_made_instead(self):
+        d = tempfile.mkdtemp()
+        base = os.path.join(d, "theirs")
+        os.makedirs(base)
+        open(os.path.join(base, "python.exe"), "w").close()
+        ran = []
+
+        def run(cmd, **kw):
+            ran.append(cmd)
+            if cmd[1:3] == ["-m", "venv"]:
+                os.makedirs(os.path.join(cmd[3], "Scripts"))
+                open(os.path.join(cmd[3], "Scripts", "python.exe"), "w").close()
+            import subprocess
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+        home = os.path.join(d, "LocalCoder")
+        exe = toolchain.ensure(home, say=lambda *a, **k: None, run=run, found=[("3.12", base)])
+        self.assertEqual(exe, os.path.join(home, "python", "Scripts", "python.exe"))
+        self.assertEqual(ran[0][:3], [os.path.join(base, "python.exe"), "-m", "venv"])
+        self.assertFalse(any("/quiet" in c for c in ran))          # 正式な入れる道具は動かさない
 
 
 class FakeRegistry:

@@ -73,9 +73,12 @@ jobs:
               }
             }
           } "before toolchain"
-          python -c "import sys; sys.path.insert(0, '.'); from localcoder import toolchain; exe = toolchain.ensure(r'$h'); print(exe); assert exe"
-          $py = "$h\python\python.exe"
-          if (-not (Test-Path $py)) { throw "python was not installed into the folder" }
+          $py = python -c "import sys; sys.path.insert(0, '.'); from localcoder import toolchain; exe = toolchain.ensure(r'$h', say=lambda *a, **k: print(*a, file=sys.stderr)); print(exe or '')"
+          "python for the tools: $py"
+          if (-not $py -or -not (Test-Path $py) -or -not $py.StartsWith("$h\python")) { throw "python was not prepared inside the folder" }
+          # この機械にはもともと Python 3.12 がある: 公式の入れる道具は使わず (もとの Python を動かしてしまう)、仮想環境を作るはず
+          if (-not (Test-Path "$env:pythonLocation\python.exe")) { throw "the Python that was already here was damaged" }
+          if (-not (Test-Path "HKLM:\SOFTWARE\Python\PythonCore\3.12\InstallPath")) { throw "the existing Python registration was damaged" }
           Set-Content -Path "$env:RUNNER_TEMP\hi.py" -Value "print('hi from exe')"
           & $py -m PyInstaller --onefile --noconfirm --distpath "$env:RUNNER_TEMP\dist" --workpath "$env:RUNNER_TEMP\build" `
             --specpath "$env:RUNNER_TEMP" "$env:RUNNER_TEMP\hi.py"
@@ -102,7 +105,6 @@ jobs:
           $cfg = "$env:RUNNER_TEMP\lc.json"
           $core = "HKCU:\Software\Python\PythonCore\3.12\InstallPath"
           Get-Content $cfg
-          if (-not (Test-Path $core)) { throw "Python was not registered (nothing to uninstall)" }
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\un" | Out-Null
           Copy-Item dist\LocalCoderUninstall.exe "$env:RUNNER_TEMP\un\"
           & "$env:RUNNER_TEMP\un\LocalCoderUninstall.exe" --config $cfg --dry-run 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\un1.txt"
@@ -115,11 +117,7 @@ jobs:
           if (Test-Path $h) { Get-ChildItem -Recurse $h | Select-Object -First 20; throw "the folder is still there" }
           if (Test-Path $cfg) { throw "config is still there" }
           if (Test-Path "$env:RUNNER_TEMP\app\LocalCoder.exe") { throw "LocalCoder.exe is still there" }
-          if (Test-Path $core) { throw "Python is still registered: $((Get-ItemProperty $core).'(default)')" }
-          $left = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" |
-            Where-Object { $_.GetValue("DisplayName") -like "Python 3.12.10*" }
-          $left | ForEach-Object { "left: $($_.GetValue('DisplayName'))" }
-          if ($left) { throw "Python is still in the Apps list" }
+          if ((Test-Path $core) -and "$((Get-ItemProperty $core).'(default)')".StartsWith($h)) { throw "Python is still registered" }
           & {
             "toolcache python.exe: $(Test-Path "$env:pythonLocation\python.exe")"
             foreach ($hive in "HKLM:", "HKCU:") {
@@ -128,6 +126,7 @@ jobs:
             }
           }
           python --version                     # もとからあった Python は無事
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$env:pythonLocation\python.exe")) { throw "the Python that was already here was damaged" }
           & "$env:RUNNER_TEMP\un\LocalCoderUninstall.exe" --home $h --yes 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\un3.txt"
           Get-Content "$env:RUNNER_TEMP\un3.txt"
           if (-not (Select-String -Path "$env:RUNNER_TEMP\un3.txt" -Pattern "もう何もありません" -Quiet)) { throw "second run found leftovers" }
