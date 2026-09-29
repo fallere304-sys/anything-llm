@@ -239,6 +239,21 @@ class ServerTest(unittest.TestCase):
         with self.assertRaises(OSError):
             server.latest_assets(lambda req, timeout=None: io.BytesIO(json.dumps(rels[:1]).encode()))
 
+    def test_api_rate_limit_falls_back_to_the_latest_page(self):
+        class Resp(io.BytesIO):
+            def geturl(self):
+                return "https://github.com/ggml-org/llama.cpp/releases/tag/b11255"
+
+        def opener(req, timeout=None):
+            if req.full_url.startswith("https://api.github.com/"):
+                raise OSError("HTTP 403 rate limit exceeded")
+            return Resp(b"")
+        tag, assets = server.latest_assets(opener)
+        self.assertEqual(tag, "b11255")
+        self.assertEqual(server.pick(assets, "cpu"), ["llama-b11255-bin-win-cpu-x64.zip"])
+        self.assertEqual(assets["llama-b11255-bin-win-cpu-x64.zip"],
+                         "https://github.com/ggml-org/llama.cpp/releases/download/b11255/llama-b11255-bin-win-cpu-x64.zip")
+
     def test_args(self):
         a = server.server_args("cuda", "m.gguf", 8090, 32768, 4)
         self.assertIn("--cpu-moe", a)

@@ -18,6 +18,11 @@ import urllib.request
 import zipfile
 
 RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30"
+LATEST_PAGE = "https://github.com/ggml-org/llama.cpp/releases/latest"
+DOWNLOAD = "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/{name}"
+# API が使えないとき (回数制限など) に組み立てる名前 (いまの付け方)
+FALLBACK_NAMES = ["llama-{tag}-bin-win-cuda-12.4-x64.zip", "cudart-llama-bin-win-cuda-12.4-x64.zip",
+                  "llama-{tag}-bin-win-vulkan-x64.zip", "llama-{tag}-bin-win-cpu-x64.zip"]
 KINDS = ("cuda", "vulkan", "cpu")
 # 名前の付け方が変わっても拾えるよう、ゆるく合わせる (Windows・x64・zip。arm64 は除く)
 ASSETS = {
@@ -31,13 +36,30 @@ CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _get(url, opener=urllib.request.urlopen, timeout=60):
-    with opener(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
+    headers = dict(UA)
+    if os.environ.get("GITHUB_TOKEN") and url.startswith("https://api.github.com/"):
+        headers["Authorization"] = "Bearer " + os.environ["GITHUB_TOKEN"]
+    with opener(urllib.request.Request(url, headers=headers), timeout=timeout) as r:
         return r.read()
+
+
+def _latest_tag(opener=urllib.request.urlopen):
+    """「最新の版」のページの転送先 (…/releases/tag/b11255) から版の名前を読む (API の回数制限を受けない)。"""
+    with opener(urllib.request.Request(LATEST_PAGE, headers=UA, method="HEAD"), timeout=60) as r:
+        url = r.geturl()
+    m = re.search(r"/releases/tag/([^/?#]+)", url)
+    if not m:
+        raise OSError(f"llama.cpp の最新の版を読めません ({url})")
+    return m.group(1)
 
 
 def latest_assets(opener=urllib.request.urlopen, kinds=KINDS):
     """Windows 用の組がそろっている最新の版の {名前: URL} と版の名前 (最新の版に無ければ、少し前の版から探す)。"""
-    releases = json.loads(_get(RELEASES, opener))
+    try:
+        releases = json.loads(_get(RELEASES, opener))
+    except (OSError, ValueError):
+        tag = _latest_tag(opener)          # API が使えない (回数制限など): いまの名前の付け方で組み立てる
+        return tag, {n.format(tag=tag): DOWNLOAD.format(tag=tag, name=n.format(tag=tag)) for n in FALLBACK_NAMES}
     if isinstance(releases, dict):
         releases = [releases]
     for rel in releases:
