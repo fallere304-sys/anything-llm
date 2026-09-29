@@ -3,6 +3,7 @@
     LocalCoder.exe                    初回は置き場所 (SSD) とモデルを選んで準備し、対話を始める
     LocalCoder.exe --setup            置き場所・モデルを選び直す
     LocalCoder.exe --task "…" --yes   1 つの頼みをやり切って終わる (確認なし)
+    LocalCoder.exe --uninstall        取り除いて入れる前の姿に戻す (LocalCoderUninstall.exe と同じ)
 
 対話中のコマンド: /new (話を切り替える)  /cd フォルダ (作業フォルダ)  /auto (コマンドを毎回確かめない)
                   /status  /help  /exit
@@ -17,7 +18,7 @@ import string
 import subprocess
 import sys
 
-from . import models, server, toolchain
+from . import models, server, toolchain, uninstall
 from .agent import Agent, Client, ModelError
 from .tools import Tools
 
@@ -75,7 +76,7 @@ def drives():
     return [(r, server.free_gb(r), kinds.get(r[0].upper(), "")) for r in roots]
 
 
-def setup(cfg, interactive, model_key=None):
+def setup(cfg, interactive, model_key=None, path=CONFIG):
     ds = sorted(drives(), key=lambda d: -d[1])
     if interactive:
         say("\nモデルを置く場所を選んでください (SSD がおすすめ。大きいモデルは 60〜70GB 使います)")
@@ -101,7 +102,7 @@ def setup(cfg, interactive, model_key=None):
     if interactive:
         tools_ok = ask("プログラムを .exe にする道具 (Python・約 150MB) も用意しますか？ [Y/n]", "Y").lower() != "n"
     cfg.update(home=home, model_key=entry["key"], model=None, toolchain=tools_ok)
-    save(cfg)
+    save(cfg, path)
     return cfg
 
 
@@ -115,7 +116,7 @@ def prepare(cfg, args, kinds):
         entry = models.by_key(cfg.get("model_key") or "standard")
         model = models.fetch(entry, os.path.join(home, "models"), say)
         cfg["model"] = model
-        save(cfg)
+        save(cfg, args.config)
     if cfg.get("toolchain", True):
         toolchain.ensure(home, say)
     return model
@@ -176,6 +177,10 @@ def repl(agent, tools, state, cfg):
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--uninstall" in argv:
+        argv.remove("--uninstall")
+        return uninstall.main(argv)
     ap = argparse.ArgumentParser(prog="LocalCoder", description="日本語で頼むと、プログラムを作る相棒 (ローカル)")
     ap.add_argument("--setup", action="store_true", help="置き場所・モデルを選び直す")
     ap.add_argument("--home", help="置き場所 (SSD のフォルダ)")
@@ -198,14 +203,19 @@ def main(argv=None):
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     interactive = sys.stdin is not None and sys.stdin.isatty() and not args.task
     cfg = load(args.config)
+    if not cfg:
+        cfg["before"] = uninstall.snapshot()      # 入れる前の姿 (取り除くとき、もともとあったものを残すため)
+    if getattr(sys, "frozen", False):
+        cfg["launched_from"] = list(dict.fromkeys(cfg.get("launched_from", []) + [os.path.abspath(sys.executable)]))
     if args.home:
         cfg["home"] = args.home
     if args.no_toolchain:
         cfg["toolchain"] = False
     if args.setup or not cfg.get("home") or (args.model_key and args.model_key != cfg.get("model_key")):
-        cfg = setup(cfg, interactive, args.model_key)
+        cfg = setup(cfg, interactive, args.model_key, args.config)
     if args.no_toolchain:
         cfg["toolchain"] = False
+    cfg["homes"] = list(dict.fromkeys(cfg.get("homes", []) + [cfg["home"]]))   # 選び直しても、前の置き場所を忘れない
     save(cfg, args.config)
     kinds = [k for k in args.kinds.split(",") if k in server.KINDS]
     try:

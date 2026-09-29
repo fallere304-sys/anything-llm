@@ -37,6 +37,7 @@ llama.cpp は GitHub の最新版を取ってくる。GPU は **CUDA 版 → Vul
 LocalCoder.exe                      対話 (日本語で頼む)
 LocalCoder.exe --setup              置き場所・モデルを選び直す
 LocalCoder.exe --task "…" --yes     1 つの頼みをやり切って終わる
+LocalCoderUninstall.exe             取り除いて、入れる前の姿に戻す (LocalCoder.exe --uninstall でも同じ)
 ```
 
 対話中: `/new` (話を切り替える) `/cd フォルダ` (作業フォルダ) `/auto` (コマンドを毎回確かめない) `/status` `/exit`
@@ -44,6 +45,28 @@ LocalCoder.exe --task "…" --yes     1 つの頼みをやり切って終わる
 - コマンドを実行する前に確かめる (`a` で以後は聞かない)。ファイルは作業フォルダの外には触れない
 - 外へ出る通信は、準備のときの取得 (llama.cpp・モデル・Python) だけ。頼みごと・コード・結果は外に出ない
 - 記録: `<置き場所>\logs\llama-server.log`
+
+## 取り除く (原状回復)
+
+`LocalCoderUninstall.exe` を実行すると、消すものを一覧で見せ、確かめてから消し、最後に「残っていないか」を確かめる。
+
+| 消すもの | どうやって |
+|---|---|
+| 動いている llama.cpp・LocalCoder・作ったプログラム | 止める |
+| 置き場所に入れた Python (「設定 → アプリ」の一覧に載っているもの) | Python 自身の取り除き方 (`/uninstall`) で。登録・部品の記録ごと消える。置き場所の中の Python だと確かめたときだけ (もとからある Python には触れない) |
+| 置き場所の中のモデル・llama.cpp・記録・キャッシュ | 消す。置き場所のフォルダは空になったときだけ消す (もともとあったファイルには触れない) |
+| 設定 (`%LOCALAPPDATA%\LocalCoder`) | 消す |
+| pip / PyInstaller のキャッシュ | 初回に取った「入れる前の姿」の記録を見て、入れる前に無かったものだけ消す |
+| Windows に残る使用の記録 (アプリ名・互換性の記録など) | 置き場所と LocalCoder.exe のものだけ消す |
+| 作業フォルダ (作ったプログラム)・ダウンロードした LocalCoder.exe | 尋ねる (作業フォルダの既定は「残す」) |
+
+```
+LocalCoderUninstall.exe --dry-run      見るだけ
+LocalCoderUninstall.exe --yes          確かめずに消す (確かなものだけ。作業フォルダは残す)
+LocalCoderUninstall.exe --yes --all    作業フォルダ・LocalCoder.exe も消す
+LocalCoderUninstall.exe --home D:\LocalCoder   設定が消えていても、その置き場所を片付ける
+```
+消去ツール自身は最後にごみ箱へ入れる。`/cd` で置き場所の外に作った作業フォルダには触れない。
 
 ## 正直なところ
 
@@ -57,7 +80,9 @@ LocalCoder.exe --task "…" --yes     1 つの頼みをやり切って終わる
 ```
 pip install pyinstaller
 pyinstaller --onefile --console --name LocalCoder LocalCoder.py
+pyinstaller --onefile --console --name LocalCoderUninstall LocalCoderUninstall.py
 python -m unittest discover -s tests
 ```
 GitHub Actions ("Build LocalCoder.exe") が exe を作り、実物の llama.cpp (CPU 版) と小さなモデルで
-「日本語で頼む → ファイルができる」までと、`.exe` にする道具が動くことを確かめる。
+「日本語で頼む → ファイルができる」までと、`.exe` にする道具が動くこと、そのあと取り除いて
+置き場所・設定・Python の登録が残っていないこと (2 回目は「もう何もありません」) を確かめる。

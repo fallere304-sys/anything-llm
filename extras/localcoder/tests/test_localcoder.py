@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from localcoder import cli, models, server  # noqa: E402
+from localcoder import cli, models, server, uninstall  # noqa: E402
 from localcoder.agent import Agent, Client, rescue_calls  # noqa: E402
 from localcoder.tools import ToolError, Tools  # noqa: E402
 
@@ -355,6 +355,160 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(cfg["home"], os.path.join(d, "LocalCoder"))
         self.assertEqual(cfg["model_key"], "tiny")
         self.assertEqual(cli.load(cfg_path)["model_key"], "tiny")
+
+
+class FakeRegistry:
+    def __init__(self):
+        self.keys = {}                     # パス → {名前: 値}
+
+    def subkeys(self, path):
+        pre = path + "\\"
+        return sorted({k[len(pre):].split("\\")[0] for k in self.keys if k.startswith(pre)})
+
+    def values(self, path):
+        return list(self.keys.get(path, {}))
+
+    def get(self, path, name=""):
+        return self.keys.get(path, {}).get(name)
+
+    def delete_value(self, path, name):
+        del self.keys[path][name]
+
+    def delete_tree(self, path):
+        for k in [k for k in self.keys if k == path or k.startswith(path + "\\")]:
+            del self.keys[k]
+
+
+class FakeSystem:
+    windows = False
+
+    def __init__(self, reg):
+        self.registry, self.ran, self.procs = reg, [], []
+
+    def run(self, cmd, timeout=300):
+        self.ran.append(cmd)
+        if cmd[1:] == ["/uninstall", "/quiet"]:          # Python の取り除き: 登録が消える
+            self.registry.delete_tree(uninstall.PY_CORE)
+            self.registry.delete_tree(uninstall.UNINSTALL + "\\{py}")
+        return 0, ""
+
+    def processes(self):
+        return list(self.procs)
+
+    def kill(self, pid):
+        self.procs = [p for p in self.procs if p[0] != pid]
+
+    def drives(self):
+        return []
+
+
+class UninstallTest(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        la = os.path.join(self.d, "la")
+        self.env = {"LOCALAPPDATA": la, "APPDATA": os.path.join(self.d, "roaming"), "TEMP": os.path.join(self.d, "t")}
+        self.home = os.path.join(self.d, "D", "LocalCoder")
+        for sub in ("llama/cpu", "models/x", "python", "logs", "downloads", "cache/pip", "workspace/default"):
+            os.makedirs(os.path.join(self.home, sub))
+        open(os.path.join(self.home, "workspace", "default", "tool.py"), "w").close()
+        self.pip = os.path.join(la, "pip", "Cache")
+        self.pyi = os.path.join(la, "pyinstaller")
+        os.makedirs(self.pip)
+        os.makedirs(self.pyi)
+        os.makedirs(self.env["TEMP"])
+        self.log = os.path.join(self.env["TEMP"], f"Python {uninstall.PY_VERSION} (64-bit)_20260929.log")
+        open(self.log, "w").close()
+        self.exe = os.path.join(self.d, "Downloads", "LocalCoder.exe")
+        os.makedirs(os.path.dirname(self.exe))
+        open(self.exe, "w").close()
+        bundle = os.path.join(self.d, "pkgcache", "python-3.12.10-amd64.exe")
+        os.makedirs(os.path.dirname(bundle))
+        open(bundle, "w").close()
+        self.reg = FakeRegistry()
+        self.reg.keys[uninstall.PY_CORE + "\\InstallPath"] = {"": os.path.join(self.home, "python") + os.sep}
+        self.reg.keys[uninstall.UNINSTALL + "\\{py}"] = {"DisplayName": f"Python {uninstall.PY_VERSION} (64-bit)",
+                                                         "BundleCachePath": bundle}
+        self.reg.keys[uninstall.MUICACHE] = {os.path.join(self.home, "llama", "cpu", "llama-server.exe"): "x",
+                                             self.exe + ".FriendlyAppName": "LocalCoder",
+                                             r"C:\Windows\notepad.exe": "Notepad"}
+        self.config = uninstall.default_config(self.env)
+        os.makedirs(os.path.dirname(self.config))
+        with open(self.config, "w", encoding="utf-8") as f:
+            json.dump({"home": self.home, "homes": [self.home], "launched_from": [self.exe],
+                       "before": {"pip_cache": True, "pyinstaller": False, "user_site": False, "ts": 0}}, f)
+        self.sys = FakeSystem(self.reg)
+        self.lines = []
+
+    def un(self, **kw):
+        return uninstall.Uninstaller(env=self.env, system=self.sys, out=self.lines.append, sleep=lambda s: None, **kw)
+
+    def test_removes_what_it_brought_and_keeps_the_rest(self):
+        self.sys.procs = [(11, os.path.join(self.home, "llama", "cpu", "llama-server.exe")), (12, r"C:\x\other.exe")]
+        self.assertEqual(self.un().run(yes=True), 0, "\n".join(self.lines))
+        self.assertEqual([p for p, _ in self.sys.procs], [12])
+        self.assertIn(["/uninstall", "/quiet"], [c[1:] for c in self.sys.ran])        # Python 自身の取り除き方で
+        self.assertIsNone(self.reg.get(uninstall.PY_CORE + "\\InstallPath"))
+        for sub in uninstall.OWNED:
+            self.assertFalse(os.path.exists(os.path.join(self.home, sub)), sub)
+        self.assertTrue(os.path.exists(os.path.join(self.home, "workspace", "default", "tool.py")))  # 作ったものは残す
+        self.assertFalse(os.path.exists(self.config))
+        self.assertFalse(os.path.exists(os.path.dirname(self.config)))
+        self.assertTrue(os.path.exists(self.pip))              # 入れる前からあった
+        self.assertFalse(os.path.exists(self.pyi))             # 入れる前は無かった
+        self.assertFalse(os.path.exists(self.log))
+        self.assertEqual(list(self.reg.values(uninstall.MUICACHE)), [r"C:\Windows\notepad.exe"])
+        self.assertTrue(os.path.exists(self.exe))              # 分からないもの: --all のときだけ
+        self.assertTrue(any("残す: pip のキャッシュ" in x for x in self.lines))
+
+    def test_all_removes_workspace_exe_and_the_empty_folder(self):
+        self.assertEqual(self.un().run(yes=True, include_unsure=True), 0, "\n".join(self.lines))
+        self.assertFalse(os.path.exists(self.home))
+        self.assertFalse(os.path.exists(self.exe))
+        self.assertTrue(os.path.exists(self.pip))
+        again = []
+        un = uninstall.Uninstaller(env=self.env, homes=[self.home], system=self.sys, out=again.append)
+        self.assertEqual(un.run(yes=True), 0)
+        self.assertIn("もう何もありません", again[-1])
+
+    def test_folder_that_was_already_there_is_kept(self):
+        mine = os.path.join(self.home, "memo.txt")
+        open(mine, "w").close()
+        self.un().run(yes=True, include_unsure=True)
+        self.assertTrue(os.path.exists(mine))
+        self.assertFalse(os.path.exists(os.path.join(self.home, "models")))
+
+    def test_python_installed_elsewhere_is_not_touched(self):
+        self.reg.keys[uninstall.PY_CORE + "\\InstallPath"] = {"": r"C:\Users\me\Python312"}
+        self.un().run(yes=True)
+        self.assertEqual(self.sys.ran, [])
+        self.assertIsNotNone(self.reg.get(uninstall.PY_CORE + "\\InstallPath"))
+
+    def test_dry_run_and_decline_change_nothing(self):
+        self.assertEqual(self.un().run(dry=True), 0)
+        self.assertEqual(self.un().run(ask=lambda q, d: False), 1)
+        self.assertTrue(os.path.exists(os.path.join(self.home, "models")))
+        self.assertTrue(os.path.exists(self.config))
+        self.assertEqual(self.sys.ran, [])
+
+    def test_without_a_ledger_shared_caches_are_asked(self):
+        with open(self.config, "w", encoding="utf-8") as f:
+            json.dump({"home": self.home}, f)
+        self.un().run(yes=True)
+        self.assertTrue(os.path.exists(self.pip) and os.path.exists(self.pyi))
+        self.assertFalse(os.path.exists(os.path.join(self.home, "models")))
+
+    def test_snapshot_and_cli_passthrough(self):
+        snap = uninstall.snapshot(self.env)
+        self.assertTrue(snap["pip_cache"])
+        self.assertFalse(snap["user_site"])
+        seen = []
+        orig = uninstall.main
+        uninstall.main = lambda argv: seen.append(argv) or 7
+        try:
+            self.assertEqual(cli.main(["--uninstall", "--dry-run"]), 7)
+        finally:
+            uninstall.main = orig
+        self.assertEqual(seen, [["--dry-run"]])
 
 
 if __name__ == "__main__":

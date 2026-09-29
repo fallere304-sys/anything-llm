@@ -49,7 +49,7 @@ def ensure(home, say=print, run=subprocess.run):
     if r.returncode != 0:
         say("PyInstaller を入れます")
         run([exe, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location",
-             "pyinstaller"], capture_output=True)
+             "pyinstaller"], capture_output=True, env=env(home))
     return exe
 
 
@@ -61,5 +61,8 @@ def env(home, base=None):
         d = os.path.dirname(exe)
         e["PATH"] = os.pathsep.join([d, os.path.join(d, "Scripts"), e.get("PATH", "")])
     e["PYTHONIOENCODING"] = "utf-8"
+    # キャッシュは置き場所の中に (PC の共用の場所に残さない。取り除くとき一緒に消える)
+    e["PIP_CACHE_DIR"] = os.path.join(home, "cache", "pip")
+    e["PYINSTALLER_CONFIG_DIR"] = os.path.join(home, "cache", "pyinstaller")
     e["PYTHONUTF8"] = "1"
     return e

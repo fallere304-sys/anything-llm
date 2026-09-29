@@ -34,6 +34,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip pyinstaller
           pyinstaller --noconfirm --clean --onefile --console --name LocalCoder LocalCoder.py
+          pyinstaller --noconfirm --clean --onefile --console --name LocalCoderUninstall LocalCoderUninstall.py
 
       - name: "End to end: real llama.cpp (CPU) + small model, one Japanese request"
         env:
@@ -41,10 +42,13 @@ jobs:
         run: |
           $h = "$env:RUNNER_TEMP\lc"
           $ws = "$env:RUNNER_TEMP\ws"
+          # 利用者と同じく、ダウンロードした場所から動かす (取り除くときに、この写しも消えることを確かめる)
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\app" | Out-Null
+          Copy-Item dist\LocalCoder.exe "$env:RUNNER_TEMP\app\LocalCoder.exe"
           $a = @("--home", $h, "--config", "$env:RUNNER_TEMP\lc.json", "--model", "small", "--kinds", "cpu",
                  "--no-toolchain", "--ctx", "8192", "--workspace", $ws, "--yes",
                  "--task", "hello.txt というファイルを作って、中身を「こんにちは」の 1 行にしてください。")
-          & dist\LocalCoder.exe @a 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\e2e.txt"
+          & "$env:RUNNER_TEMP\app\LocalCoder.exe" @a 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\e2e.txt"
           $code = $LASTEXITCODE
           Get-Content "$env:RUNNER_TEMP\e2e.txt"
           if (Test-Path "$h\logs\llama-server.log") { Get-Content "$h\logs\llama-server.log" -Tail 20 }
@@ -66,8 +70,40 @@ jobs:
           if ($out -ne "hi from exe") { throw "built exe printed: $out" }
           & $py -c "import tkinter; print('tkinter ok')"
 
+      - name: "Uninstall: back to the state before LocalCoder"
+        run: |
+          $h = "$env:RUNNER_TEMP\lc"
+          $cfg = "$env:RUNNER_TEMP\lc.json"
+          $core = "HKCU:\Software\Python\PythonCore\3.12\InstallPath"
+          Get-Content $cfg
+          if (-not (Test-Path $core)) { throw "Python was not registered (nothing to uninstall)" }
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\un" | Out-Null
+          Copy-Item dist\LocalCoderUninstall.exe "$env:RUNNER_TEMP\un\"
+          & "$env:RUNNER_TEMP\un\LocalCoderUninstall.exe" --config $cfg --dry-run 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\un1.txt"
+          Get-Content "$env:RUNNER_TEMP\un1.txt"
+          if (-not (Test-Path "$h\models")) { throw "--dry-run removed something" }
+          & "$env:RUNNER_TEMP\un\LocalCoderUninstall.exe" --config $cfg --yes --all 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\un2.txt"
+          $code = $LASTEXITCODE
+          Get-Content "$env:RUNNER_TEMP\un2.txt"
+          if ($code -ne 0) { throw "uninstall failed ($code)" }
+          if (Test-Path $h) { Get-ChildItem -Recurse $h | Select-Object -First 20; throw "the folder is still there" }
+          if (Test-Path $cfg) { throw "config is still there" }
+          if (Test-Path "$env:RUNNER_TEMP\app\LocalCoder.exe") { throw "LocalCoder.exe is still there" }
+          if (Test-Path $core) { throw "Python is still registered: $((Get-ItemProperty $core).'(default)')" }
+          $left = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" |
+            Where-Object { $_.GetValue("DisplayName") -like "Python 3.12.10*" }
+          $left | ForEach-Object { "left: $($_.GetValue('DisplayName'))" }
+          if ($left) { throw "Python is still in the Apps list" }
+          python --version                     # もとからあった Python は無事
+          & "$env:RUNNER_TEMP\un\LocalCoderUninstall.exe" --home $h --yes 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\un3.txt"
+          Get-Content "$env:RUNNER_TEMP\un3.txt"
+          if (-not (Select-String -Path "$env:RUNNER_TEMP\un3.txt" -Pattern "もう何もありません" -Quiet)) { throw "second run found leftovers" }
+          exit 0
+
       - uses: actions/upload-artifact@v4
         with:
           name: LocalCoder-windows
-          path: extras/localcoder/dist/LocalCoder.exe
+          path: |
+            extras/localcoder/dist/LocalCoder.exe
+            extras/localcoder/dist/LocalCoderUninstall.exe
           retention-days: 30
