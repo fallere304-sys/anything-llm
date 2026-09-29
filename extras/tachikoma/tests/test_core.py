@@ -164,7 +164,9 @@ class LoopTest(unittest.TestCase):
         self.assertIn("5433", llm.calls[-1][1])   # 判定に実際のファイル内容が渡っている
 
         # 3) 発話: 確認できた発見を伝える
-        self.assertTrue(any("確かめた" in o and "設定ファイル" in o for o in out))
+        self.assertTrue(any("調べたら" in o and "設定ファイル" in o for o in out), out)
+        said = [o for o in out if "調べたら" in o]
+        self.assertFalse(any(k in o for o in said for k in ("推定]", "事実]", "5433")))   # 確度ラベルや判定の理由文は読み上げない
 
     def test_hallucinated_observation_is_downgraded(self):
         agent, llm, sensor, mem, clock, out = make_agent(self.tmp)

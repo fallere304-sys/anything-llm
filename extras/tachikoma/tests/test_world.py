@@ -415,7 +415,9 @@ class PeripheralTest(unittest.TestCase):
         agent.perceive("window", "window_title", "天気予報 - ブラウザ")
         pend = mem.pending_events()
         self.assertEqual(pend[0]["source"], "terminal")         # 優先度: 役立ちそうな出どころが先
-        llm.appraise.append({"situation": "", "claims": [{"statement": "ユーザーは週末の天気を気にしている",
+        llm.appraise.append({"situation": "", "claims": [{"statement": "週末は天気が崩れる予報が出ている",
+                                                          "basis": "guessed"},
+                                                         {"statement": "ユーザーは週末の天気を気にしている",
                                                           "basis": "guessed"}],
                              "remark": "", "remark_importance": "none"})
         agent.appraise_next()

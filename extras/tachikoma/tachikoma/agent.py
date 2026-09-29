@@ -58,6 +58,19 @@ BASIS_PRIOR = {"observed": (0.95, "observation"), "inferred": (0.65, "reflection
                "guessed": (0.5, "reflection")}
 
 SITUATION_HALF_LIFE = 2 * 3600
+# 相棒 (ユーザー) についての文: 心・意図・行動は推し量るもので、調べて確かめるものではない
+_PARTNER = re.compile(r"^(この|その|現在の|今の)?(ユーザー|ユーザ|相棒|利用者|キミ|きみ|君|あなた|作業者|持ち主|user)", re.I)
+
+
+def finding_text(statement, label, promised=False):
+    """調べてわかったことを、一言で自然に言う (判定の理由文や確度ラベルは読み上げない)。"""
+    s = clip(statement.rstrip("。．. "), 70)
+    head = "さっき気になってた" if promised else "ひとつわかったよ。"
+    if label == FACT:
+        return f"{head}「{s}」、調べたら本当だったよ。"
+    if label == INFERENCE:
+        return f"{head}「{s}」、調べたら、たぶんそうみたい。"
+    return f"{head}「{s}」、調べたら違ったみたい。"
 
 
 class Tachikoma:
@@ -324,29 +337,33 @@ class Tachikoma:
                                 schema=prompts.INQUIRY_SCHEMA, max_tokens=300)
         except LLMError:
             return ""
-        doubtful, unknown = [], []
-        for pr in (res.get("premises") or [])[:3]:
-            st = (pr.get("statement") or "").strip()
-            if st and pr.get("doubtful"):
-                self._hypothesis(st, 0.5, relevance=1.0, basis="premise")
-                doubtful.append(st)
+        # 相棒の発言そのもの (前提) は検証しない。世の中の事実で知らないことだけを、調べる約束にする
+        unknown = []
         for u in (res.get("unknowns") or [])[:3]:
             u = (u or "").strip()
-            if u:
-                bid = self._hypothesis(u, 0.5, relevance=1.0, basis="unknown")
+            bid = self._hypothesis(u, 0.5, relevance=1.0, basis="unknown") if u else None
+            if bid is not None:
                 self.memory.set_flag(bid, "promised")
                 unknown.append(u)
-        if not doubtful and not unknown:
+        if not unknown:
             return ""
         lines = ["\n\n# 返事の前の点検"]
-        if doubtful:
-            lines.append("- 怪しい前提 (まずここを確かめたいと伝える): " + " / ".join(doubtful))
         if unknown:
             lines.append("- ボクがまだ知らないこと (知ったかぶりせず、調べると約束する): " + " / ".join(unknown))
         return "\n".join(lines)
 
+    def about_partner(self, statement):
+        """相棒 (ユーザー) の心・意図・行動についての文か。"""
+        name = (self.cfg.get("user_name") or "").strip()
+        head = (statement or "").strip()[:14]
+        return bool(_PARTNER.match(head) or (name and head.startswith(name)))
+
     def _hypothesis(self, statement, p, relevance, basis, origin=""):
-        """新しい仮説を記憶し、予測として記録する (後で当たり外れを較正に使う)。"""
+        """新しい仮説を記憶し、予測として記録する (後で当たり外れを較正に使う)。
+
+        相棒についての推測は仮説にしない (返り値 None)。相手の考えは会話の中で推し量るもので、検証するものではない。"""
+        if self.about_partner(statement):
+            return None
         p = shrink_p(p, self.calib.shrink(self.cfg.get("persona_skepticism", 0.6)))
         bid = self.memory.add_belief(statement, p, "reflection", relevance=relevance,
                                      half_life=SITUATION_HALF_LIFE * 12, origin=origin)
@@ -374,9 +391,9 @@ class Tachikoma:
                             schema=prompts.WONDER_SCHEMA, max_tokens=200, temperature=0.8)
         made = 0
         for h in (res.get("hypotheses") or [])[:2]:
-            if (h or "").strip():
-                self._hypothesis(h.strip(), 0.5, relevance=0.6, basis="wonder",
-                                 origin=(seed.origin if seed is not None else known[0].origin) or "")
+            if (h or "").strip() and self._hypothesis(
+                    h.strip(), 0.5, relevance=0.6, basis="wonder",
+                    origin=(seed.origin if seed is not None else known[0].origin) or "") is not None:
                 made += 1
         if made:
             self.selfm.bump("questions", made)
@@ -512,6 +529,8 @@ class Tachikoma:
             if not st:
                 continue
             p, source = BASIS_PRIOR.get(c.get("basis"), BASIS_PRIOR["guessed"])
+            if source == "reflection" and self.about_partner(st):
+                continue        # 相棒の心や行動の推測は、会話で自然にわかること。調べて確かめる対象にしない
             if source == "reflection":
                 # 確信過剰が続いていたら、推論だけの初期確信を 0.5 側に縮める (自分を疑う)
                 p = shrink_p(p, self.calib.shrink(self.cfg.get("persona_skepticism", 0.6)))
@@ -678,14 +697,10 @@ class Tachikoma:
         if nb.promised and after in (FACT, INFERENCE, REFUTED) and after != before:
             # 知らないと言ったことを、知にした → 自分から報告する
             self.memory.set_flag(nb.id, "promised", 0)
-            self.memory.add_utterance(
-                "finding", f"ねえねえ、さっきわからなかった「{clip(nb.statement, 60)}」、調べたよ！ → [{after}] "
-                           f"{verdict.get('reason', '')}".strip(), 0.9, nb.id)
+            self.memory.add_utterance("finding", finding_text(nb.statement, after, promised=True), 0.9, nb.id)
             return nb
-        if before == SPECULATION and after in (FACT, INFERENCE, REFUTED):
-            self.memory.add_utterance(
-                "finding", f"確かめた: {nb.statement} → [{after}] {verdict.get('reason', '')}".strip(),
-                0.35 + 0.5 * nb.relevance, nb.id)
+        if before == SPECULATION and after in (FACT, INFERENCE, REFUTED) and not self.about_partner(nb.statement):
+            self.memory.add_utterance("finding", finding_text(nb.statement, after), 0.35 + 0.5 * nb.relevance, nb.id)
         else:
             self._maybe_give_up(nb)
         return nb

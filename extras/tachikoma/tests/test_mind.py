@@ -63,13 +63,16 @@ class MindAgentTest(unittest.TestCase):
         agent, llm, sensor, mem, clock, out = make_agent(self.tmp)
         sensor.name = "user"
         llm.inquiry.append({"premises": [{"statement": "量子コンピュータはすでに暗号を全部破れる", "doubtful": True}],
-                            "unknowns": ["RSA-2048 は量子計算機でまだ破られていない"], "answerable": False})
+                            "unknowns": ["RSA-2048 は量子計算機でまだ破られていない", "ユーザーの意図"],
+                            "answerable": False})
         llm.appraise.append({"situation": "", "claims": [], "remark": "", "remark_importance": "none"})
         sensor.queue = [("user_message", "量子コンピュータで暗号が全部破れる今、どうする?")]
         agent.step()
         reply_prompt = llm.calls[-1][1] if "点検" in llm.calls[-1][1] else [c[1] for c in llm.calls if "点検" in c[1]][0]
-        self.assertIn("怪しい前提", reply_prompt)
+        self.assertNotIn("怪しい前提", reply_prompt)       # 相棒の発言そのものは検証しない
+        self.assertNotIn("ユーザーの意図", reply_prompt)   # 相棒の心は調べものにしない
         self.assertIn("まだ知らないこと", reply_prompt)
+        self.assertFalse([b for b in mem.beliefs() if "全部破れる" in b.statement])
         unknown = [b for b in mem.beliefs() if "RSA" in b.statement][0]
         self.assertEqual(unknown.promised, 1)
 
@@ -79,17 +82,11 @@ class MindAgentTest(unittest.TestCase):
                 return [Evidence("Quantum resource estimates for RSA-2048", "estimates...", "https://doi.org/x",
                                  2025, "peer_reviewed", 50)]
         agent.probes.scholar = FakeScholar()
-        # 1回目: 怪しい前提を調べる → 反証 / 2回目: 知らなかったことを調べる → 支持
-        for q in ("quantum computer break all encryption", "RSA-2048 quantum resource estimate"):
-            llm.plan.append({"probe": "research", "query": q})
-        llm.judge += [{"verdict": "contradicts", "reason": "全部は破れない"},
-                      {"verdict": "supports", "reason": "まだ必要な量子ビット数に届いていない"}]
-        for _ in range(2):
-            clock.t += 2
-            agent.step()
-        premise = [b for b in mem.beliefs() if "全部破れる" in b.statement][0]
-        self.assertLess(premise.p, 0.3)                 # 前提を疑って、確かめて、崩した
-        self.assertTrue(any("さっきわからなかった" in o and "調べたよ" in o for o in out), out)
+        llm.plan.append({"probe": "research", "query": "RSA-2048 quantum resource estimate"})
+        llm.judge.append({"verdict": "supports", "reason": "まだ必要な量子ビット数に届いていない"})
+        clock.t += 2
+        agent.step()
+        self.assertTrue(any("さっき気になってた" in o and "調べたら" in o for o in out), out)
 
     def test_research_evidence_strength_unlocks_causal_claims(self):
         agent, llm, sensor, mem, clock, out = make_agent(self.tmp)
@@ -128,18 +125,19 @@ class MindAgentTest(unittest.TestCase):
 
     def test_wonder_creates_questions(self):
         agent, llm, sensor, mem, clock, out = make_agent(self.tmp)
-        mem.add_belief("ユーザーは毎晩2時に寝ている", 0.95, "user")
-        llm.wonder.append({"hypotheses": ["ユーザーの寝る時間が遅いのは仕事が夜型だからだ"]})
+        mem.add_belief("東京の夏は年々暑くなっている", 0.95, "research")
+        llm.wonder.append({"hypotheses": ["東京の夏が暑いのは街が夜型だからだ", "ユーザーは暑がりだ"]})
         clock.t += agent.cfg["wonder_interval_s"] + 1
         agent.wonder()
         q = [b for b in mem.beliefs() if "夜型" in b.statement]
         self.assertEqual(len(q), 1)
+        self.assertFalse([b for b in mem.beliefs() if "暑がり" in b.statement])      # 相棒についての仮説は作らない
         self.assertEqual(q[0].claim_type, "causal")
         self.assertEqual(agent.selfm.get("counters")["questions"], 1)
 
     def test_diary_and_self(self):
         agent, llm, sensor, mem, clock, out = make_agent(self.tmp)
-        bid = agent._hypothesis("ユーザーは猫を飼っている", 0.8, 1.0, "guessed")
+        bid = agent._hypothesis("猫は一日に20時間以上眠る", 0.8, 1.0, "guessed")
         agent.calib.resolve(bid, 0)
         agent.selfm.learned("量子コンピュータの誤り訂正", 0.9)
         agent.write_diary()

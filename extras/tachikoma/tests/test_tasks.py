@@ -123,3 +123,32 @@ class ReadingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PartnerIsNotAHypothesisTest(unittest.TestCase):
+    """相棒の心や行動は推し量るもので、調べて確かめたり報告したりしない。"""
+
+    def setUp(self):
+        self.agent, self.llm, _, self.mem, _, _ = make_agent(tempfile.mkdtemp())
+
+    def test_no_hypotheses_about_the_partner(self):
+        for st in ("ユーザーはTachikoma.exeのウィンドウを背景として認識している。",
+                   "ユーザーは現在、何らかの文書やウェブページを復元している。", "相棒は疲れている"):
+            self.assertIsNone(self.agent._hypothesis(st, 0.5, relevance=1.0, basis="guessed"), st)
+        self.assertIsNotNone(self.agent._hypothesis("札幌で停電が起きている", 0.5, relevance=1.0, basis="guessed"))
+        self.assertIsNone(self.agent.inquiry.open("ユーザーの意図は何か", "seed", "screen/window", 1.0))
+
+    def test_premises_of_the_partner_are_not_checked(self):
+        from tachikoma import prompts  # noqa: F401
+        self.llm.inquiry.append({"premises": [{"statement": "ユーザーはブログを読んでいる", "doubtful": True}],
+                                 "unknowns": ["ユーザーの意図"], "answerable": False})
+        self.assertEqual(self.agent.inquire("ブログってどう思う？"), "")
+        self.assertEqual([b.statement for b in self.mem.beliefs()], [])
+
+    def test_findings_are_one_natural_sentence(self):
+        from tachikoma.agent import finding_text
+        from tachikoma.memory import FACT, REFUTED
+        self.assertEqual(finding_text("札幌の停電は復旧した。", FACT, promised=True),
+                         "さっき気になってた「札幌の停電は復旧した」、調べたら本当だったよ。")
+        self.assertEqual(finding_text("量子コンピュータは既に実用化されている", REFUTED),
+                         "ひとつわかったよ。「量子コンピュータは既に実用化されている」、調べたら違ったみたい。")

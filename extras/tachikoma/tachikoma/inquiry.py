@@ -51,6 +51,8 @@ class Inquiry:
 
     def _link(self, tid, statement, origin):
         bid = self.a._hypothesis(statement, 0.5, relevance=self.a.cfg["dig_relevance"], basis="dig", origin=origin)
+        if bid is None:            # 相棒についての推測は調べない
+            return None
         self.db.execute("INSERT OR IGNORE INTO thread_beliefs(thread_id, belief_id) VALUES (?, ?)", (tid, bid))
         self.db.commit()
         return bid
@@ -59,7 +61,7 @@ class Inquiry:
     def open(self, question, seed, origin, interest):
         """周辺の出来事に問いを立て、探究の糸を始める。糸が多すぎるときは、今ある最も弱い糸より面白い場合だけ。"""
         question = (question or "").strip()
-        if not question:
+        if not question or self.a.about_partner(question):       # 相棒についての問いは探究しない
             return None
         act = self.active()
         if len(act) >= self.a.cfg["dig_max_threads"]:
