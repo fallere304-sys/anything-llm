@@ -5,7 +5,7 @@
 - 画像は利用者が ui/assets/ に置く (tachikoma.png、表情別に tachikoma_happy.png など)。
   置かれていなければ同梱の仮アバター (オリジナルの簡単なロボット) を使う
 - 会話はこの画面からも打てる。音声会話と同じ流れで扱う
-- カメラとマイクのスイッチ (kernel/switches.py)。画面は「切り替えて」と頼むだけで、切り替えは本体のループで行う
+- カメラとマイクのスイッチ (kernel/switches.py)。頼まれたその場で切り替え、結果を返す
 - 「画像を変える」で選んだ画像は、画面 (ブラウザ) の中で背景を抜いてから ui/assets/tachikoma.png に保存する。
   この PC の中だけで扱い、外には出さない
 
@@ -36,7 +36,6 @@ class UIServer:
         self.static = static_dir
         self.assets = os.path.abspath(cfg["ui_assets_dir"])
         self.inbox = queue.Queue()
-        self.commands = queue.Queue()      # 画面からの頼みごと (スイッチ)。本体のループが処理する
         self.switches = None
         self.clients = []
         self.lock = threading.Lock()
@@ -148,8 +147,11 @@ class UIServer:
                     name, on = body.get("name"), body.get("on")
                     if name not in ("camera", "mic") or not isinstance(on, bool):
                         return self._send(400, b"bad request")
-                    ui.commands.put(("switch", name, on))
-                    return self._send(202)
+                    if ui.switches is None:
+                        return self._send(503, b"not ready")
+                    msg = ui.switches.set(name, on)
+                    out = dict(ui.switches.state(), message=msg)
+                    return self._send(200, json.dumps(out, ensure_ascii=False).encode(), "application/json")
                 text = str(body.get("text", "")).strip()[:2000]
                 if text:
                     ui.inbox.put(text)
@@ -189,17 +191,15 @@ class UIServer:
 
 
 class UISensor:
-    """画面から打たれた言葉を、話しかけとして渡す。スイッチの頼みごともここ (本体のループ) で処理する。"""
+    """画面から打たれた言葉を、話しかけとして渡す。選んだスイッチの状態を覚えるのもここ (本体のループ)。"""
     name = "user"
 
     def __init__(self, ui):
         self.ui = ui
 
     def poll(self):
-        while not self.ui.commands.empty():
-            kind, name, on = self.ui.commands.get_nowait()
-            if kind == "switch" and self.ui.switches is not None:
-                self.ui.switches.set(name, on)
+        if self.ui.switches is not None:
+            self.ui.switches.flush()
         out = []
         while not self.ui.inbox.empty():
             out.append(("user_message", self.ui.inbox.get_nowait()))

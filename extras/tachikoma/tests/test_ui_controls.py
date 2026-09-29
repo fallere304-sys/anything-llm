@@ -29,6 +29,7 @@ class SwitchesTest(unittest.TestCase):
         sw.register("camera", "カメラ", lambda: calls.append("on"), lambda: calls.append("off"), on=True)
         self.assertTrue(sw.is_on("camera"))
         sw.set("camera", False)
+        sw.flush()
         self.assertEqual((calls, store["switch_camera"], sw.is_on("camera")), (["off"], False, False))
         self.assertFalse(Switches(store=store).wanted("camera", True))         # 次の起動でも切ったまま
         sw.set("camera", True)
@@ -75,21 +76,29 @@ class ServerTest(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code
 
-    def test_switch_is_done_by_the_main_loop(self):
-        calls = []
-        sw = Switches(log=lambda m: None)
+    def test_switch_happens_at_once_even_while_the_main_loop_is_busy(self):
+        # CPU で考え込んでいると本体のループは数分回らない。それでもスイッチはその場で切り替わる
+        calls, store = [], Store()
+        sw = Switches(store=store, log=lambda m: None)
         sw.register("camera", "カメラ", lambda: calls.append("on"), lambda: calls.append("off"), on=True)
         self.ui.switches = sw
-        self.assertEqual(self.post("/switch", json.dumps({"name": "camera", "on": False}).encode()), 202)
-        self.assertEqual(calls, [])                                     # 画面は頼むだけ
-        UISensor(self.ui).poll()                                        # 本体のループで切り替える
-        self.assertEqual(calls, ["off"])
+        req = urllib.request.Request(self.url + "/switch", data=json.dumps({"name": "camera", "on": False}).encode(),
+                                     headers={"Content-Type": "application/json", "X-Tachikoma": "1"}, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            out = json.loads(r.read().decode("utf-8"))
+        self.assertEqual(calls, ["off"])                                # 本体のループを待たない
+        self.assertFalse(out["devices"]["camera"]["on"])
+        self.assertIn("切った", out["message"])
+        self.assertEqual(store, {})                                     # 覚えるのは本体のループで (DB を取り合わない)
+        UISensor(self.ui).poll()
+        self.assertEqual(store, {"switch_camera": False})
         self.assertEqual(self.post("/switch", json.dumps({"name": "disk", "on": True}).encode()), 400)
         self.assertEqual(self.post("/switch", json.dumps({"name": "mic", "on": "yes"}).encode()), 400)
         self.assertEqual(self.post("/switch", json.dumps({"name": "camera", "on": True}).encode(),
                                    headers={"X-Tachikoma": "0"}), 403)
         self.assertEqual(self.post("/switch", json.dumps({"name": "camera", "on": True}).encode(),
                                    headers={"Origin": "https://evil.example"}), 403)
+        self.assertEqual(calls, ["off"])
 
     def test_avatar_is_saved_locally_and_can_be_reset(self):
         png = PNG + b"\x00" * 64

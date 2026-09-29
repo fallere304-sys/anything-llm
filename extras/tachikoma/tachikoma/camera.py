@@ -14,6 +14,7 @@
 
 import base64
 import sys
+import threading
 import time
 
 
@@ -24,6 +25,7 @@ class PresenceSensor:
         import cv2
         self.cv2, self.cfg, self.clock = cv2, cfg, clock
         self.cap = None
+        self._lock = threading.Lock()      # スイッチ (画面のスレッド) と読み取り (本体のループ) が取り合わないように
         self._open()
         self._init_detectors()
         self.present = False
@@ -48,16 +50,18 @@ class PresenceSensor:
 
     def pause(self):
         """カメラを手放す (点灯が消える)。切っている間は 1 枚も取らない。"""
-        if self.cap is not None:
-            self.cap.release()
-        self.cap = None
-        self.frame = self._prev = None
-        self.present = False
+        with self._lock:
+            if self.cap is not None:
+                self.cap.release()
+            self.cap = None
+            self.frame = self._prev = None
+            self.present = False
 
     def resume(self):
-        if self.cap is None:
-            self._open()
-            self._next = 0.0
+        with self._lock:
+            if self.cap is None:
+                self._open()
+                self._next = 0.0
 
     def _init_detectors(self):
         cv2 = self.cv2
@@ -99,7 +103,10 @@ class PresenceSensor:
         if self.cap is None or now < self._next:
             return []
         self._next = now + self.cfg["camera_interval_s"]
-        ok, frame = self.cap.read()
+        with self._lock:
+            if self.cap is None:
+                return []
+            ok, frame = self.cap.read()
         if not ok:
             return []
         self.frame = frame

@@ -4,8 +4,10 @@
   切っている間は、映像も音も一切取らない (目の端で眺める・人の出入りの判定・音声認識も止まる)
 - 選んだ状態は記憶 (kv) に残し、次に起動したときもそのままにする
 - 機器を使う部品が入っていないときは、スイッチは押せず、理由を出す
-- 切り替えは本体のループの中で行う (カメラの読み取りと取り合わないように)。画面は頼むだけ
+- 切り替えは頼まれたその場で行う (本体が考え込んでいても待たせない)。カメラの読み取りとは鍵で取り合わない
 """
+
+import threading
 
 KEYS = {"camera": "switch_camera", "mic": "switch_mic"}
 
@@ -16,6 +18,8 @@ class Switches:
         self.log = log
         self.push = push or (lambda state: None)
         self.devices = {}
+        self._lock = threading.Lock()
+        self._pending = {}              # 覚える状態は、本体のループで書く (DB を 2 つのスレッドで触らない)
 
     def wanted(self, name, default):
         """前に相棒が選んだ状態 (無ければ default)。"""
@@ -29,6 +33,10 @@ class Switches:
                               "why": "" if turn_on is not None else why, "turn_on": turn_on, "turn_off": turn_off}
 
     def set(self, name, on):
+        with self._lock:
+            return self._set(name, on)
+
+    def _set(self, name, on):
         d = self.devices.get(name)
         if d is None:
             return f"{name} というスイッチはありません"
@@ -58,11 +66,19 @@ class Switches:
         return msg
 
     def _save(self, name, on):
+        self._pending[name] = bool(on)
+
+    def flush(self):
+        """選んだ状態を記憶に書く (本体のループから呼ぶ)。"""
+        with self._lock:
+            pending, self._pending = self._pending, {}
         if self.store is not None:
-            self.store.set(KEYS.get(name, "switch_" + name), bool(on))
+            for name, on in pending.items():
+                self.store.set(KEYS.get(name, "switch_" + name), on)
 
     def is_on(self, name):
         return bool(self.devices.get(name, {}).get("on"))
 
     def state(self):
-        return {"devices": {n: {k: d[k] for k in ("label", "on", "available", "why")} for n, d in self.devices.items()}}
+        return {"devices": {n: {k: d[k] for k in ("label", "on", "available", "why")}
+                            for n, d in self.devices.items()}}

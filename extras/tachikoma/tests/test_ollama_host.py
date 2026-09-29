@@ -117,3 +117,44 @@ class SupervisorSetupTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ThinkingTest(unittest.TestCase):
+    """思考できるモデル (既定で考え始める) でも、返事が空にならない。"""
+
+    def client(self, replies):
+        from tachikoma import config
+        from tachikoma.llm import OllamaClient
+        c = OllamaClient(config.load(None))
+        sent = []
+
+        def post(body, url=None):
+            sent.append(dict(body))
+            r = replies.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+        c._post = post
+        return c, sent
+
+    def test_thinking_is_off_unless_asked(self):
+        c, sent = self.client([{"message": {"content": "見えてるよ"}}])
+        self.assertEqual(c.chat("sys", "今なにが見える？"), "見えてるよ")
+        self.assertIs(sent[0]["think"], False)
+
+    def test_empty_reply_is_explained(self):
+        c, _ = self.client([{"message": {"content": "", "thinking": "x" * 900}, "done_reason": "length"}])
+        with self.assertRaises(LLMError) as ctx:
+            c.chat("sys", "今なにが見える？", schema={"type": "object"}, max_tokens=150)
+        self.assertIn("返事が空", str(ctx.exception))
+        self.assertIn("900 文字", str(ctx.exception))
+        self.assertIn("length", str(ctx.exception))
+
+    def test_model_without_thinking(self):
+        err = LLMError('HTTP 400: {"error":"\\"gemma\\" does not support thinking"}')
+        c, sent = self.client([err, {"message": {"content": "OK"}}])
+        self.assertEqual(c.chat("sys", "ping"), "OK")
+        self.assertNotIn("think", sent[1])
+        c._post = lambda body, url=None: sent.append(dict(body)) or {"message": {"content": "OK"}}
+        c.chat("sys", "ping")
+        self.assertNotIn("think", sent[-1])                        # 以後は送らない

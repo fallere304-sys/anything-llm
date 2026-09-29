@@ -39,7 +39,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .switch[aria-checked="true"] .sw-state { color: var(--rec); }
 .switch[aria-checked="true"] .sw-state::before { content: "●"; margin-right: 3px; animation: rec 1.6s ease-in-out infinite; }
 .switch[aria-busy="true"] { opacity: .6; cursor: progress; }
-.switch:disabled { cursor: not-allowed; opacity: .55; }
+.switch[aria-disabled="true"] { cursor: help; opacity: .55; }
 .tool { padding: 7px 12px; border-radius: 10px; border: 0; background: var(--accent); color: var(--accent-ink); cursor: pointer; font-size: 14px; }
 .tool.quiet { background: transparent; color: var(--muted); border: 1px solid var(--line); }
 @keyframes rec { 0%,100% { opacity: 1; } 50% { opacity: .35; } }

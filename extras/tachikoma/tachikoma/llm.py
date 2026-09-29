@@ -98,8 +98,10 @@ class OllamaClient:
         }
         if schema is not None:
             body["format"] = schema
-        if think and self._think_supported:
-            body["think"] = True
+        if self._think_supported:
+            # 思考 (thinking) できるモデルは、指定しないと既定で考え始める。見えない思考が出力の上限を使い切ると
+            # 本文が空で返ってくる (返事が空・JSON が空・とても遅い)。頼んだときだけ考えさせる
+            body["think"] = bool(think)
 
         def call():
             try:
@@ -112,7 +114,11 @@ class OllamaClient:
                 raise
 
         data = self.gate.run(call)
-        content = (data.get("message") or {}).get("content", "")
+        msg = data.get("message") or {}
+        content = msg.get("content", "")
+        if not content.strip():
+            raise LLMError(f"返事が空でした (終わった理由: {data.get('done_reason', '?')}、"
+                           f"見えない思考: {len(msg.get('thinking') or '')} 文字、上限: {max_tokens} トークン)")
         if schema is None:
             return content.strip()
         try:

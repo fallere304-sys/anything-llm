@@ -90,7 +90,8 @@
       if (!d) continue;
       el.removeAttribute("aria-busy");
       el.setAttribute("aria-checked", d.on ? "true" : "false");
-      el.disabled = !d.available;
+      el.setAttribute("aria-disabled", d.available ? "false" : "true");
+      el.dataset.why = d.why || "";
       el.title = d.why || (d.on ? `${d.label}を切る (機器を手放します)` : `${d.label}を入れる`);
       el.querySelector(".sw-state").textContent = !d.available ? "使えない" : d.on ? "使用中" : "オフ";
     }
@@ -99,12 +100,16 @@
   }
   for (const el of switches) {
     el.addEventListener("click", () => {
-      if (el.disabled || el.getAttribute("aria-busy") === "true") return;
+      if (el.getAttribute("aria-busy") === "true") return;
+      if (el.getAttribute("aria-disabled") === "true") { note(el.dataset.why || "使えません"); return; }
       const on = el.getAttribute("aria-checked") !== "true";
       el.setAttribute("aria-busy", "true");
+      el.querySelector(".sw-state").textContent = on ? "入れています…" : "切っています…";
+      // 切り替えはその場で行われ、結果が返ってくる (カメラを開くのに数秒かかることがある)
       post("/switch", JSON.stringify({ name: el.dataset.dev, on }), "application/json")
+        .then((r) => r.json())
+        .then((st) => { renderDevices(st.devices); if (st.message) note(st.message); })
         .catch(() => { el.removeAttribute("aria-busy"); note("タチコマ本体に届きませんでした"); });
-      setTimeout(() => el.removeAttribute("aria-busy"), 8000);
     });
   }
   function post(path, body, type) {
