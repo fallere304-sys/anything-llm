@@ -191,7 +191,11 @@ def main(argv=None):
     ap.add_argument("--config", default=CONFIG)
     args = ap.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(errors="replace")
+        # 画面 (コンソール) ならそのまま。ファイルや別のプログラムに渡すときは UTF-8 で書く (日本語が ??? にならない)
+        if sys.stdout.isatty():
+            sys.stdout.reconfigure(errors="replace")
+        else:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     interactive = sys.stdin is not None and sys.stdin.isatty() and not args.task
     cfg = load(args.config)
     if args.home:
@@ -200,6 +204,8 @@ def main(argv=None):
         cfg["toolchain"] = False
     if args.setup or not cfg.get("home") or (args.model_key and args.model_key != cfg.get("model_key")):
         cfg = setup(cfg, interactive, args.model_key)
+    if args.no_toolchain:
+        cfg["toolchain"] = False
     save(cfg, args.config)
     kinds = [k for k in args.kinds.split(",") if k in server.KINDS]
     try:

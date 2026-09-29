@@ -17,14 +17,15 @@ import time
 import urllib.request
 import zipfile
 
-RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30"
 KINDS = ("cuda", "vulkan", "cpu")
+# 名前の付け方が変わっても拾えるよう、ゆるく合わせる (Windows・x64・zip。arm64 は除く)
 ASSETS = {
-    "cuda": re.compile(r"^llama-.*-bin-win-cuda-12[\d.]*-x64\.zip$"),
-    "vulkan": re.compile(r"^llama-.*-bin-win-vulkan-x64\.zip$"),
-    "cpu": re.compile(r"^llama-.*-bin-win-cpu-x64\.zip$"),
+    "cuda": re.compile(r"^(?!cudart).*win.*cuda-?12[\d.]*.*x64.*\.zip$", re.I),
+    "vulkan": re.compile(r"^.*win.*vulkan.*x64.*\.zip$", re.I),
+    "cpu": re.compile(r"^.*win.*cpu.*x64.*\.zip$", re.I),
 }
-CUDART = re.compile(r"^cudart-llama-bin-win-cuda-12[\d.]*-x64\.zip$")
+CUDART = re.compile(r"^cudart.*win.*cuda-?12[\d.]*.*x64.*\.zip$", re.I)
 UA = {"User-Agent": "LocalCoder"}
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -34,10 +35,17 @@ def _get(url, opener=urllib.request.urlopen, timeout=60):
         return r.read()
 
 
-def latest_assets(opener=urllib.request.urlopen):
-    """{名前: URL} と版の名前。"""
-    rel = json.loads(_get(RELEASES, opener))
-    return rel.get("tag_name", ""), {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+def latest_assets(opener=urllib.request.urlopen, kinds=KINDS):
+    """Windows 用の組がそろっている最新の版の {名前: URL} と版の名前 (最新の版に無ければ、少し前の版から探す)。"""
+    releases = json.loads(_get(RELEASES, opener))
+    if isinstance(releases, dict):
+        releases = [releases]
+    for rel in releases:
+        assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+        if any(pick(assets, k) for k in kinds) and pick(assets, "cpu"):
+            return rel.get("tag_name", ""), assets
+    names = [a["name"] for r in releases[:3] for a in r.get("assets", []) if "win" in a["name"].lower()]
+    raise OSError("llama.cpp の Windows 用の組が見つかりません (見つかったもの: " + ", ".join(names[:12]) + ")")
 
 
 def pick(assets, kind):
@@ -78,7 +86,7 @@ def download(url, dst, say=print, opener=urllib.request.urlopen):
 
 def install(home, kinds=KINDS, say=print, opener=urllib.request.urlopen):
     """llama.cpp の組を取ってきて home/llama/<kind>/ に広げる。広げた組の名前のリストを返す。"""
-    tag, assets = latest_assets(opener)
+    tag, assets = latest_assets(opener, kinds)
     say(f"llama.cpp {tag} を用意します")
     ready = []
     for kind in kinds:

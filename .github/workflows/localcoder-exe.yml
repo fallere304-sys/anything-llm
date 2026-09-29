@@ -35,6 +35,11 @@ jobs:
           python -m pip install --upgrade pip pyinstaller
           pyinstaller --noconfirm --clean --onefile --console --name LocalCoder LocalCoder.py
 
+      - name: Show llama.cpp Windows builds in recent releases
+        run: |
+          $r = Invoke-RestMethod "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=3"
+          foreach ($x in $r) { "== $($x.tag_name)"; $x.assets.name | Where-Object { $_ -like "*win*" } }
+
       - name: "End to end: real llama.cpp (CPU) + small model, one Japanese request"
         run: |
           $h = "$env:RUNNER_TEMP\lc"

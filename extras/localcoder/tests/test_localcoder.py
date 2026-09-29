@@ -182,6 +182,17 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(server.pick(assets, "vulkan"), ["llama-b7000-bin-win-vulkan-x64.zip"])
         self.assertEqual(server.pick(assets, "cpu"), ["llama-b7000-bin-win-cpu-x64.zip"])
 
+    def test_finds_windows_builds_in_an_older_release_and_new_names(self):
+        rels = [{"tag_name": "v0.5.0", "assets": [{"name": "llama-v0.5.0-macos-arm64.zip", "browser_download_url": "m"}]},
+                {"tag_name": "b7000", "assets": [
+                    {"name": "llama-b7000-win-cpu-x64.zip", "browser_download_url": "c"},
+                    {"name": "llama-b7000-win-vulkan-x64.zip", "browser_download_url": "v"}]}]
+        tag, assets = server.latest_assets(lambda req, timeout=None: io.BytesIO(json.dumps(rels).encode()))
+        self.assertEqual(tag, "b7000")
+        self.assertEqual(server.pick(assets, "cpu"), ["llama-b7000-win-cpu-x64.zip"])
+        with self.assertRaises(OSError):
+            server.latest_assets(lambda req, timeout=None: io.BytesIO(json.dumps(rels[:1]).encode()))
+
     def test_args(self):
         a = server.server_args("cuda", "m.gguf", 8090, 32768, 4)
         self.assertIn("--cpu-moe", a)
