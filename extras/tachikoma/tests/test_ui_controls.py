@@ -174,3 +174,55 @@ class GuardTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LookWhenAskedTest(unittest.TestCase):
+    """「カメラから何が見える？」と聞かれたら、その場で撮った 1 枚を返事に添える。"""
+
+    def agent(self, camera):
+        sys.path.insert(0, os.path.dirname(__file__))
+        from test_core import make_agent
+        agent, llm, *_ = make_agent(tempfile.mkdtemp())
+        seen = []
+        orig = llm.chat
+
+        def chat(system, user, schema=None, **kw):
+            if schema is None:
+                seen.append((user, kw.get("images")))
+            return orig(system, user, schema=schema, **kw)
+        llm.chat = chat
+        agent.probes.camera = camera
+        return agent, seen
+
+    def test_takes_a_fresh_picture(self):
+        class Cam:
+            paused = False
+
+            def capture_b64(self):
+                return "JPEG"
+        agent, seen = self.agent(Cam())
+        agent.on_user_message("カメラから君が見えている状況を解説して")
+        user, images = seen[-1]
+        self.assertEqual(images, ["JPEG"])
+        self.assertIn("いま自分のカメラに映っているもの", user)
+
+    def test_switched_off_or_missing_camera_is_said_honestly(self):
+        class Off:
+            paused = True
+        agent, seen = self.agent(Off())
+        agent.on_user_message("今なにが見えてる？")
+        self.assertIsNone(seen[-1][1])
+        self.assertIn("スイッチを切っている", seen[-1][0])
+        agent, seen = self.agent(None)
+        agent.on_user_message("目の前に何がある？")
+        self.assertIn("カメラが使えない", seen[-1][0])
+
+    def test_other_talk_does_not_use_the_camera(self):
+        class Cam:
+            paused = False
+
+            def capture_b64(self):
+                raise AssertionError("撮らない")
+        agent, seen = self.agent(Cam())
+        agent.on_user_message("今日の予定を教えて")
+        self.assertIsNone(seen[-1][1])

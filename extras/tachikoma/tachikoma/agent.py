@@ -252,10 +252,11 @@ class Tachikoma:
         shots = "\n".join(x for x in (self.data.examples("knowledge", text),
                                        self.data.examples("chat", text)) if x)
         system = self.selfm.system_prompt(self.cfg, voice=voice, calibration=self.calib.stats())
+        images, eyes = self.eyes_for(text)
         try:
-            reply = self.llm.chat(system, (shots + "\n\n" if shots else "") + user + check,
+            reply = self.llm.chat(system, (shots + "\n\n" if shots else "") + user + check + eyes,
                                   max_tokens=160 if voice else 400,
-                                  temperature=self.cfg.get("chat_temperature", 0.5))
+                                  temperature=self.cfg.get("chat_temperature", 0.5), images=images)
         except LLMError as e:
             self.say(f"(推論に失敗しました: {e})")
             return
@@ -265,6 +266,30 @@ class Tachikoma:
         self.attention.on_self_spoke()      # 続けて呼びかけ語なしで返事できるようにする
         self.memory.add_event("self", "reply", reply, 0.0)
         self.data.remember_chat(system, user, reply)
+
+    def eyes_for(self, text):
+        """見ることを聞かれたら、いまのカメラの 1 枚を撮って返事に添える (画像, プロンプトに足す文)。
+
+        カメラが無い・相棒が切っている・まだ映像が無いときは、そう正直に言えるように事情を添える。"""
+        if not _LOOK.search(text or ""):
+            return None, ""
+        head = "\n\n# 自分の目 (カメラ)\n"
+        cam = getattr(self.probes, "camera", None)
+        if cam is None:
+            return None, head + "いまはカメラが使えない (部品が無いか、つながっていない)。見えていないと短く正直に言う"
+        if getattr(cam, "paused", False):
+            return None, head + ("相棒がカメラのスイッチを切っているので、何も見えない。見えないと短く言い、"
+                                 "見てほしいなら画面のカメラのスイッチを入れてね、と伝える")
+        grab = getattr(cam, "capture_b64", None) or getattr(cam, "snapshot_b64", None)
+        if grab is None:        # 画像を扱えない頭 (Android 版): 端末が文章にしたカメラの様子を添える
+            desc = self.probes.run("look", text)
+            return None, head + (f"{desc}\nこれを見たこととして、具体的に話す" if desc else
+                                 "カメラの映像がまだ取れていない。見えていないと短く正直に言う")
+        img = grab()
+        if img is None:
+            return None, head + "カメラの映像がまだ取れていない。見えていないと短く正直に言う"
+        return [img], head + ("添付の画像が、いま自分のカメラに映っているもの。画像に写っているものだけを、"
+                              "具体的に話す (写っていないものを作らない。人がいれば様子を話すが、誰かは決めつけない)")
 
     def inquire(self, text):
         """答える前の点検: 怪しい前提と、知らないことを洗い出して「調べる対象」にする。
@@ -826,6 +851,8 @@ class Tachikoma:
 # 相棒自身に向き合っている出来事 (目の前)。それ以外 (聞こえてきた話・ニュース・目の端・背後の画面…) が周辺
 FOCAL_KINDS = {"user_message", "unclear_speech", "file_changed", "file_created", "terminal_output",
                "window_focus", "clipboard_copy", "reply", "digest", "diary"}
+# 見ることを聞かれた (カメラの 1 枚を撮って返事に添える)
+_LOOK = re.compile(r"カメラ|見え|見て|映って|映る|写って|目の前|見せて|どう見|何が見|なにが見|景色|周り|まわり(に|の|は)")
 _GOOD = re.compile(r"^(それ)?(正解|合ってる|あってる|その通り|覚えといて|覚えておいて)[。!！]*$")
 _BAD = re.compile(r"^(違う|ちがう)[よね、,。 ]*(正しくは|本当は|ほんとは)[、,: ]*(.+)$")
 

@@ -120,6 +120,20 @@ class PresenceSensor:
             return [("person_left", "カメラから人がいなくなった", {"present": False})]
         return []
 
+    def capture_b64(self):
+        """いまの 1 枚を撮り直して返す (話しかけられて見るとき。溜まった古い映像を捨てるため 2 回読む)。"""
+        with self._lock:
+            if self.cap is None:
+                return None
+            ok, frame = False, None
+            for _ in range(2):
+                ok2, f2 = self.cap.read()
+                if ok2:
+                    ok, frame = True, f2
+        if ok:
+            self.frame = frame
+        return self.snapshot_b64()
+
     def snapshot_b64(self):
         if self.cap is None or self.frame is None:
             return None
