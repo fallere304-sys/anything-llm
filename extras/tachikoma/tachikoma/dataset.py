@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 """
 
 # 学習に使う種類。rejected は訂正なしの /bad (将来の選好学習 DPO 用に保存だけする)
-TRAINABLE = ("chat", "judge", "knowledge")
+TRAINABLE = ("chat", "judge", "knowledge", "ja_style")   # ja_style: 読んだブログから作った「自然な日本語で書く」手本
 
 # 判定の向き。最終結論と同じ向きの判定だけを正例として残す。
 DIRECTION = {"supports": 1, "partially_supports": 1, "contradicts": -1, "irrelevant": 0}

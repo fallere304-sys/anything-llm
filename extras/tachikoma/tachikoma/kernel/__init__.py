@@ -25,6 +25,7 @@ KERNEL_PATHS = (
     "tachikoma/news.py",        # ニュースの取得と検索 (同上)
     "tachikoma/android/",       # 端末の推論・入出力・学習の採否 (Android 版の外界との境界)
     "tachikoma/scholar.py",     # 論文・政府文書の検索 (同上)
+    "tachikoma/tasks.py",       # 相棒の頼みの実行 (ブログを読みに行く・学習を始める)
     "tachikoma/tools.py",       # 量子化などの外部ツール実行
     "tachikoma/tts.py", "tachikoma/audio.py", "tachikoma/camera.py", "tachikoma/sensors.py",
     "tachikoma/study.py",       # ffmpeg / yt-dlp

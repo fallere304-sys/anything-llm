@@ -99,6 +99,8 @@ class Tachikoma:
         self.usefulness = lambda bucket, text=None: 0.5
         self.foresight_rates = None
         self.inquiry = Inquiry(self)
+        from .tasks import Tasks
+        self.tasks = Tasks(self)            # 頼まれごと: 聞き返さずに、まずやってみる
         self.last_glance = now
         self._turn = 0
 
@@ -136,6 +138,7 @@ class Tachikoma:
             msg = lr.poll()
             if msg:
                 self.say(msg)
+        self.tasks.step()                   # 頼まれた長い仕事 (ブログを読むなど) を 1 歩進める
         training = any(lr.busy for lr in self.learners())
         scheduled = self.idle is not None and mode == ALONE
         # 学習中は GPU を学習プロセスに明け渡す (知覚と記録だけ続ける)
@@ -246,10 +249,14 @@ class Tachikoma:
                 if verdict.get("verdict") != "irrelevant":
                     self.apply_verdict(b, verdict, "user", 1.0, "ユーザー回答: " + clip(text, 200))
                     self.asked = None
+        if self.tasks.handle(text):         # 頼まれごと: 聞き返さずに、その場で始める
+            self.attention.on_self_spoke()
+            return
         eyes = self.eyes_for(text)         # 見ることを聞かれたら、その場で見てから答える
         user = self.context_text() + eyes + "\n\n# ユーザーの発言\n" + text
         # 見て答えるときは点検を飛ばす (「カメラにアクセスできるか」を疑い出して、見たものを話さなくなる)
-        check = self.inquire(text) if self.cfg["inquiry_on_chat"] and not eyes else ""
+        check = (self.inquire(text) if self.cfg["inquiry_on_chat"] and not eyes and not self.tasks.is_request(text)
+                 else "")
         # 即効層: 学習前でも、過去に裏付けの取れた例をプロンプトに添える
         shots = "\n".join(x for x in (self.data.examples("knowledge", text),
                                        self.data.examples("chat", text)) if x)
