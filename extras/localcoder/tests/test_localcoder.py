@@ -462,6 +462,7 @@ class UninstallTest(unittest.TestCase):
         self.lines = []
 
     def un(self, **kw):
+        kw.setdefault("pythons", lambda minor: [])
         return uninstall.Uninstaller(env=self.env, system=self.sys, out=self.lines.append, sleep=lambda s: None, **kw)
 
     def test_removes_what_it_brought_and_keeps_the_rest(self):
@@ -488,7 +489,8 @@ class UninstallTest(unittest.TestCase):
         self.assertFalse(os.path.exists(self.exe))
         self.assertTrue(os.path.exists(self.pip))
         again = []
-        un = uninstall.Uninstaller(env=self.env, homes=[self.home], system=self.sys, out=again.append)
+        un = uninstall.Uninstaller(env=self.env, homes=[self.home], system=self.sys, out=again.append,
+                                   pythons=lambda minor: [])
         self.assertEqual(un.run(yes=True), 0)
         self.assertIn("もう何もありません", again[-1])
 
@@ -504,6 +506,12 @@ class UninstallTest(unittest.TestCase):
         self.un().run(yes=True)
         self.assertEqual(self.sys.ran, [])
         self.assertIsNotNone(self.reg.get(uninstall.PY_CORE + "\\InstallPath"))
+
+    def test_python_uninstall_is_refused_when_another_312_exists(self):
+        theirs = [("3.12", os.path.join(self.home, "python")), ("3.12", r"C:\\Python312")]
+        self.assertEqual(self.un(pythons=lambda minor: theirs).run(yes=True), 4)
+        self.assertEqual(self.sys.ran, [])                      # 巻き込むおそれがあるので動かさない
+        self.assertTrue(any("巻き込まない" in x for x in self.lines))
 
     def test_dry_run_and_decline_change_nothing(self):
         self.assertEqual(self.un().run(dry=True), 0)

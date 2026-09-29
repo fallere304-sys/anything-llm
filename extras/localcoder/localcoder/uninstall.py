@@ -211,8 +211,10 @@ class Item:
 
 
 class Uninstaller:
-    def __init__(self, config=None, homes=(), env=None, system=None, out=say, self_exe=None, sleep=time.sleep):
+    def __init__(self, config=None, homes=(), env=None, system=None, out=say, self_exe=None, sleep=time.sleep,
+                 pythons=registered_pythons):
         self.env = dict(os.environ if env is None else env)
+        self.pythons = pythons
         self.config = os.path.abspath(config or default_config(self.env))
         self.sys = system or System()
         self.reg = self.sys.registry
@@ -310,7 +312,7 @@ class Uninstaller:
 
     def _other_pythons(self, home):
         """置き場所の外にある、同じ系の Python の登録 (あれば、取り除きがそれを巻き込むおそれがある)。"""
-        return [p for v, p in registered_pythons(PY_SHORT) if not (p and _inside(p, os.path.join(home, "python")))]
+        return [p for v, p in self.pythons(PY_SHORT) if not (p and _inside(p, os.path.join(home, "python")))]
 
     def _remove_python(self, home):
         """Python 自身の取り除き方 (/uninstall) で取り除く。登録・部品の記録も一緒に消える。"""
