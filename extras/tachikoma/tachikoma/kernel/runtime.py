@@ -117,6 +117,7 @@ def run(agent, cfg, metrics, evolution=None, sleep=time.sleep, max_steps=None, b
     oversight(agent, evolution, privacy)
     n, consecutive_errors = 0, 0
     last_watts = 0.0
+    last_evo = None
     while (max_steps is None or n < max_steps) and not (stop is not None and stop()):
         n += 1
         t = time.perf_counter()
@@ -177,6 +178,17 @@ def run(agent, cfg, metrics, evolution=None, sleep=time.sleep, max_steps=None, b
             except Exception as e:  # noqa: BLE001
                 metrics.record_error(e, traceback.extract_tb(e.__traceback__), traceback.format_exc())
         if evolution is not None:
+            try:
+                status = evolution.status_text()
+                kind = status.split(" あと ")[0]            # 残り時間の数字だけが変わったときはログに出さない
+                if kind != last_evo:
+                    agent.log(f"自己改良: {status}")
+                    last_evo = kind
+                ui = getattr(agent, "ui", None)
+                if ui is not None:
+                    ui.push({"type": "state", "evolution": status})
+            except Exception as e:  # noqa: BLE001
+                metrics.record_error(e, traceback.extract_tb(e.__traceback__), traceback.format_exc())
             try:
                 for m in evolution.poll():
                     agent.say(m)

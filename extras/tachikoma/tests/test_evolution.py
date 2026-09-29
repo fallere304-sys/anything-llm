@@ -521,3 +521,22 @@ class SupervisorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EvolutionStatusTest(unittest.TestCase):
+    """自己改良がいま何をしているかを、黙らずに言う。"""
+
+    def test_status(self):
+        ev, cfg, clock, metrics, root = evo_setup()
+        self.assertIn("次の試作", ev.status_text())
+        self.assertIn("CPU の脳が無い", ev.status_text())
+        ev._kv("evolution_last", clock())
+        self.assertIn("あと 30 分", ev.status_text())
+        ev.busy, ev.stage = True, "サンドボックスでテスト"
+        self.assertEqual(ev.status_text(), "試作中: サンドボックスでテスト")
+        ev.busy = False
+        ev.freeze(True)
+        self.assertIn("止めてある", ev.status_text())
+        cfg["evolution_enabled"] = False
+        self.assertEqual(ev.status_text(), "切ってある")
+

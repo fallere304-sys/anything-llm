@@ -152,3 +152,22 @@ class PartnerIsNotAHypothesisTest(unittest.TestCase):
                          "さっき気になってた「札幌の停電は復旧した」、調べたら本当だったよ。")
         self.assertEqual(finding_text("量子コンピュータは既に実用化されている", REFUTED),
                          "ひとつわかったよ。「量子コンピュータは既に実用化されている」、調べたら違ったみたい。")
+
+
+class LegacyTidyTest(unittest.TestCase):
+    def test_old_partner_beliefs_and_old_reports_are_put_away(self):
+        agent, llm, _, mem, _, _ = make_agent(tempfile.mkdtemp())
+        old = mem.add_belief("ユーザーの画面の背後にはWinRARの体験版が表示されている", 0.5, "reflection")
+        img = mem.add_belief("提供された画像は、主に表形式のデータで構成されている", 0.5, "reflection")
+        keep = mem.add_belief("札幌で停電が起きている", 0.5, "reflection")
+        mem.add_utterance("finding", "確かめた: 提供された画像は表 → [観測事実] 根拠は…", 0.9)
+        mem.add_utterance("finding", "ひとつわかったよ。「札幌の停電は復旧した」、調べたら本当だったよ。", 0.5)
+        agent._tidy_legacy()
+        left = [b.id for b in mem.beliefs(include_irreducible=False)]
+        self.assertEqual((old in left, img in left, keep in left), (False, False, True))
+        self.assertEqual([u["text"][:5] for u in mem.pending_utterances()], ["ひとつわか"])
+
+    def test_judge_reason_is_short(self):
+        from tachikoma import prompts
+        self.assertEqual(prompts.JUDGE_SCHEMA["properties"]["reason"]["maxLength"], 120)
+

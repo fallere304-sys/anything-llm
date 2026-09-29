@@ -302,14 +302,33 @@ class App:
         self.state["features"] = wanted
         self._save(self.state_path, self.state)
 
+    FEATURE_FILES = {"voice": ("requirements-voice.txt",),
+                     "learning": (os.path.join("finetune", "requirements.txt"), "requirements-eye.txt")}
+
+    def _feature_sig(self, k):
+        """追加機能の部品一覧の指紋。一覧が変わったら (部品が増えたら) 入れ直す。"""
+        h = hashlib.sha256()
+        for rel in self.FEATURE_FILES.get(k, ()):
+            try:
+                with open(os.path.join(self.app, rel), "rb") as f:
+                    h.update(f.read())
+            except OSError:
+                pass
+        return h.hexdigest()[:16]
+
     def install_features(self):
         done = set(self.state.get("features_installed", []))
+        sigs = self.state.setdefault("features_sig", {})
         for k in self.state.get("features", []):
-            if k in done:
+            sig = self._feature_sig(k)
+            if k in done and (k not in self.FEATURE_FILES or sigs.get(k) == sig):
                 continue
+            if k in done:       # 入れた後で部品の一覧が変わった (古い版で入れた場合も): 足りないものだけ pip が入れる
+                say(f"\n{FEATURES[k][0].split(' (')[0]} の部品を確かめて、足りないものを入れます…")
             ok = {"voice": self._voice, "learning": self._learning, "evolution": self._evolution}[k]()
             if ok:
                 done.add(k)
+                sigs[k] = sig
                 self.state["features_installed"] = sorted(done)
                 self._save(self.state_path, self.state)
 

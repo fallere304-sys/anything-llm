@@ -240,6 +240,25 @@ class Evolution:
     def history(self, n=10):
         return self.db.execute("SELECT * FROM evolutions ORDER BY id DESC LIMIT ?", (n,)).fetchall()
 
+    def status_text(self, now=None):
+        """いま自己改良が何をしているか (画面とログに出す)。黙って止まっているように見えないように。"""
+        now = now or self.clock()
+        if not self.cfg["evolution_enabled"]:
+            return "切ってある"
+        if self.frozen:
+            return "止めてある (/unfreeze で再開)"
+        if self.busy:
+            return f"試作中: {self.stage or '準備'}"
+        c = self.canary()
+        if c is not None:
+            left = max(0.0, self.cfg["canary_hours"] * 3600 - (now - (c["deployed"] or now)))
+            return f"#{c['id']} ({c['goal'] or ''}) を試用中。あと {left / 3600:.1f} 時間で残すか戻すか決める"
+        brain = "" if self.brain_ok() else " (CPU の脳が無いので、パラメータの調整だけ)"
+        wait = self.cfg["evolution_interval_s"] - (now - (self._kv("evolution_last") or 0))
+        if wait > 0:
+            return f"次の試作まで あと {int(-(-wait // 60))} 分{brain}"
+        return f"話しかけられていないときに、次の試作を始める{brain}"
+
     def brain_ok(self):
         return self.brain is not None and self.brain.available()
 

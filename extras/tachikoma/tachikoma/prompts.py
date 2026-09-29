@@ -16,6 +16,7 @@ APPRAISE_SYSTEM = PERSONA + (
     "\n- basis=guessed: 確かめないとわからない仮説 (後で調べる対象になる)"
     "\n命題は1文で、真偽を確かめられる形で書く。最大4つ。"
     "\nユーザーの心・意図・認識・これからの行動は guessed にしない (それは調べるものではない。書くなら inferred まで)。"
+    "\n「画像は〜」「提供された画像には〜」のように画像そのものを主語にしない。写っている物事について書く。"
     "\nquestion は世の中の事柄についての問いにする (ユーザー自身についての問いにしない)。"
     "\nremark はユーザーに今すぐ伝える価値がある気づき (エラーの見落とし等) があるときだけ書く。無ければ空文字。"
     "\nquestion は、この出来事について一番知りたいこと (確かめられる1文の仮説)。目の前と関係なくてもよい。"
@@ -73,7 +74,7 @@ def plan_schema(allowed):
 
 JUDGE_SYSTEM = (
     "仮説と、調べて得た根拠を比べ、根拠が仮説をどう扱うかだけを判定します。"
-    "根拠に書かれていないことを補って判断してはいけません。"
+    "根拠に書かれていないことを補って判断してはいけません。reason は 60 字以内で一言。"
 )
 
 JUDGE_SCHEMA = {
@@ -81,7 +82,7 @@ JUDGE_SCHEMA = {
     "properties": {
         "verdict": {"type": "string",
                     "enum": ["supports", "partially_supports", "contradicts", "irrelevant"]},
-        "reason": {"type": "string"},
+        "reason": {"type": "string", "maxLength": 120},     # 長い理屈で出力が途切れて JSON が壊れないように
     },
     "required": ["verdict", "reason"],
 }

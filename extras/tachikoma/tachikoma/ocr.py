@@ -17,7 +17,11 @@ class VisionOCR:
         if self.device == "cpu":
             torch.set_num_threads(self.cfg["ocr_cpu_threads"])
         self.processor = AutoImageProcessor.from_pretrained(model)
-        self.tokenizer = AutoTokenizer.from_pretrained(model)
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(model)
+        except (ValueError, OSError, ImportError):
+            # 速い版 (tokenizers) に変換できないときは、元の版で読む
+            self.tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
         self.model = VisionEncoderDecoderModel.from_pretrained(model).to(self.device).eval()
         gc = self.model.generation_config
         if gc.decoder_start_token_id is None:   # 古い形式で保存されたモデルの補完

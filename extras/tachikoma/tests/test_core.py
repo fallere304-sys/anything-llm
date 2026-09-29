@@ -182,7 +182,7 @@ class LoopTest(unittest.TestCase):
 
     def test_fruitless_probing_is_given_up(self):
         agent, llm, sensor, mem, clock, out = make_agent(self.tmp, allow_ask_user=False)
-        mem.add_belief("ユーザーは来週引っ越す", 0.5, "reflection")
+        mem.add_belief("来週この地域で大規模な工事がある", 0.5, "reflection")
         for _ in range(3):
             llm.plan.append({"probe": "grep_workspace", "query": "引っ越し"})
             clock.t += 2
@@ -196,7 +196,7 @@ class LoopTest(unittest.TestCase):
         agent, llm, sensor, mem, clock, out = make_agent(self.tmp)
         cfg_dirs = agent.cfg["watch_dirs"]
         agent.cfg["watch_dirs"] = []   # 聞くしかない状況
-        bid = mem.add_belief("ユーザーは本番環境を触っている", 0.5, "reflection")
+        bid = mem.add_belief("このリポジトリの接続先は本番環境になっている", 0.5, "reflection")
         llm.plan.append({"probe": "ask_user", "query": "いま触ってるのは本番環境?"})
         agent.step()
         self.assertTrue(any("❓" in o for o in out))

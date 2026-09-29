@@ -60,6 +60,8 @@ BASIS_PRIOR = {"observed": (0.95, "observation"), "inferred": (0.65, "reflection
 SITUATION_HALF_LIFE = 2 * 3600
 # 相棒 (ユーザー) についての文: 心・意図・行動は推し量るもので、調べて確かめるものではない
 _PARTNER = re.compile(r"^(この|その|現在の|今の)?(ユーザー|ユーザ|相棒|利用者|キミ|きみ|君|あなた|作業者|持ち主|user)", re.I)
+# 画像そのものについての文 (「提供された画像は表のようなもの」): 世の中のことではないので調べない
+_IMAGE_META = re.compile(r"^(提供された|添付の|この|その|カメラの|今の)?(画像|写真|映像|スクリーンショット|カメラ画像)")
 
 
 def finding_text(statement, label, promised=False):
@@ -114,6 +116,7 @@ class Tachikoma:
         self.inquiry = Inquiry(self)
         from .tasks import Tasks
         self.tasks = Tasks(self)            # 頼まれごと: 聞き返さずに、まずやってみる
+        self._tidy_legacy()
         self.last_glance = now
         self._turn = 0
 
@@ -358,11 +361,26 @@ class Tachikoma:
         head = (statement or "").strip()[:14]
         return bool(_PARTNER.match(head) or (name and head.startswith(name)))
 
+    def not_to_check(self, statement):
+        """調べて確かめる対象にしない文: 相棒の心や行動 (会話で推し量る) と、画像そのものの説明。"""
+        return self.about_partner(statement) or bool(_IMAGE_META.match((statement or "").strip()))
+
+    def _tidy_legacy(self):
+        """古い版が残したものを片づける: 調べる対象にしない仮説は脇に置き、古い形の報告 (判定の理由文つき) は読み上げない。"""
+        for b in self.memory.beliefs(include_irreducible=False):
+            if self.not_to_check(b.statement):
+                self.memory.mark_irreducible(b.id)
+        self.memory.db.commit()
+        for u in self.memory.pending_utterances():
+            if u["kind"] == "finding" and ("→ [" in u["text"] or u["text"].startswith("確かめた:")
+                                          or self.not_to_check(re.sub(r"^.*?「", "", u["text"]))):
+                self.memory.mark_delivered(u["id"], 2)
+
     def _hypothesis(self, statement, p, relevance, basis, origin=""):
         """新しい仮説を記憶し、予測として記録する (後で当たり外れを較正に使う)。
 
-        相棒についての推測は仮説にしない (返り値 None)。相手の考えは会話の中で推し量るもので、検証するものではない。"""
-        if self.about_partner(statement):
+        相棒についての推測や、画像そのものの説明は仮説にしない (返り値 None)。相手の考えは会話の中で推し量るもの。"""
+        if self.not_to_check(statement):
             return None
         p = shrink_p(p, self.calib.shrink(self.cfg.get("persona_skepticism", 0.6)))
         bid = self.memory.add_belief(statement, p, "reflection", relevance=relevance,
@@ -529,7 +547,7 @@ class Tachikoma:
             if not st:
                 continue
             p, source = BASIS_PRIOR.get(c.get("basis"), BASIS_PRIOR["guessed"])
-            if source == "reflection" and self.about_partner(st):
+            if source == "reflection" and self.not_to_check(st):
                 continue        # 相棒の心や行動の推測は、会話で自然にわかること。調べて確かめる対象にしない
             if source == "reflection":
                 # 確信過剰が続いていたら、推論だけの初期確信を 0.5 側に縮める (自分を疑う)
@@ -577,7 +595,8 @@ class Tachikoma:
     def curiosity_step(self):
         max_att = self.cfg["max_probe_attempts"]
         waiting = (self.asked, self.question_outstanding)   # 回答待ちの仮説は重ねて調べない
-        beliefs = [b for b in self.memory.beliefs(include_irreducible=False) if b.id not in waiting]
+        beliefs = [b for b in self.memory.beliefs(include_irreducible=False)
+                   if b.id not in waiting and not self.not_to_check(b.statement)]
         can_challenge = "research" in self.allowed_probes()
         cache = {}
         kw = {"usefulness": lambda o: cache[o] if o in cache else cache.setdefault(o, self.usefulness(o)),
@@ -699,7 +718,7 @@ class Tachikoma:
             self.memory.set_flag(nb.id, "promised", 0)
             self.memory.add_utterance("finding", finding_text(nb.statement, after, promised=True), 0.9, nb.id)
             return nb
-        if before == SPECULATION and after in (FACT, INFERENCE, REFUTED) and not self.about_partner(nb.statement):
+        if before == SPECULATION and after in (FACT, INFERENCE, REFUTED) and not self.not_to_check(nb.statement):
             self.memory.add_utterance("finding", finding_text(nb.statement, after), 0.35 + 0.5 * nb.relevance, nb.id)
         else:
             self._maybe_give_up(nb)
@@ -713,7 +732,7 @@ class Tachikoma:
         """判定し、後で結論が出たときの事後ラベル付けのために記録しておく。"""
         shots = self.data.examples("judge", user)
         verdict = self.llm.chat(prompts.JUDGE_SYSTEM, (shots + "\n\n" if shots else "") + user,
-                                schema=prompts.JUDGE_SCHEMA, max_tokens=160)
+                                schema=prompts.JUDGE_SCHEMA, max_tokens=220)
         self.data.record_judgment(b.id, user, verdict, source)
         return verdict
 

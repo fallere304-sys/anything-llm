@@ -232,6 +232,7 @@
         $("st-eye").textContent = ev.eye_cer == null ? "-" : ev.eye_cer.toFixed(3);
         $("st-w").textContent = ev.watts == null ? "-" : `${Math.round(ev.watts)} W`;
         $("st-model").textContent = ev.model || "-";
+        if (ev.evolution) $("st-evo").textContent = ev.evolution;
         const act = ev.activity;
         $("activity").textContent = act ? `${ACTIVITIES[act.activity] || act.activity} — ${act.why}` : (MODES[ev.mode] || "");
         if (ev.devices) renderDevices(ev.devices);

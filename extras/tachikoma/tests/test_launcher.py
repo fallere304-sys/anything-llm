@@ -85,6 +85,20 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(app.state["features_installed"], [])       # 次の起動で入れ直す
         self.assertEqual(app.state["features"], ["voice"])
 
+    def test_features_are_topped_up_when_their_requirements_change(self):
+        app = launcher.App(self.home, interactive=False)
+        app.install(payload({"requirements-eye.txt": "torch", "finetune/requirements.txt": "peft"}, "1"))
+        ran = []
+        app._learning = lambda: ran.append("learning") or True
+        app.state.update(features=["learning"], features_installed=["learning"])   # 古い版で入れた (指紋なし)
+        app.install_features()
+        self.assertEqual(ran, ["learning"])                  # 足りないものを確かめて入れる
+        app.install_features()
+        self.assertEqual(ran, ["learning"])                  # 一覧が同じなら何もしない
+        app.install(payload({"requirements-eye.txt": "torch\nfugashi", "finetune/requirements.txt": "peft"}, "2"))
+        app.install_features()
+        self.assertEqual(ran, ["learning", "learning"])      # 部品が増えたら入れ直す
+
     def test_non_interactive_setup_asks_nothing(self):
         app = launcher.App(self.home, interactive=False)
         app.install(payload({"a.py": "a"}, "1"))

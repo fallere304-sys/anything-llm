@@ -99,7 +99,7 @@ class DatasetTest(unittest.TestCase):
     def test_user_answer_becomes_knowledge(self):
         agent, llm, sensor, mem, clock, out = make_agent(self.tmp)
         agent.cfg["watch_dirs"] = []
-        bid = mem.add_belief("ユーザーはステージング環境を触っている", 0.5, "reflection")
+        bid = mem.add_belief("このリポジトリの設定はステージング環境を向いている", 0.5, "reflection")
         llm.plan.append({"probe": "ask_user", "query": "ステージング?"})
         agent.step()
         sensor.name = "user"

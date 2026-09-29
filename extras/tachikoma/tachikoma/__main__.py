@@ -181,6 +181,10 @@ def main(argv=None):
                               novelty=NoveltyJudge(cfg, scholar=scholar, web=web))
         if not brain.available():
             agent.log("CPU の脳のモデルが無いので、自己進化はパラメータの調整だけ行います (README 参照)")
+    else:
+        agent.log("自己改良: 切ってある (Tachikoma.exe --setup で「自己進化」を選ぶと、独りの時間に試作する)")
+        if ui is not None:
+            ui.push({"type": "state", "evolution": "切ってある (Tachikoma.exe --setup で「自己進化」を選ぶ)"})
     # 独りの時間の候補。耳と目 (自習・学習) は同時には走らない: スケジューラが 1 つずつ選ぶ
     alone = agent.attention.alone_for
     if study is not None:

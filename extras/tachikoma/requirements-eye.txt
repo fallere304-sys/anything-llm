@@ -5,3 +5,7 @@ torchvision
 transformers
 pymupdf
 pillow
+# manga-ocr 系の日本語の字句分割 (無いと「tokenizer を作れない」で目の自習が止まる)
+fugashi
+unidic-lite
+sentencepiece
