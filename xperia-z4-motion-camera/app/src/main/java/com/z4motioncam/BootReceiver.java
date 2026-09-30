@@ -10,7 +10,15 @@ public class BootReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         if (!Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) return;
         if (!AppSettings.load(context).autostart) return;
-        context.startActivity(new Intent(context, MainActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        // The service first: newer Android versions may refuse to open a screen from here, and
+        // monitoring must not depend on it (the service brings the screen up itself later).
+        context.startService(new Intent(context, CameraService.class));
+        try {
+            context.startActivity(new Intent(context, MainActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtra(MainActivity.EXTRA_START_DARK, true));
+        } catch (RuntimeException ignored) {
+            // refused: the service retries
+        }
     }
 }

@@ -56,6 +56,7 @@ final class SettingsSpec {
             new Field("ddns_token", Type.SECRET, "", null, 0, 0, false),
             new Field("acme", Type.BOOL, "false", null, 0, 0, true),
             new Field("autostart", Type.BOOL, "true", null, 0, 0, false),
+            new Field("keep_front", Type.BOOL, "true", null, 0, 0, false),
     };
 
     private SettingsSpec() {}

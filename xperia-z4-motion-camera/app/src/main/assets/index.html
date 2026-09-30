@@ -69,6 +69,8 @@
   .sess { padding: 8px 0; border-bottom: 1px solid #2a2a2a; font-size: 14px; }
   .sess .when { font-weight: bold; }
   .sess.bad .how { color: #ffb74d; font-weight: bold; }
+  .ev { padding: 4px 0; border-bottom: 1px solid #2a2a2a; font-size: 13px; }
+  .ev .when { color: #999; }
   .scroll { overflow-x: auto; }
   table.samples { border-collapse: collapse; font-size: 13px; white-space: nowrap; }
   table.samples th, table.samples td { padding: 4px 8px; border-bottom: 1px solid #2a2a2a; text-align: right; }
@@ -123,6 +125,10 @@
     <div id="upNow"></div>
     <p class="meta">1分ごとに「動作中」を記録しています。突然電源が切れた場合も、最後の記録時刻（1分以内の誤差）を終了時刻として残します。</p>
     <div id="sessions"></div>
+    <details id="eventsBox">
+      <summary>出来事（画面が消えた・背面に回った・カメラの再接続など）</summary>
+      <div id="events"></div>
+    </details>
     <details>
       <summary>電池の記録（直近24時間・5分ごと）</summary>
       <div class="scroll"><table class="samples" id="samples"></table></div>
@@ -529,6 +535,17 @@
         d.appendChild(el('div', '直前の状態: ' + fmtSnap(x.last), 'meta'));
         box.appendChild(d);
       }
+      var ev = $('events');
+      ev.textContent = '';
+      var list = u.events || [];
+      if (!list.length) ev.appendChild(el('div', 'まだありません', 'meta'));
+      for (var e = 0; e < list.length; e++) {
+        var row = el('div', null, 'ev');
+        row.appendChild(el('span', fmtTime(list[e].t) + ' ', 'when'));
+        row.appendChild(el('span', list[e].text));
+        ev.appendChild(row);
+      }
+      $('eventsBox').querySelector('summary').textContent = '出来事（画面が消えた・背面に回った・カメラの再接続など）' + (list.length ? '：' + list.length + '件' : '');
       var t = $('samples');
       t.textContent = '';
       var head = el('tr');

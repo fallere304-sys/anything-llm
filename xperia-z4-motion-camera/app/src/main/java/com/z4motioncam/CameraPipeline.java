@@ -35,10 +35,23 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     private static final int IDLE_FPS = 5;
     /** Stay at the full rate this long after the last viewer / recording, to avoid flapping. */
     private static final long ACTIVE_HOLD_MS = 5_000L;
+    /**
+     * Some camera drivers silently stop delivering preview frames (no error callback), e.g. after
+     * the screen turned off. Frames normally arrive at least 5 times a second, so this long without
+     * one means the camera is stuck: it is closed and opened again.
+     */
+    static final long FRAME_TIMEOUT_MS = 15_000L;
+    private static final long WATCHDOG_MS = 5_000L;
+
+    /** Notable camera events for the run-time log shown in the browser. */
+    interface Events {
+        void event(String text);
+    }
 
     private final AppSettings settings;
     private final RecordingStore store;
     private final FrameHub hub;
+    private final Events events;
     private final HandlerThread thread;
     private final Handler handler;
 
@@ -63,6 +76,8 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     private long lastLiveMs;
     private long lastEncodeMs;
     private long lastStorageCheckMs;
+    private long lastFrameMs;
+    private int openFailures;
 
     // Status, read from other threads.
     private volatile boolean running;
@@ -73,10 +88,11 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     private volatile String error;
     private volatile boolean storageFull;
 
-    CameraPipeline(AppSettings settings, RecordingStore store, FrameHub hub) {
+    CameraPipeline(AppSettings settings, RecordingStore store, FrameHub hub, Events events) {
         this.settings = settings;
         this.store = store;
         this.hub = hub;
+        this.events = events;
         this.thread = new HandlerThread("camera");
         thread.start();
         this.handler = new Handler(thread.getLooper());
@@ -89,10 +105,26 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
                 open();
             }
         });
+        handler.postDelayed(watchdog, WATCHDOG_MS);
     }
+
+    private final Runnable watchdog = new Runnable() {
+        @Override
+        public void run() {
+            if (camera != null && running && SystemClock.elapsedRealtime() - lastFrameMs > FRAME_TIMEOUT_MS) {
+                Log.w(TAG, "no preview frames, reopening the camera");
+                events.event("カメラの映像が" + FRAME_TIMEOUT_MS / 1000 + "秒止まったため、カメラを開き直しました"
+                        + (recording ? "（録画中だったファイルは保存済み）" : ""));
+                close();
+                open();
+            }
+            handler.postDelayed(this, WATCHDOG_MS);
+        }
+    };
 
     /** Stops the camera, finalizes any recording and ends the thread. Blocks briefly. */
     void shutdown() {
+        handler.removeCallbacks(watchdog);
         handler.post(new Runnable() {
             @Override
             public void run() {
@@ -180,13 +212,18 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
             for (int i = 0; i < 3; i++) camera.addCallbackBuffer(new byte[frameBytes]);
             camera.setPreviewCallbackWithBuffer(this);
             camera.startPreview();
+            lastFrameMs = SystemClock.elapsedRealtime();
             running = true;
             error = null;
+            if (openFailures > 0) events.event("カメラを再び開けました（" + (openFailures + 1) + "回目で成功）");
+            openFailures = 0;
             Log.i(TAG, "camera started " + width + "x" + height + " fps=" + (range == null ? "?" : range[1])
                     + (idleRange != null ? " (idle " + idleRange[1] + ", active " + activeRange[1] + ")" : ""));
         } catch (Exception e) {
             Log.e(TAG, "camera open failed", e);
             error = "カメラを開けません: " + e.getMessage();
+            // Only the first failure of a series: retries follow every few seconds.
+            if (openFailures++ == 0) events.event("カメラを開けません（ほかのアプリが使用中、または端末の制限）: " + e.getMessage());
             close();
             scheduleReopen();
         }
@@ -225,6 +262,8 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     public void onError(int err, Camera cam) {
         Log.e(TAG, "camera error " + err);
         error = "カメラエラー (" + err + ")、再接続中";
+        events.event(err == 2 ? "ほかのアプリがカメラを使ったため切断されました（自動で再接続）"
+                : "カメラエラー（" + err + "）のため再接続します");
         close();
         scheduleReopen();
     }
@@ -232,6 +271,7 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     @Override
     public void onPreviewFrame(byte[] data, Camera cam) {
         if (data == null) return;
+        lastFrameMs = SystemClock.elapsedRealtime();
         try {
             processFrame(data, SystemClock.elapsedRealtime());
         } catch (RuntimeException e) {

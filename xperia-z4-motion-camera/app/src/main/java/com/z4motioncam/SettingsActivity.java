@@ -16,6 +16,18 @@ public class SettingsActivity extends Activity {
         }
     }
 
+    @Override
+    protected void onStart() {
+        super.onStart();
+        AppUi.onStart();
+    }
+
+    @Override
+    protected void onStop() {
+        AppUi.onStop();
+        super.onStop();
+    }
+
     public static class Prefs extends PreferenceFragment {
         @Override
         public void onCreate(Bundle savedInstanceState) {

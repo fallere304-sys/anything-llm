@@ -48,6 +48,11 @@
     <string name="pref_acme_summary">DuckDNS の設定が必要です。Google スプレッドシートのビューアから見るときに必要で、ブラウザの警告も出なくなります。オンにすると Let\'s Encrypt の利用規約に同意したことになります</string>
     <string name="pref_cat_system">システム</string>
     <string name="pref_autostart">端末起動時に自動で開始</string>
+    <string name="pref_keep_front">画面を点けたまま前面に保つ（推奨）</string>
+    <string name="pref_keep_front_summary">ほかのアプリが前面に出たら1分後、画面が消えたら5秒後に、このアプリを前面に戻して画面を暗く点けたままにします。一部の端末で、背面やスリープ中に撮影が止まるのを防ぎます</string>
+    <string name="overlay_title">前面に戻すための許可</string>
+    <string name="overlay_message">Android 10 以降では、画面が消えたり背面に回ったりしたときにこのアプリを自動で前面に戻すため、「他のアプリの上に重ねて表示」の許可が必要です。次の画面でオンにしてください。</string>
+    <string name="overlay_open">許可の画面を開く</string>
     <string name="pref_note">設定は画面に戻ると反映されます</string>
 
     <string-array name="resolution_entries">

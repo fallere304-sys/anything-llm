@@ -11,11 +11,13 @@ import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.provider.Settings;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
@@ -30,7 +32,11 @@ import android.widget.Toast;
  * brings it back (the waking touch is swallowed so it cannot press a button by accident).
  */
 public class MainActivity extends Activity {
+    /** Opened by the service or at boot: start with the screen already dark (a sleeping nursery). */
+    static final String EXTRA_START_DARK = "start_dark";
     private static final int REQ_CAMERA = 1;
+    /** The overlay-permission explanation is shown once per app start, not at every return. */
+    private static boolean overlayAsked;
     private static final long REFRESH_MS = 500L;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -42,6 +48,7 @@ public class MainActivity extends Activity {
     private boolean swallowGesture;
     private boolean resumed;
     private boolean bound;
+    private boolean startDark;
     private long shownSeq = -1;
     private int tick;
     private Button monitorButton;
@@ -51,6 +58,7 @@ public class MainActivity extends Activity {
         public void onServiceConnected(ComponentName name, IBinder binder) {
             service = ((CameraService.LocalBinder) binder).service();
             refresh.run();
+            maybeAskOverlayPermission();
         }
 
         @Override
@@ -102,7 +110,9 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                 | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
-                | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD);
+                | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+        startDark = getIntent().getBooleanExtra(EXTRA_START_DARK, false);
         setContentView(R.layout.activity_main);
         preview = (ImageView) findViewById(R.id.preview);
         status = (TextView) findViewById(R.id.status);
@@ -171,6 +181,25 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        startDark = intent.getBooleanExtra(EXTRA_START_DARK, false);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        AppUi.onStart();
+    }
+
+    @Override
+    protected void onStop() {
+        AppUi.onStop();
+        super.onStop();
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         resumed = true;
@@ -178,7 +207,29 @@ public class MainActivity extends Activity {
         if (hasCameraPermission() && service != null) {
             startService(new Intent(this, CameraService.class).setAction(CameraService.ACTION_RELOAD));
         }
-        setDimmed(false);
+        setDimmed(startDark);
+        startDark = false;
+    }
+
+    private void maybeAskOverlayPermission() {
+        if (overlayAsked || service == null || !service.settings().keepFront || !service.overlayPermissionMissing()) return;
+        overlayAsked = true;
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.overlay_title)
+                .setMessage(R.string.overlay_message)
+                .setPositiveButton(R.string.overlay_open, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        try {
+                            startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:" + getPackageName())));
+                        } catch (RuntimeException e) {
+                            Toast.makeText(MainActivity.this, R.string.overlay_message, Toast.LENGTH_LONG).show();
+                        }
+                    }
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
     }
 
     @Override

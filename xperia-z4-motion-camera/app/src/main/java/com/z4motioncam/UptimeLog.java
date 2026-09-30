@@ -20,7 +20,8 @@ import java.util.List;
  * power loss (counter reset) from the app alone being killed (counter kept running).
  *
  * <p>Files (app-private): current.txt (open session, rewritten each minute), sessions.txt (finished
- * sessions), samples.txt (battery every 5 minutes, 7 days). Plain tab-separated text.
+ * sessions), samples.txt (battery every 5 minutes, 7 days), events.txt (things that interrupt
+ * monitoring: screen off, app sent to the back, camera restarts). Plain tab-separated text.
  */
 final class UptimeLog {
     static final String END_STOP = "停止ボタン（アプリ停止）";
@@ -32,6 +33,8 @@ final class UptimeLog {
     private static final int SAMPLE_EVERY_BEATS = 5;
     private static final int MAX_SAMPLES = 7 * 24 * 12;
     private static final int MAX_SESSIONS = 200;
+    private static final int MAX_EVENTS = 500;
+    private static final int EVENTS_SHOWN = 150;
     private static final Charset UTF8 = Charset.forName("UTF-8");
 
     interface Clock {
@@ -82,6 +85,7 @@ final class UptimeLog {
     private final File current;
     private final File sessions;
     private final File samples;
+    private final File events;
     private final Clock clock;
 
     private long startWall;
@@ -95,6 +99,7 @@ final class UptimeLog {
         this.current = new File(dir, "current.txt");
         this.sessions = new File(dir, "sessions.txt");
         this.samples = new File(dir, "samples.txt");
+        this.events = new File(dir, "events.txt");
         this.clock = clock;
     }
 
@@ -121,6 +126,12 @@ final class UptimeLog {
         writeCurrent(now);
         trim(samples, MAX_SAMPLES);
         trim(sessions, MAX_SESSIONS);
+        trim(events, MAX_EVENTS);
+    }
+
+    /** Notes something that happened (e.g. "画面が消えました"); shown on the page, newest first. */
+    synchronized void event(String text) {
+        appendLine(events, clock.wallMs() + "\t" + clean(text));
     }
 
     /** Called every {@link #BEAT_MS}. */
@@ -177,6 +188,16 @@ final class UptimeLog {
             first = false;
             String snap = Snapshot.from(f, 1).json();
             sb.append("{\"t\":").append(t).append(',').append(snap.substring(1));
+        }
+        sb.append("],\"events\":[");
+        List<String> ev = readLines(events);
+        first = true;
+        for (int i = ev.size() - 1, n = 0; i >= 0 && n < EVENTS_SHOWN; i--, n++) {
+            String[] f = ev.get(i).split("\t", 2);
+            if (f.length < 2) continue;
+            if (!first) sb.append(',');
+            first = false;
+            sb.append("{\"t\":").append(parseLong(f[0])).append(",\"text\":").append(HttpServer.jsonString(f[1])).append('}');
         }
         return sb.append("]}").toString();
     }

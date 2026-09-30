@@ -130,5 +130,10 @@
             android:defaultValue="true"
             android:key="autostart"
             android:title="@string/pref_autostart" />
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="keep_front"
+            android:summary="@string/pref_keep_front_summary"
+            android:title="@string/pref_keep_front" />
     </PreferenceCategory>
 </PreferenceScreen>

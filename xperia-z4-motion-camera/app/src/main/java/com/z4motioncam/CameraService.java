@@ -11,6 +11,7 @@ import android.net.ConnectivityManager;
 import android.net.wifi.WifiManager;
 import android.os.BatteryManager;
 import android.os.Binder;
+import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.IBinder;
@@ -18,6 +19,7 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
 import android.preference.PreferenceManager;
+import android.provider.Settings;
 import android.util.Log;
 
 import java.io.File;
@@ -57,6 +59,12 @@ public class CameraService extends Service implements HttpServer.Backend {
     private byte[] indexHtml;
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
+    private PowerManager power;
+    /** Turns the screen on (dim) for a moment when the app is brought back after the screen went off. */
+    private PowerManager.WakeLock screenOn;
+    private final KeepFront keepFront = new KeepFront();
+    private boolean wasVisible = true;
+    private static final long FRONT_CHECK_MS = 5_000L;
 
     private volatile ThermalPolicy.Level thermal = ThermalPolicy.Level.NORMAL;
     private volatile float batteryTempC = Float.NaN;
@@ -65,7 +73,7 @@ public class CameraService extends Service implements HttpServer.Backend {
     private volatile int batteryVoltageMv = -1;
     private volatile String powerState = "";
     private volatile String batteryHealth = "";
-    private UptimeLog uptime;
+    private volatile UptimeLog uptime;
     /**
      * Monitoring on/off, switchable from the phone or a browser and kept across restarts. Off stops
      * only the camera (no detection, recording or live view); the web servers, locks and the dark
@@ -75,6 +83,63 @@ public class CameraService extends Service implements HttpServer.Backend {
     static final String PREF_MONITORING = "monitoring";
     private SettingsApi settingsApi;
     private final Handler main = new Handler(Looper.getMainLooper());
+
+    private final CameraPipeline.Events pipelineEvents = new CameraPipeline.Events() {
+        @Override
+        public void event(String text) {
+            UptimeLog u = uptime;
+            if (u != null) u.event(text);
+        }
+    };
+
+    /**
+     * Watches whether the app's screen is showing. Monitoring itself runs in this service, but some
+     * phones and tablets stop the camera or the app once it is hidden or the screen sleeps, so the
+     * app is brought back to the front with the screen on (dark) by default.
+     */
+    private final Runnable frontCheck = new Runnable() {
+        @Override
+        public void run() {
+            main.postDelayed(this, FRONT_CHECK_MS);
+            boolean visible = AppUi.visible();
+            boolean interactive = power.isInteractive();
+            if (wasVisible && !visible) {
+                uptime.event(interactive ? "アプリが背面に回りました（ほかのアプリやホーム画面が前面に）" : "画面が消えました");
+            }
+            wasVisible = visible;
+            if (!settings.keepFront) return;
+            switch (keepFront.check(SystemClock.elapsedRealtime(), visible, interactive)) {
+                case RELAUNCH:
+                    bringToFront(interactive);
+                    break;
+                case PAUSE:
+                    uptime.event("前面に戻してもすぐに閉じられるため、自動で戻すのを" + KeepFront.PAUSE_MS / 60_000
+                            + "分休みます（端末の利用時間制限・省電力設定などを確認）");
+                    break;
+                default:
+                    break;
+            }
+        }
+    };
+
+    @SuppressWarnings("deprecation") // SCREEN_DIM_WAKE_LOCK: the only way for a service to wake the screen.
+    private void bringToFront(boolean interactive) {
+        if (!interactive) screenOn.acquire(10_000L);
+        try {
+            startActivity(new Intent(this, MainActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtra(MainActivity.EXTRA_START_DARK, true));
+        } catch (RuntimeException e) {
+            Log.w(TAG, "cannot bring the app to the front", e);
+        }
+        uptime.event((interactive ? "アプリを前面に戻しました" : "画面を点けてアプリを前面に戻しました（画面は暗いまま）")
+                + (overlayPermissionMissing() ? "。Android 10 以降は「他のアプリの上に重ねて表示」の許可がないと戻せません" : ""));
+    }
+
+    /** Android 10+ only lets a background app open its screen with the "display over other apps" permission. */
+    boolean overlayPermissionMissing() {
+        return Build.VERSION.SDK_INT >= 29 && !Settings.canDrawOverlays(this);
+    }
 
     private final Runnable heartbeat = new Runnable() {
         @Override
@@ -114,8 +179,13 @@ public class CameraService extends Service implements HttpServer.Backend {
         startForeground(NOTIFICATION_ID, buildNotification());
 
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        power = pm;
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Z4MotionCam:camera");
         wakeLock.acquire();
+        //noinspection deprecation
+        screenOn = pm.newWakeLock(PowerManager.SCREEN_DIM_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP
+                | PowerManager.ON_AFTER_RELEASE, "Z4MotionCam:screen");
+        screenOn.setReferenceCounted(false);
         WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
         if (wm != null) {
             wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL, "Z4MotionCam:wifi");
@@ -155,6 +225,7 @@ public class CameraService extends Service implements HttpServer.Backend {
         uptime.begin(snapshot());
         registerReceiver(shutdownReceiver, new IntentFilter(Intent.ACTION_SHUTDOWN));
         main.postDelayed(heartbeat, UptimeLog.BEAT_MS);
+        main.postDelayed(frontCheck, FRONT_CHECK_MS);
     }
 
     @Override
@@ -184,6 +255,8 @@ public class CameraService extends Service implements HttpServer.Backend {
     @Override
     public void onDestroy() {
         main.removeCallbacks(heartbeat);
+        main.removeCallbacks(frontCheck);
+        if (screenOn != null && screenOn.isHeld()) screenOn.release();
         uptime.end(UptimeLog.END_STOP, snapshot()); // no-op after a shutdown notice
         unregisterReceiver(shutdownReceiver);
         unregisterReceiver(batteryReceiver);
@@ -229,7 +302,7 @@ public class CameraService extends Service implements HttpServer.Backend {
 
     private void startPipeline() {
         if (pipeline != null) return;
-        pipeline = new CameraPipeline(settings, store, hub);
+        pipeline = new CameraPipeline(settings, store, hub, pipelineEvents);
         pipeline.setThermalLevel(thermal);
         pipeline.start();
     }
@@ -385,6 +458,9 @@ public class CameraService extends Service implements HttpServer.Backend {
         RemoteAccess r = remote;
         String rl = r == null ? null : r.statusLine();
         if (rl != null) sb.append('\n').append(rl);
+        if (settings.keepFront && overlayPermissionMissing()) {
+            sb.append("\n自動で前面に戻すには「他のアプリの上に重ねて表示」を許可してください");
+        }
         return sb.toString();
     }
 

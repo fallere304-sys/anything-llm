@@ -113,4 +113,24 @@ public class UptimeLogTest {
         assertTrue(j.startsWith("{\"current\":{\"start\":"));
         assertTrue(j.endsWith("]}"));
     }
+
+    @Test
+    public void eventsAreKeptAcrossRestartsNewestFirst() {
+        File dir = tmp.getRoot();
+        FakeClock c = new FakeClock();
+        UptimeLog log = new UptimeLog(dir, c);
+        log.begin(snap(80, 30f, "充電中"));
+        long t1 = c.wall;
+        log.event("画面が消えました");
+        c.advanceMinutes(1);
+        log.event("画面を点けてアプリを前面に戻しました\t（タブや改行は\n消す）");
+        UptimeLog after = new UptimeLog(dir, c);
+        after.begin(snap(80, 30f, "充電中"));
+        String json = after.json();
+        int second = json.indexOf("画面を点けて");
+        int first = json.indexOf("画面が消えました");
+        assertTrue(json, second > 0 && first > second); // newest first
+        assertTrue(json, json.contains("\"t\":" + t1));
+        assertFalse(json, json.contains("\\t"));
+    }
 }

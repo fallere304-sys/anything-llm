@@ -44,7 +44,7 @@ final class SettingsApi {
                 {R.string.pref_cat_network, new String[] {"port"}},
                 {R.string.pref_cat_remote, new String[] {"remote_enabled", "password", "external_host", "remote_port",
                         "upnp", "ddns_domain", "ddns_token", "acme"}},
-                {R.string.pref_cat_system, new String[] {"autostart"}},
+                {R.string.pref_cat_system, new String[] {"autostart", "keep_front"}},
         };
         StringBuilder sb = new StringBuilder("{\"groups\":[");
         for (int g = 0; g < groups.length; g++) {
@@ -117,6 +117,7 @@ final class SettingsApi {
             case "ddns_domain": return R.string.pref_ddns_domain;
             case "ddns_token": return R.string.pref_ddns_token;
             case "acme": return R.string.pref_acme;
+            case "keep_front": return R.string.pref_keep_front;
             default: return R.string.pref_autostart;
         }
     }

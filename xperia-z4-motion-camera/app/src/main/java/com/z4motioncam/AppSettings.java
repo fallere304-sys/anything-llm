@@ -23,6 +23,8 @@ final class AppSettings {
     final int port;
     final String password;
     final boolean autostart;
+    /** Bring the app back to the front, screen on and dark, when it is hidden or the screen sleeps. */
+    final boolean keepFront;
     final boolean remoteEnabled;
     final int remotePort;
     final boolean upnp;
@@ -50,6 +52,7 @@ final class AppSettings {
         port = clamp(parseInt(p.getString("port", "8080"), 8080), 1024, 65535);
         password = p.getString("password", "");
         autostart = p.getBoolean("autostart", true);
+        keepFront = p.getBoolean("keep_front", true);
         remoteEnabled = p.getBoolean("remote_enabled", false);
         remotePort = clamp(parseInt(p.getString("remote_port", "8443"), 8443), 1024, 65535);
         upnp = p.getBoolean("upnp", true);
@@ -123,7 +126,7 @@ final class AppSettings {
                 && sensitivity == s.sensitivity && postRecordSec == s.postRecordSec
                 && segmentMin == s.segmentMin && timestamp == s.timestamp && useSdCard == s.useSdCard
                 && minFreeBytes == s.minFreeBytes && port == s.port
-                && password.equals(s.password) && autostart == s.autostart
+                && password.equals(s.password) && autostart == s.autostart && keepFront == s.keepFront
                 && remoteEnabled == s.remoteEnabled && remotePort == s.remotePort && upnp == s.upnp
                 && ddnsDomain.equals(s.ddnsDomain) && ddnsToken.equals(s.ddnsToken)
                 && externalHost.equals(s.externalHost) && acme == s.acme;
