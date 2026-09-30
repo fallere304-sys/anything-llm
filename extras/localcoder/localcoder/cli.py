@@ -21,7 +21,7 @@ import subprocess
 import sys
 
 from . import models, server, toolchain, uninstall
-from .agent import Agent, Client, ModelError
+from .agent import Agent, Client, ModelError, Status
 from .tools import Tools
 
 CONFIG = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "LocalCoder", "config.json")
@@ -269,8 +269,9 @@ def main(argv=None):
     ws = args.workspace or os.path.join(cfg["home"], "workspace", "default")
     tools = Tools(ws, env=toolchain.env(cfg["home"]))
     # 文脈の上限 (字): 日本語は 1 トークン ≒ 1〜1.5 字。指示文と道具の説明 (約 2000 トークン) の分を残す
+    status = Status(lambda t: print(t, end="", flush=True)) if sys.stdout.isatty() else None
     agent = Agent(Client(srv.url), tools, confirm=confirm_factory(state, interactive), out=say,
-                  ctx_chars=max(4000, int((args.ctx - 2500) * 1.2)))
+                  ctx_chars=max(4000, int((args.ctx - 2500) * 1.2)), status=status)
     say(f"作業フォルダ: {tools.root}")
     try:
         if args.task:

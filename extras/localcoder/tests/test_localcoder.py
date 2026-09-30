@@ -163,7 +163,7 @@ class RepeatTest(AgentTest):
         calls = []
 
         class Tight:
-            def chat(self, messages, tools=None, on_text=None):
+            def chat(self, messages, tools=None, on_text=None, on_tool=None):
                 calls.append(sum(len(m.get("content") or "") for m in messages))
                 if len(calls) == 1:
                     from localcoder.agent import ModelError

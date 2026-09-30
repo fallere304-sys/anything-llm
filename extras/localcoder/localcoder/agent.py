@@ -8,6 +8,7 @@
 
 import json
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -50,7 +51,7 @@ class Client:
         self.url = url.rstrip("/") + "/v1/chat/completions"
         self.timeout, self.opener = timeout, opener
 
-    def chat(self, messages, tools=None, on_text=None, temperature=0.2, max_tokens=4096):
+    def chat(self, messages, tools=None, on_text=None, temperature=0.2, max_tokens=4096, on_tool=None):
         body = {"model": "local", "messages": messages, "temperature": temperature, "max_tokens": max_tokens,
                 "stream": on_text is not None}
         if tools:
@@ -69,10 +70,10 @@ class Client:
                 msg = data["choices"][0]["message"]
                 return {"content": msg.get("content") or "", "tool_calls": msg.get("tool_calls") or [],
                         "timings": data.get("timings")}
-            return self._stream(r, on_text)
+            return self._stream(r, on_text, on_tool)
 
     @staticmethod
-    def _stream(r, on_text):
+    def _stream(r, on_text, on_tool=None):
         content, calls, timings = [], {}, None
         for raw in r:
             line = raw.decode("utf-8", "replace").strip()
@@ -98,6 +99,8 @@ class Client:
                     fn = tc.get("function") or {}
                     slot["function"]["name"] += fn.get("name") or ""
                     slot["function"]["arguments"] += fn.get("arguments") or ""
+                    if on_tool:
+                        on_tool(slot["function"]["name"], len(slot["function"]["arguments"]))
         return {"content": "".join(content), "tool_calls": [calls[k] for k in sorted(calls)], "timings": timings}
 
 
@@ -120,9 +123,71 @@ def rescue_calls(text):
     return found
 
 
+class Status:
+    """待っている間の 1 行の表示。モデルが頼みを読んでいる間は「考えています… 12 秒」、
+    ファイルの中身などを組み立てている間は「write_file を準備しています… 1234 字」。本文が出始めたら消す。"""
+
+    WIDTH = 72
+
+    def __init__(self, write, clock=time.time, interval=1.0):
+        self._write, self.clock, self.interval = write, clock, interval
+        self.lock = threading.Lock()
+        self.label, self.shown, self.at_line_start = None, False, True
+        self.t0, self._stop = 0.0, threading.Event()
+        self.thread = None
+
+    def begin(self):
+        self.t0, self.label, self.at_line_start = self.clock(), "考えています", True
+        self._stop.clear()
+        self.thread = threading.Thread(target=self._tick, daemon=True)
+        self.thread.start()
+
+    def _tick(self):
+        while not self._stop.wait(self.interval):
+            self.show()
+
+    def show(self):
+        with self.lock:
+            if self.label is None:
+                return
+            if not self.at_line_start:          # 本文の途中の行は消さない: 改行してから出す
+                self._write("\n")
+                self.at_line_start = True
+            line = f"  ({self.label}… {self.clock() - self.t0:.0f} 秒)"
+            self._write("\r" + line + " " * max(0, self.WIDTH - len(line) * 2) + "\r")
+            self.shown = True
+
+    def _clear(self):
+        if self.shown:
+            self._write("\r" + " " * self.WIDTH + "\r")
+            self.shown = False
+
+    def text(self, s):
+        """本文が届いた: 表示を消して、そのまま流す。"""
+        with self.lock:
+            self._clear()
+            self.label = None
+            self._write(s)
+            self.at_line_start = s.endswith("\n")
+
+    def tool(self, name, chars):
+        with self.lock:
+            self.label = f"{name or '道具'} を準備しています ({chars:,} 字)"
+
+    def end(self):
+        self._stop.set()
+        if self.thread is not None:
+            self.thread.join(timeout=2)
+        with self.lock:
+            self._clear()
+            self.label = None
+
+
 class Agent:
-    def __init__(self, client, tools: Tools, confirm=None, out=print, write=None, ctx_chars=60_000, max_steps=60):
+    def __init__(self, client, tools: Tools, confirm=None, out=print, write=None, ctx_chars=60_000, max_steps=60,
+                 status=None):
         self.client, self.tools = client, tools
+        self.status = status                                    # Status (画面のときだけ。記録に残すときは None)
         self.confirm = confirm or (lambda command: True)      # run の前に相棒に聞く (True で実行)
         self.out = out
         self.write = write or (lambda s: print(s, end="", flush=True))
@@ -203,17 +268,30 @@ class Agent:
         return ""
 
     def _chat(self):
-        """文脈がモデルの枠を超えたと言われたら、縮めてやり直す。"""
-        for _ in range(4):
-            try:
-                return self.client.chat(self.messages, tools=SCHEMAS, on_text=self.write)
-            except ModelError as e:
-                if "context" not in str(e).lower() or self.ctx_chars < 4000:
-                    raise
-                self.ctx_chars = int(self.ctx_chars * 0.7)
-                self.out(f"  (話が長くなったので、古いところを縮めます: 上限 {self.ctx_chars} 字)")
-                self._compact()
-        return self.client.chat(self.messages, tools=SCHEMAS, on_text=self.write)
+        """文脈がモデルの枠を超えたと言われたら、縮めてやり直す。待っている間は Status に経過を出す。"""
+        st = self.status
+        on_text = st.text if st else self.write
+        on_tool = st.tool if st else None
+        if st:
+            st.begin()
+        try:
+            for _ in range(4):
+                try:
+                    return self.client.chat(self.messages, tools=SCHEMAS, on_text=on_text, on_tool=on_tool)
+                except ModelError as e:
+                    if "context" not in str(e).lower() or self.ctx_chars < 4000:
+                        raise
+                    self.ctx_chars = int(self.ctx_chars * 0.7)
+                    if st:
+                        st.end()
+                    self.out(f"  (話が長くなったので、古いところを縮めます: 上限 {self.ctx_chars} 字)")
+                    self._compact()
+                    if st:
+                        st.begin()
+            return self.client.chat(self.messages, tools=SCHEMAS, on_text=on_text, on_tool=on_tool)
+        finally:
+            if st:
+                st.end()
 
     def _do(self, call):
         name = call["function"]["name"]
