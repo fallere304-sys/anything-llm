@@ -10,9 +10,11 @@ from typing import AsyncIterator, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .. import __version__
+from ..activity import describe_nodes
 from ..chat.service import MAX_USER_CHARS, Busy, ChatService, UnknownProfile
 from ..config import Settings
 from ..llm.base import LLMProvider
@@ -68,6 +70,7 @@ def create_app(
 
     app = FastAPI(title="AI Buddy", version=__version__, lifespan=lifespan)
     app.state.service = service
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     def require_auth(x_buddy_token: str = Header(default="")) -> None:
         if not settings.access_token:
@@ -93,7 +96,7 @@ def create_app(
             }
         return {
             **service.status(), "llm_reachable": ok, "llm_detail": detail,
-            "tts": tts_info, "version": __version__,
+            "tts": tts_info, "nodes": describe_nodes(providers, tts), "version": __version__,
         }
 
     @app.post("/api/tts", dependencies=auth)

@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import AsyncIterator
+
+from ..activity import activity
 
 from ..llm.base import LLMError, LLMProvider
 from ..storage.db import Database
@@ -58,7 +61,8 @@ class ChatService:
     ) -> AsyncIterator[dict]:
         """ユーザー発言を保存し、応答をイベント列として返す。
 
-        イベント: status / delta / done / error。内部の思考は出さない。
+        イベント: status / activity / delta / done / error。
+        activity は「何に実際にアクセスしたか」の要約のみ。内部の思考は出さない。
         """
         self.db.get_conversation(cid)  # NotFound はここで上位へ
         if profile not in self.providers:
@@ -78,6 +82,16 @@ class ChatService:
             self.state, self.last_error = "thinking", ""
             yield {"type": "status", "state": "thinking", "dropped_history": dropped,
                    "profile": profile, "model": provider.model}
+            for ev in self._context_activities(messages, dropped):
+                yield ev
+            t0 = time.monotonic()
+            llm_ev = activity(
+                f"llm:{profile}", "start", f"{provider.model} に問い合わせ",
+                external=provider.sends_data_externally,
+            )
+            llm_id = llm_ev["id"]
+            log.info("activity llm:%s start model=%s", profile, provider.model)
+            yield llm_ev
             parts: list[str] = []
             try:
                 async for chunk in provider.stream(messages):
@@ -89,14 +103,21 @@ class ChatService:
             except LLMError as exc:
                 self.state, self.last_error = "error", str(exc)
                 log.error("LLM error in conversation %s: %s", cid, exc)
+                yield activity(f"llm:{profile}", "end", "失敗", llm_id, ok=False)
                 yield {"type": "error", "message": str(exc)}
                 return
             text = "".join(parts)
+            elapsed = time.monotonic() - t0
             if not text.strip():
                 self.state, self.last_error = "error", "LLM が空の応答を返しました。"
                 log.error("empty LLM response in conversation %s", cid)
+                yield activity(f"llm:{profile}", "end", "空の応答", llm_id, ok=False)
                 yield {"type": "error", "message": self.last_error}
                 return
+            log.info("activity llm:%s end chars=%d sec=%.1f", profile, len(text), elapsed)
+            yield activity(
+                f"llm:{profile}", "end", f"応答受信 {len(text)}文字 / {elapsed:.1f}秒", llm_id, ok=True
+            )
             saved = self.db.add_message(
                 cid, "assistant", text, provider=provider.name, model=provider.model
             )
@@ -108,3 +129,14 @@ class ChatService:
             self._active.discard(cid)
             if self.state in ("thinking", "responding"):
                 self.state = "idle"
+
+    @staticmethod
+    def _context_activities(messages: list, dropped: int) -> list[dict]:
+        has_system = bool(messages) and messages[0].role == "system"
+        kept = len(messages) - (1 if has_system else 0)
+        events = []
+        if has_system:
+            events.append(activity("persona", "pulse", "人格・行動規則を適用"))
+        note = f"(古い{dropped}件は省略)" if dropped else ""
+        events.append(activity("history", "pulse", f"会話履歴 {kept}件を参照{note}"))
+        return events
