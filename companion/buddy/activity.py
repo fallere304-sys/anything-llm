@@ -15,8 +15,6 @@ from .tts.base import TTSProvider
 
 # (id, 球体内の短い表示, 名称, 説明, 予定フェーズ) — 予定フェーズが None なら実装済み
 _PLANNED = [
-    ("memory", "記憶", "長期記憶", "ユーザーが保存を許可した情報", 3),
-    ("project", "PJ", "プロジェクト", "プロジェクト単位の記憶", 3),
     ("web", "Web", "Web検索", "外部情報の調査", 4),
     ("files", "File", "ファイル", "PC上のファイル参照・作成", 4),
     ("tools", "Tool", "ツール", "コマンド・Python・Git 等の実行", 4),
@@ -35,6 +33,8 @@ def describe_nodes(
     nodes = [
         node("persona", "人格", "人格・行動規則", "システムプロンプト(prompts/system.md)", True),
         node("history", "履歴", "会話履歴", "現在の会話(短期記憶)", True),
+        node("memory", "記憶", "長期記憶", "ユーザーが保存を許可した情報(重要事項を含む)", True),
+        node("project", "PJ", "プロジェクト", "会話に紐づくプロジェクトの記憶", True),
     ]
     for profile, short, label in (("fast", "高速", "高速モデル"), ("strong", "深考", "高性能モデル")):
         p = providers.get(profile)

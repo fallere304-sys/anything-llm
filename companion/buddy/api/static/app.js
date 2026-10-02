@@ -1,5 +1,6 @@
 // AI相棒 UI 本体。会話・状態・処理ログ・音声出力と、可視化(viz.js)への橋渡し。
 import { NetworkViz } from "./viz.js";
+import { MemoryPanel } from "./memory.js";
 
 const $ = (id) => document.getElementById(id);
 const STATE_LABEL = { idle: "待機中", thinking: "考え中…", responding: "応答中…", error: "エラー" };
@@ -31,6 +32,7 @@ async function json(path, opts) {
 
 // ---------- 可視化・処理ログ ----------
 const viz = new NetworkViz($("viz"), { onSelect: showNodeInfo });
+const memoryPanel = new MemoryPanel({ json, showError: (m) => showError(m), onProjectsChanged: setupProjects });
 
 function setState(s) {
   $("dot").className = s === "idle" ? "" : s;
@@ -62,7 +64,7 @@ function showNodeInfo(n) {
   add("h3", n.label);
   add("p", n.description);
   if (n.available) add("p", "状態: 利用可能");
-  else add("p", `状態: 未実装${n.planned_phase ? `(Phase ${n.planned_phase} 予定)` : ""}`, "off");
+  else add("p", n.planned_phase ? `状態: 未実装(Phase ${n.planned_phase} 予定)` : "状態: 未設定(.env で設定すると使えます)", "off");
   if (n.external && n.available) add("p", "☁ データが外部サービスへ送信されます", "warn");
   add("p", n.lastSummary ? `最新: ${n.lastSummary}` : "まだアクセスはありません", n.lastSummary ? "" : "off");
   box.hidden = false;
@@ -90,6 +92,7 @@ async function refreshStatus() {
     if (Object.values(s.profiles || {}).some((p) => p.external)) add("⚠ 会話はクラウドAIへ送信", "ext");
     setupProfiles(s.profiles || {});
     setupTts(s.tts || { enabled: false });
+    memoryPanel.refreshBadge().catch(() => {});
     const sig = JSON.stringify(s.nodes || []);
     if (sig !== nodeSig) {
       nodeSig = sig;
@@ -145,11 +148,36 @@ async function speak(text) {
 }
 
 // ---------- 会話 ----------
-function bubble(role, text) {
+function bubble(role, text, msg = null) {
   const d = document.createElement("div");
   d.className = "msg " + role; d.textContent = text; // textContent: XSS対策
+  if (msg?.id) { // 保存済みの発言だけ「覚える」を出す
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "remember"; b.textContent = "＋覚える"; b.title = "この発言を記憶として保存";
+    const conv = convs.find((c) => c.id === current);
+    b.onclick = () => memoryPanel.openWith({ content: msg.content, messageId: msg.id, projectId: conv?.project_id || null });
+    d.appendChild(b);
+  }
   $("log").appendChild(d); $("log").scrollTop = $("log").scrollHeight; return d;
 }
+
+// ---------- プロジェクト ----------
+function setupProjects(projects) {
+  const sel = $("project"), prev = sel.value;
+  sel.innerHTML = "";
+  const none = document.createElement("option"); none.value = ""; none.textContent = "なし"; sel.appendChild(none);
+  projects.forEach((p) => { const o = document.createElement("option"); o.value = p.id; o.textContent = p.name; sel.appendChild(o); });
+  const conv = convs.find((c) => c.id === current);
+  sel.value = conv ? (conv.project_id || "") : prev;
+  if (sel.value !== (conv ? (conv.project_id || "") : prev)) sel.value = "";
+}
+$("project").onchange = async () => {
+  if (!current) return; // 新規会話の作成時に適用する
+  try {
+    const c = await json(`/api/conversations/${current}`, { method: "PATCH", body: JSON.stringify({ project_id: $("project").value || null }) });
+    convs = convs.map((x) => (x.id === c.id ? c : x));
+  } catch (e) { showError("プロジェクトの設定に失敗しました: " + e.message); }
+};
 function renderList() {
   const el = $("list"); el.innerHTML = "";
   convs.forEach((c) => {
@@ -179,10 +207,15 @@ async function openConv(id) {
     const e = document.createElement("div"); e.className = "empty";
     e.textContent = "メッセージを送って会話を始めましょう。"; $("log").appendChild(e); return;
   }
-  (await json(`/api/conversations/${id}/messages`)).forEach((m) => bubble(m.role, m.content));
+  const conv = convs.find((c) => c.id === id);
+  $("project").value = conv?.project_id || "";
+  (await json(`/api/conversations/${id}/messages`)).forEach((m) => bubble(m.role, m.content, m));
 }
 async function newConv() {
-  const c = await json("/api/conversations", { method: "POST", body: JSON.stringify({}) });
+  let c = await json("/api/conversations", { method: "POST", body: JSON.stringify({}) });
+  if ($("project").value) {
+    c = await json(`/api/conversations/${c.id}`, { method: "PATCH", body: JSON.stringify({ project_id: $("project").value }) });
+  }
   current = c.id; convs.unshift(c); renderList(); await openConv(c.id); $("input").focus();
 }
 
@@ -217,6 +250,7 @@ async function send(text) {
   }
   busy = false; $("send").disabled = false;
   convs = await json("/api/conversations"); renderList(); refreshStatus();
+  if ($("banner").style.display !== "block") await openConv(current); // 保存済みIDで描き直し(「覚える」用)
 }
 
 $("form").addEventListener("submit", (e) => {
@@ -233,5 +267,5 @@ document.addEventListener("click", (e) => {
   if ($("list").classList.contains("open") && !$("list").contains(e.target) && e.target !== $("menu")) $("list").classList.remove("open");
 });
 
-refreshStatus().then(loadConvs).catch((e) => showError("起動に失敗しました: " + e.message));
+refreshStatus().then(() => memoryPanel.refreshProjects()).then(loadConvs).catch((e) => showError("起動に失敗しました: " + e.message));
 setInterval(refreshStatus, 10000);

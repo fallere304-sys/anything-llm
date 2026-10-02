@@ -16,11 +16,13 @@
     <div id="dot"></div>
     <h1>AI相棒</h1>
     <span id="state">待機中</span>
+    <button id="memBtn" type="button" title="記憶・作業履歴" aria-label="記憶">🧠<span id="pendingBadge" class="badge" hidden></span></button>
     <button id="vizToggle" type="button" title="可視化の表示/非表示" aria-pressed="true">◉</button>
     <button id="new" type="button">＋ 新規</button>
   </header>
   <div id="tools">
     <label>モデル <select id="profile"></select></label>
+    <label>PJ <select id="project" title="この会話を紐付けるプロジェクト"></select></label>
     <div id="meta"></div>
     <button id="speak" type="button" title="AIの返答を音声で読み上げる" disabled>🔈 音声: OFF</button>
   </div>
@@ -41,6 +43,16 @@
     </section>
   </div>
   <nav id="list" aria-label="会話一覧"></nav>
+  <aside id="memPanel" hidden aria-label="記憶">
+    <div class="mp-head"><b>記憶</b><button id="memClose" type="button" aria-label="閉じる">✕</button></div>
+    <div class="tabs">
+      <button type="button" data-tab="list" class="on">記憶</button>
+      <button type="button" data-tab="pending">承認待ち<span id="pendingBadge2" class="badge" hidden></span></button>
+      <button type="button" data-tab="log">作業履歴</button>
+      <button type="button" data-tab="projects">プロジェクト</button>
+    </div>
+    <div id="mpBody"></div>
+  </aside>
 </div>
 </body>
 </html>

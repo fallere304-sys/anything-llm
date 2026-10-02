@@ -4,6 +4,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -50,6 +51,32 @@ class Database:
 
     def close(self) -> None:
         self._conn.close()
+
+    # --- 他ストア(記憶など)が同じ接続を共有するための汎用口 ---
+    @contextmanager
+    def tx(self):
+        """ロック + トランザクション。例外時はロールバック。"""
+        with self._lock, self._conn:
+            yield self._conn
+
+    def query(self, sql: str, params: tuple = ()) -> list[dict]:
+        with self._lock:
+            return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+
+    def set_conversation_project(self, cid: str, project_id: Optional[str]) -> None:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE conversations SET project_id = ?, updated_at = ? WHERE id = ?",
+                (project_id, now_iso(), cid),
+            )
+        if cur.rowcount == 0:
+            raise NotFound(cid)
+
+    def get_message(self, mid: int) -> dict:
+        rows = self.query("SELECT * FROM messages WHERE id = ?", (mid,))
+        if not rows:
+            raise NotFound(str(mid))
+        return rows[0]
 
     # --- conversations ---
     def create_conversation(self, title: str = "新しい会話", project_id: Optional[str] = None) -> dict:

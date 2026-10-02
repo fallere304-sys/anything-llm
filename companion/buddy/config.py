@@ -48,6 +48,7 @@ class Settings:
     data_dir: Path = Path("./data")
     system_prompt_file: Path = Path("./prompts/system.md")
     max_context_chars: int = 12000
+    max_memory_chars: int = 3000  # 記憶として文脈に入れる最大文字数
     llm_provider: str = "mock"
     llm_base_url: str = ""  # 空ならプロバイダ既定(registry で解決)
     llm_model: str = ""  # profile "fast"
@@ -77,6 +78,8 @@ class Settings:
             )
         if self.max_context_chars < 500:
             raise ConfigError("BUDDY_MAX_CONTEXT_CHARS は 500 以上にしてください。")
+        if not 0 <= self.max_memory_chars < self.max_context_chars:
+            raise ConfigError("BUDDY_MAX_MEMORY_CHARS は 0 以上、BUDDY_MAX_CONTEXT_CHARS 未満にしてください。")
 
     def load_system_prompt(self) -> str:
         if not self.system_prompt_file.is_file():
@@ -114,6 +117,7 @@ def load_settings(
             env.get("BUDDY_SYSTEM_PROMPT_FILE", "").strip() or d.system_prompt_file
         ),
         max_context_chars=_int(env, "BUDDY_MAX_CONTEXT_CHARS", d.max_context_chars),
+        max_memory_chars=_int(env, "BUDDY_MAX_MEMORY_CHARS", d.max_memory_chars),
         llm_provider=(env.get("LLM_PROVIDER", "").strip() or d.llm_provider).lower(),
         llm_base_url=env.get("LLM_BASE_URL", "").strip(),
         llm_model=env.get("LLM_MODEL", "").strip(),

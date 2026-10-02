@@ -19,9 +19,11 @@ def test_success_flow_emits_real_accesses(client):
     ev = parse_sse(client.post(f"/api/conversations/{cid}/messages", json={"content": "秘密の内容"}).text)
     a = acts(ev)
     assert [(x["target"], x["phase"]) for x in a] == [
-        ("persona", "pulse"), ("history", "pulse"), ("llm:fast", "start"), ("llm:fast", "end")]
-    assert a[1]["summary"] == "会話履歴 1件を参照"
-    assert a[2]["id"] == a[3]["id"] and a[3]["ok"] is True and "応答受信" in a[3]["summary"]
+        ("persona", "pulse"), ("memory", "pulse"), ("history", "pulse"),
+        ("llm:fast", "start"), ("llm:fast", "end")]
+    assert a[1]["summary"] == "長期記憶を検索: 該当なし"
+    assert a[2]["summary"] == "会話履歴 1件を参照"
+    assert a[3]["id"] == a[4]["id"] and a[4]["ok"] is True and "応答受信" in a[4]["summary"]
     assert all("秘密の内容" not in x["summary"] for x in a)  # 本文は要約に含めない
     # activity は delta より前に開始、done より前に終了
     types = [e["type"] for e in ev]
@@ -50,8 +52,9 @@ def test_nodes_reflect_real_availability():
     nodes = {n["id"]: n for n in describe_nodes({"fast": MockProvider()}, None)}
     assert nodes["persona"]["available"] and nodes["llm:fast"]["available"]
     assert not nodes["llm:strong"]["available"] and not nodes["tts"]["available"]
-    for planned in ("memory", "project", "web", "files", "tools"):
-        assert nodes[planned]["available"] is False and nodes[planned]["planned_phase"] in (3, 4)
+    assert nodes["memory"]["available"] and nodes["project"]["available"]
+    for planned in ("web", "files", "tools"):
+        assert nodes[planned]["available"] is False and nodes[planned]["planned_phase"] == 4
     with_tts = {n["id"]: n for n in describe_nodes({"fast": MockProvider()}, MockTTSProvider())}
     assert with_tts["tts"]["available"]
 

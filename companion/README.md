@@ -1,7 +1,7 @@
 # AI相棒 (companion)
 
 会話・記憶・調査・作業支援を担う「AI相棒」。**AIが考え・提案・作業し、重要な判断は人間が承認する**(Human-in-the-loop)。
-実装済み: Phase 1(基本チャット)、Phase 2(OpenAI・モデル切替・音声出力の窓口)、知識・処理アクセスの可視化画面。進捗と課題は [docs/PHASES.md](docs/PHASES.md)。
+実装済み: Phase 1(基本チャット)、Phase 2(OpenAI・モデル切替・音声出力の窓口)、Phase 3(記憶)、知識・処理アクセスの可視化画面。進捗と課題は [docs/PHASES.md](docs/PHASES.md)。
 
 ## 起動
 
@@ -63,6 +63,7 @@ buddy/llm/               LLMProvider 抽象 + mock / openai_compat + registry
 buddy/storage/db.py      SQLite 会話ストア
 buddy/chat/              文脈構築 + チャットサービス(状態イベント生成)
 buddy/activity.py        可視化ノード定義とアクセスイベント
+buddy/memory/            記憶・プロジェクト・作業履歴(store / service / retrieval)
 buddy/tts/               TTSProvider 抽象 + mock / voiceroid2
 buddy/api/               FastAPI(認証・SSE)+ static/(UI・可視化 viz.js)
 prompts/system.md        人格・行動規則(編集可)

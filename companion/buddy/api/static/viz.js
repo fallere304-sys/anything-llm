@@ -335,7 +335,7 @@ export class NetworkViz {
     if (n.available || !narrow) {
       ctx.font = `${narrow ? 10 : 11}px system-ui,"Yu Gothic UI",sans-serif`;
       ctx.fillStyle = n.available ? "rgba(210,255,240,0.9)" : "rgba(140,160,155,0.65)";
-      ctx.fillText(n.available ? n.label : `${n.label}(未実装)`, n.x, n.y + r + 11);
+      ctx.fillText(n.available ? n.label : `${n.label}(${n.planned_phase ? "未実装" : "未設定"})`, n.x, n.y + r + 11);
     }
     ctx.restore();
   }
