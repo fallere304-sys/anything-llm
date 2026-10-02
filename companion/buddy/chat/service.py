@@ -18,12 +18,21 @@ class Busy(Exception):
     """同じ会話で応答生成中に新しい送信があった。"""
 
 
+class UnknownProfile(Exception):
+    """設定されていないモデルプロファイルが指定された。"""
+
+
 class ChatService:
     def __init__(
-        self, db: Database, provider: LLMProvider, system_prompt: str, max_context_chars: int
+        self,
+        db: Database,
+        providers: dict[str, LLMProvider],
+        system_prompt: str,
+        max_context_chars: int,
     ) -> None:
         self.db = db
-        self.provider = provider
+        self.providers = providers
+        self.provider = providers["fast"]  # 既定(状態表示用)
         self.system_prompt = system_prompt
         self.max_context_chars = max_context_chars
         self.state = "idle"  # idle | thinking | responding | error
@@ -37,15 +46,24 @@ class ChatService:
             "provider": self.provider.name,
             "model": self.provider.model,
             "external": self.provider.sends_data_externally,
+            "profiles": {
+                name: {"provider": p.name, "model": p.model, "external": p.sends_data_externally}
+                for name, p in self.providers.items()
+            },
             "active_conversations": sorted(self._active),
         }
 
-    async def reply_stream(self, cid: str, user_text: str) -> AsyncIterator[dict]:
+    async def reply_stream(
+        self, cid: str, user_text: str, profile: str = "fast"
+    ) -> AsyncIterator[dict]:
         """ユーザー発言を保存し、応答をイベント列として返す。
 
         イベント: status / delta / done / error。内部の思考は出さない。
         """
         self.db.get_conversation(cid)  # NotFound はここで上位へ
+        if profile not in self.providers:
+            raise UnknownProfile(profile)
+        provider = self.providers[profile]
         if cid in self._active:
             raise Busy(cid)
         self._active.add(cid)
@@ -58,10 +76,11 @@ class ChatService:
             messages, dropped = build_context(self.system_prompt, history, self.max_context_chars)
 
             self.state, self.last_error = "thinking", ""
-            yield {"type": "status", "state": "thinking", "dropped_history": dropped}
+            yield {"type": "status", "state": "thinking", "dropped_history": dropped,
+                   "profile": profile, "model": provider.model}
             parts: list[str] = []
             try:
-                async for chunk in self.provider.stream(messages):
+                async for chunk in provider.stream(messages):
                     if not parts:
                         self.state = "responding"
                         yield {"type": "status", "state": "responding"}
@@ -79,7 +98,7 @@ class ChatService:
                 yield {"type": "error", "message": self.last_error}
                 return
             saved = self.db.add_message(
-                cid, "assistant", text, provider=self.provider.name, model=self.provider.model
+                cid, "assistant", text, provider=provider.name, model=provider.model
             )
             self.state = "idle"
             yield {"type": "status", "state": "idle"}

@@ -20,7 +20,12 @@ class OpenAICompatProvider(LLMProvider):
         api_key: str = "",
         timeout: float = 120.0,
         client: Optional[httpx.AsyncClient] = None,
+        name: Optional[str] = None,
+        force_external: bool = False,
     ) -> None:
+        if name:
+            self.name = name
+        self._force_external = force_external
         if not model:
             raise LLMError("LLM_MODEL が未設定です(.env を確認してください)。")
         self._base_url = base_url.rstrip("/")
@@ -34,6 +39,8 @@ class OpenAICompatProvider(LLMProvider):
 
     @property
     def sends_data_externally(self) -> bool:
+        if self._force_external:
+            return True
         host = urlparse(self._base_url).hostname or ""
         return host not in {"localhost", "127.0.0.1", "::1"}
 

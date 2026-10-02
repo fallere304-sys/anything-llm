@@ -46,6 +46,11 @@
          background:var(--panel); border-top:1px solid var(--line); }
   textarea { flex:1; resize:none; background:var(--bg); color:var(--text); border:1px solid var(--line);
              border-radius:10px; padding:9px 12px; font:inherit; max-height:140px; }
+  #tools { display:flex; align-items:center; gap:8px; padding:6px 14px; border-bottom:1px solid var(--line); font-size:13px; }
+  #tools select { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:5px 8px; font:inherit; }
+  #tools .sp { flex:1; }
+  #speak.on { background:#3a63b8; border-color:#3a63b8; }
+  #speak:disabled { display:none; }
   #menu { display:none; }
   @media (max-width:640px) {
     #menu { display:inline-block; }
@@ -64,6 +69,11 @@
     <button id="new" type="button">＋ 新規</button>
   </header>
   <div id="meta"></div>
+  <div id="tools">
+    <label>モデル <select id="profile"></select></label>
+    <span class="sp"></span>
+    <button id="speak" type="button" title="AIの返答を音声で読み上げる" disabled>🔈 音声: OFF</button>
+  </div>
   <div id="banner" role="alert"></div>
   <div id="main">
     <nav id="list"></nav>
@@ -115,8 +125,47 @@ async function refreshStatus() {
     $("meta").innerHTML = "";
     const add = (t, cls) => { const e = document.createElement("span"); e.textContent = t; if (cls) e.className = cls; $("meta").appendChild(e); };
     add(`プロバイダ: ${s.provider}`); add(`モデル: ${s.model}`); add(reach);
-    if (s.external) add("⚠ 会話内容は外部サービスへ送信されます", "ext");
+    const ext = Object.values(s.profiles || {}).some((p) => p.external);
+    if (ext) add("⚠ 会話内容は外部サービス(クラウドAI)へ送信されます", "ext");
+    setupProfiles(s.profiles || {});
+    setupTts(s.tts || { enabled:false });
   } catch (e) { showError("状態を取得できません: " + e.message); }
+}
+
+function setupProfiles(profiles) {
+  const sel = $("profile"), names = Object.keys(profiles);
+  if (sel.dataset.sig === names.join()) return;
+  sel.dataset.sig = names.join(); const prev = sel.value; sel.innerHTML = "";
+  names.forEach((n) => { const o = document.createElement("option"); o.value = n;
+    o.textContent = (n === "fast" ? "高速" : n === "strong" ? "高性能" : n) + ` (${profiles[n].model})`; sel.appendChild(o); });
+  if (names.includes(prev)) sel.value = prev;
+}
+
+// --- 音声出力 ---
+let ttsOn = false, ttsAvailable = false;
+const player = new Audio();  // 同じ要素を使い回す(スマホの自動再生制限対策)
+const SILENT = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+function setupTts(t) {
+  ttsAvailable = !!(t.enabled && t.ok !== false);
+  const b = $("speak"); b.disabled = !t.enabled;
+  b.title = t.enabled ? `声: ${t.voice || "?"} (${t.provider})${t.ok === false ? " — 利用不可: " + t.detail : ""}` : "";
+  if (t.enabled && t.ok === false) { ttsOn = false; b.classList.remove("on"); b.textContent = "🔈 音声: 利用不可"; }
+}
+$("speak").onclick = () => {
+  if (!ttsAvailable) { showError("音声出力を利用できません: " + $("speak").title); return; }
+  ttsOn = !ttsOn; $("speak").classList.toggle("on", ttsOn);
+  $("speak").textContent = ttsOn ? "🔊 音声: ON" : "🔈 音声: OFF";
+  if (ttsOn) { player.src = SILENT; player.play().catch(() => {}); }  // ユーザー操作内で再生を許可させる
+  else player.pause();
+};
+async function speak(text) {
+  try {
+    const res = await api("/api/tts", { method:"POST", body: JSON.stringify({ text: text.slice(0, 2000) }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+    const url = URL.createObjectURL(await res.blob());
+    player.src = url; player.onended = () => URL.revokeObjectURL(url);
+    await player.play();
+  } catch (e) { showError("音声出力に失敗しました: " + e.message); }
 }
 
 function bubble(role, text) {
@@ -163,7 +212,7 @@ async function send(text) {
   bubble("user", text);
   const ai = bubble("assistant", "");
   try {
-    const res = await api(`/api/conversations/${current}/messages`, { method:"POST", body: JSON.stringify({ content: text }) });
+    const res = await api(`/api/conversations/${current}/messages`, { method:"POST", body: JSON.stringify({ content: text, profile: $("profile").value || "fast" }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
     const reader = res.body.getReader(), dec = new TextDecoder(); let buf = "";
     for (;;) {
@@ -175,6 +224,7 @@ async function send(text) {
         const ev = JSON.parse(line.slice(5));
         if (ev.type === "status") setState(ev.state);
         else if (ev.type === "delta") { ai.textContent += ev.text; $("log").scrollTop = $("log").scrollHeight; }
+        else if (ev.type === "done") { if (ttsOn) speak(ev.message.content); }
         else if (ev.type === "error") { setState("error"); showError(ev.message); if (!ai.textContent) ai.remove(); }
       }
     }

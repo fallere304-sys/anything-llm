@@ -9,13 +9,14 @@ from pathlib import Path
 from typing import AsyncIterator, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import __version__
-from ..chat.service import MAX_USER_CHARS, Busy, ChatService
+from ..chat.service import MAX_USER_CHARS, Busy, ChatService, UnknownProfile
 from ..config import Settings
 from ..llm.base import LLMProvider
+from ..tts.base import TTSError, TTSProvider
 from ..storage.db import Database, NotFound
 
 log = logging.getLogger("buddy.api")
@@ -28,12 +29,28 @@ class NewConversation(BaseModel):
 
 class NewMessage(BaseModel):
     content: str = Field(min_length=1, max_length=MAX_USER_CHARS)
+    profile: str = Field(default="fast", max_length=20)
 
 
-def create_app(settings: Settings, provider: LLMProvider, db: Optional[Database] = None) -> FastAPI:
+MAX_TTS_CHARS = 2000
+
+
+class SpeakRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_TTS_CHARS)
+
+
+def create_app(
+    settings: Settings,
+    providers: LLMProvider | dict[str, LLMProvider],
+    db: Optional[Database] = None,
+    tts: Optional[TTSProvider] = None,
+) -> FastAPI:
+    if isinstance(providers, LLMProvider):
+        providers = {"fast": providers}
+    provider = providers["fast"]
     database = db or Database(settings.db_path)
     service = ChatService(
-        database, provider, settings.load_system_prompt(), settings.max_context_chars
+        database, providers, settings.load_system_prompt(), settings.max_context_chars
     )
 
     @asynccontextmanager
@@ -43,7 +60,10 @@ def create_app(settings: Settings, provider: LLMProvider, db: Optional[Database]
             __version__, provider.name, provider.model, settings.host,
         )
         yield
-        await provider.aclose()
+        for p in providers.values():
+            await p.aclose()
+        if tts:
+            await tts.aclose()
         database.close()
 
     app = FastAPI(title="AI Buddy", version=__version__, lifespan=lifespan)
@@ -64,7 +84,30 @@ def create_app(settings: Settings, provider: LLMProvider, db: Optional[Database]
     @app.get("/api/status", dependencies=auth)
     async def status() -> dict:
         ok, detail = await provider.health()
-        return {**service.status(), "llm_reachable": ok, "llm_detail": detail, "version": __version__}
+        tts_info = {"enabled": False}
+        if tts:
+            tts_ok, tts_detail = await tts.health()
+            tts_info = {
+                "enabled": True, "provider": tts.name, "voice": tts.voice,
+                "external": tts.sends_data_externally, "ok": tts_ok, "detail": tts_detail,
+            }
+        return {
+            **service.status(), "llm_reachable": ok, "llm_detail": detail,
+            "tts": tts_info, "version": __version__,
+        }
+
+    @app.post("/api/tts", dependencies=auth)
+    async def speak(body: SpeakRequest) -> Response:
+        if tts is None:
+            raise HTTPException(404, "音声出力は設定されていません(TTS_PROVIDER)。")
+        if not body.text.strip():
+            raise HTTPException(422, "空のテキストは読み上げできません。")
+        try:
+            clip = await tts.synthesize(body.text)
+        except TTSError as exc:
+            log.error("TTS error: %s", exc)
+            raise HTTPException(502, str(exc)) from exc
+        return Response(clip.data, media_type=clip.mime, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/conversations", dependencies=auth)
     def list_conversations() -> list[dict]:
@@ -97,15 +140,18 @@ def create_app(settings: Settings, provider: LLMProvider, db: Optional[Database]
             database.get_conversation(cid)
         except NotFound:
             raise HTTPException(404, "会話が見つかりません。") from None
+        if body.profile not in providers:
+            raise HTTPException(400, f"未設定のモデルプロファイルです: {body.profile}")
         if cid in service._active:
             raise HTTPException(409, "この会話は応答生成中です。")
 
         async def sse() -> AsyncIterator[str]:
             try:
-                async for event in service.reply_stream(cid, body.content):
+                async for event in service.reply_stream(cid, body.content, body.profile):
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            except Busy:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'この会話は応答生成中です。'}, ensure_ascii=False)}\n\n"
+            except (Busy, UnknownProfile) as exc:
+                msg = "この会話は応答生成中です。" if isinstance(exc, Busy) else f"未設定のモデルプロファイルです: {exc}"
+                yield f"data: {json.dumps({'type': 'error', 'message': msg}, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(
             sse(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"}

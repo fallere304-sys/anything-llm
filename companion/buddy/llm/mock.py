@@ -10,12 +10,13 @@ from .base import ChatMessage, LLMProvider
 class MockProvider(LLMProvider):
     name = "mock"
 
-    def __init__(self, delay: float = 0.0) -> None:
+    def __init__(self, delay: float = 0.0, model: str = "mock-echo") -> None:
         self._delay = delay
+        self._model = model
 
     @property
     def model(self) -> str:
-        return "mock-echo"
+        return self._model
 
     async def stream(
         self,

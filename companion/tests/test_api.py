@@ -91,3 +91,19 @@ def test_context_truncation_reported(tmp_path):
         for i in range(4):
             _, ev = chat(c, cid, f"{i}" * 300)
         assert ev[0]["dropped_history"] > 0
+
+
+def test_profiles_select_model_and_reject_unknown(tmp_path):
+    from buddy.llm.mock import MockProvider as M
+
+    app = create_app(make_settings(tmp_path), {"fast": M(model="f1"), "strong": M(model="s1")}, Database(":memory:"))
+    with TestClient(app) as c:
+        cid = c.post("/api/conversations", json={}).json()["id"]
+        _, ev = chat(c, cid, "a")
+        assert ev[0]["profile"] == "fast" and ev[-1]["message"]["model"] == "f1"
+        r = c.post(f"/api/conversations/{cid}/messages", json={"content": "b", "profile": "strong"})
+        ev2 = parse_sse(r.text)
+        assert ev2[0]["model"] == "s1" and ev2[-1]["message"]["model"] == "s1"
+        assert c.post(f"/api/conversations/{cid}/messages", json={"content": "c", "profile": "x"}).status_code == 400
+        st = c.get("/api/status").json()
+        assert set(st["profiles"]) == {"fast", "strong"} and st["profiles"]["strong"]["model"] == "s1"

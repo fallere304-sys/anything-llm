@@ -19,16 +19,31 @@ cp .env.example .env
 .venv/bin/python -m buddy
 ```
 
-## LLM を繋ぐ(任意)
-既定は `LLM_PROVIDER=mock`(LLM不要のダミー応答)。ローカルLLMを使う例(Ollama):
+## LLM を繋ぐ
+既定は `LLM_PROVIDER=mock`(LLM不要のダミー応答)。
+
+### OpenAI(クラウド)
 ```
-ollama pull qwen2.5:3b          # GTX1060 6GB なら 3B〜7B(4bit)が目安 [推定]
 # .env
-LLM_PROVIDER=openai_compat
-LLM_BASE_URL=http://localhost:11434/v1
-LLM_MODEL=qwen2.5:3b
+LLM_PROVIDER=openai
+LLM_API_KEY=sk-...            # https://platform.openai.com で発行
+LLM_MODEL=<普段使いのモデル名>        # profile "fast"
+LLM_MODEL_STRONG=<深く考えるモデル名>  # profile "strong"(任意)。UIのモデル選択で切替
 ```
-OpenAI など外部APIを使う場合は `LLM_BASE_URL` と `LLM_API_KEY` を設定する。外部送信になる場合、UIに警告が出る。
+- モデル名はコードに書いていない。OpenAI の最新ドキュメントで確認して指定する。
+- **ChatGPT(Plus等)の契約と API の課金は別**。API は従量課金で、会話内容は OpenAI に送信される(UIに警告表示)。
+- ローカルLLM(Ollama 等)は `LLM_PROVIDER=openai_compat` + `LLM_BASE_URL`。
+
+## 音声出力(琴葉葵 / VOICEROID2)
+```
+pip install pyvcroid2          # Windows。VOICEROID2 本体が必要
+python -m buddy.tts.voiceroid2 # 利用可能な声の名前を表示
+# .env
+TTS_PROVIDER=voiceroid2
+TTS_VOICE_NAME=<表示された琴葉葵の声の名前>
+```
+サーバー(PC)で合成した WAV を、UI(スマホ含む)で再生する。`TTS_PROVIDER=mock` でビープ音による動作確認ができる。
+**VOICEROID2 アダプタは実機未検証。** VOICEROID2 の利用規約上、この用途が許されるかはご自身で確認すること。
 
 ## スマホから使う
 `.env` で `BUDDY_HOST=0.0.0.0` と `BUDDY_ACCESS_TOKEN=<長い乱数>` を設定し、スマホで `http://<PCのIP>:8765/` を開く。

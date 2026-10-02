@@ -49,10 +49,17 @@ class Settings:
     system_prompt_file: Path = Path("./prompts/system.md")
     max_context_chars: int = 12000
     llm_provider: str = "mock"
-    llm_base_url: str = "http://localhost:11434/v1"
-    llm_model: str = ""
+    llm_base_url: str = ""  # 空ならプロバイダ既定(registry で解決)
+    llm_model: str = ""  # profile "fast"
+    llm_model_strong: str = ""  # profile "strong"(任意)
     llm_api_key: str = field(default="", repr=False)  # repr から除外(ログ漏洩防止)
     llm_timeout: float = 120.0
+    tts_provider: str = "none"  # none | mock | voiceroid2
+    tts_voice_name: str = ""
+    tts_language: str = "standard"
+    tts_speed: float = 1.0
+    tts_pitch: float = 1.0
+    tts_volume: float = 1.0
 
     @property
     def db_path(self) -> Path:
@@ -77,6 +84,16 @@ class Settings:
         return self.system_prompt_file.read_text(encoding="utf-8").strip()
 
 
+def _float(env: Mapping[str, str], key: str, default: float) -> float:
+    raw = env.get(key, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{key} は数値で指定してください: {raw!r}") from exc
+
+
 def load_settings(
     env: Optional[Mapping[str, str]] = None, dotenv_path: Optional[Path] = Path(".env")
 ) -> Settings:
@@ -98,10 +115,17 @@ def load_settings(
         ),
         max_context_chars=_int(env, "BUDDY_MAX_CONTEXT_CHARS", d.max_context_chars),
         llm_provider=(env.get("LLM_PROVIDER", "").strip() or d.llm_provider).lower(),
-        llm_base_url=env.get("LLM_BASE_URL", "").strip() or d.llm_base_url,
+        llm_base_url=env.get("LLM_BASE_URL", "").strip(),
         llm_model=env.get("LLM_MODEL", "").strip(),
+        llm_model_strong=env.get("LLM_MODEL_STRONG", "").strip(),
         llm_api_key=env.get("LLM_API_KEY", "").strip(),
         llm_timeout=float(_int(env, "LLM_TIMEOUT_SECONDS", int(d.llm_timeout))),
+        tts_provider=(env.get("TTS_PROVIDER", "").strip() or d.tts_provider).lower(),
+        tts_voice_name=env.get("TTS_VOICE_NAME", "").strip(),
+        tts_language=env.get("TTS_LANGUAGE", "").strip() or d.tts_language,
+        tts_speed=_float(env, "TTS_SPEED", d.tts_speed),
+        tts_pitch=_float(env, "TTS_PITCH", d.tts_pitch),
+        tts_volume=_float(env, "TTS_VOLUME", d.tts_volume),
     )
     settings.validate()
     return settings

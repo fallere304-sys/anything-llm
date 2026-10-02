@@ -8,7 +8,8 @@ import uvicorn
 from .api.app import create_app
 from .config import ConfigError, load_settings
 from .llm.base import LLMError
-from .llm.registry import build_provider
+from .llm.registry import build_providers
+from .tts.registry import build_tts
 from .logging_setup import setup_logging
 
 
@@ -16,7 +17,7 @@ def main() -> int:
     try:
         settings = load_settings()
         setup_logging(secrets=[settings.access_token, settings.llm_api_key])
-        app = create_app(settings, build_provider(settings))
+        app = create_app(settings, build_providers(settings), tts=build_tts(settings))
     except (ConfigError, LLMError) as exc:
         print(f"[設定エラー] {exc}", file=sys.stderr)
         return 2

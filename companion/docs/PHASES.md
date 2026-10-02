@@ -33,3 +33,28 @@
 - Phase 2: Claude / Gemini プロバイダ追加、モデルプロファイル(fast / strong)をconfigで定義、切替UI
 - Phase 3: 記憶(短期・長期・プロジェクト・作業履歴・重要事項)。保存は必ずMemory Tool経由 + ユーザー確認
 - Phase 5 に備え、ツール実行の監査ログ(操作ログ)の置き場所を決める
+
+## Phase 2: LLM Provider 拡張(OpenAI) + 音声出力の窓口 — 完了(2026-10-02)
+方針変更: 思考モデルは OpenAI(クラウド)、音声は VOICEROID2 琴葉葵。
+
+### 実装
+- `openai` プロバイダ(APIキー必須・常に「外部送信」扱い・キーはログに出ない)
+- モデルプロファイル `fast` / `strong`(モデル名は `LLM_MODEL` / `LLM_MODEL_STRONG`)。自動ルーティングはせず、UIで手動切替
+- `TTSProvider` 抽象 + `mock`(ビープ) + `voiceroid2`(pyvcroid2 経由・専用単一スレッド)
+- `POST /api/tts`(認証必須・2000文字上限)、UI に音声ON/OFFとモデル選択
+- Claude / Gemini は今回見送り(クラウドは OpenAI を採用)
+
+### テスト
+- pytest 43件成功(profile選択、未設定profileの拒否、openai設定検証、TTS API、VOICEROID2アダプタ[偽の pyvcroid2 で検証])
+- 実起動+ヘッドレスChromium: strong 選択→疑似OpenAI互換サーバーが model-big と `Bearer` 付きで受信、返答後に WAV を取得して再生、ログにキー無し
+
+### 問題点・未検証
+- **実OpenAI API・VOICEROID2・pyvcroid2 は未検証**(キーも製品もこの環境に無い)。pyvcroid2 の API は公開仕様に基づく想定
+- OpenAI の推論系モデルは最初の出力まで時間がかかる場合がある(UIは「考え中」表示)。`max_tokens` 等は送っていない
+- 利用料の上限管理(予算)は未実装。Phase 6 のタスク予算と合わせて実装する
+- スマホでの音声自動再生は、音声ONボタン操作で解除する方式(実機未検証)
+- 返答全文を一度に読み上げる(分割・ストリーミング再生は未対応)
+
+### 次への課題
+- 画面: 「知識・処理へのアクセスの視覚化」(参考画像の添付待ち)。そのためのイベント(記憶/Web/ファイル/ツールの参照・使用)をバックエンドから流す
+- Phase 3: 記憶
