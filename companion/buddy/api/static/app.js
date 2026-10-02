@@ -1,9 +1,11 @@
 // AI相棒 UI 本体。会話・状態・処理ログ・音声出力と、可視化(viz.js)への橋渡し。
 import { NetworkViz } from "./viz.js";
 import { MemoryPanel } from "./memory.js";
+import { approvalCard, markApproval, toolChip } from "./agent.js";
 
 const $ = (id) => document.getElementById(id);
-const STATE_LABEL = { idle: "待機中", thinking: "考え中…", responding: "応答中…", error: "エラー" };
+const STATE_LABEL = { idle: "待機中", thinking: "考え中…", responding: "応答中…", working: "作業中…", waiting: "承認待ち", error: "エラー" };
+const BASE_TITLE = document.title;
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* 保存できない環境では無視 */ } },
@@ -37,6 +39,7 @@ const memoryPanel = new MemoryPanel({ json, showError: (m) => showError(m), onPr
 function setState(s) {
   $("dot").className = s === "idle" ? "" : s;
   $("state").textContent = STATE_LABEL[s] || s;
+  document.title = s === "waiting" ? "【承認待ち】" + BASE_TITLE : BASE_TITLE;
   viz.setState(s);
 }
 function showError(msg) { const b = $("banner"); b.textContent = msg; b.style.display = msg ? "block" : "none"; }
@@ -64,7 +67,7 @@ function showNodeInfo(n) {
   add("h3", n.label);
   add("p", n.description);
   if (n.available) add("p", "状態: 利用可能");
-  else add("p", n.planned_phase ? `状態: 未実装(Phase ${n.planned_phase} 予定)` : "状態: 未設定(.env で設定すると使えます)", "off");
+  else add("p", n.note === "未接続" ? "状態: 未接続" : n.planned_phase ? `状態: 未実装(Phase ${n.planned_phase} 予定)` : "状態: 未設定(.env で設定すると使えます)", "off");
   if (n.external && n.available) add("p", "☁ データが外部サービスへ送信されます", "warn");
   add("p", n.lastSummary ? `最新: ${n.lastSummary}` : "まだアクセスはありません", n.lastSummary ? "" : "off");
   box.hidden = false;
@@ -158,7 +161,29 @@ function bubble(role, text, msg = null) {
     b.onclick = () => memoryPanel.openWith({ content: msg.content, messageId: msg.id, projectId: conv?.project_id || null });
     d.appendChild(b);
   }
+  if (msg?.tools_json) {
+    try { JSON.parse(msg.tools_json).forEach((r) => d.appendChild(toolChip(r, { openOutput }))); }
+    catch { /* 壊れた記録は表示しない */ }
+  }
   $("log").appendChild(d); $("log").scrollTop = $("log").scrollHeight; return d;
+}
+
+// 成果物のダウンロード。トークン不要(PC内のみ)なら直接リンクにして、
+// ファイル名はサーバーの Content-Disposition に任せる(日本語名を確実に保つため)。
+async function openOutput(name) {
+  const path = `/api/outputs/${encodeURIComponent(name)}`;
+  const a = document.createElement("a");
+  if (!token) {
+    a.href = path;
+  } else {
+    try {
+      const res = await api(path);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+      a.href = URL.createObjectURL(await res.blob()); a.download = name;
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    } catch (e) { showError("成果物を開けません: " + e.message); return; }
+  }
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
 // ---------- プロジェクト ----------
@@ -223,7 +248,13 @@ async function send(text) {
   if (!current) await newConv();
   busy = true; $("send").disabled = true; showError("");
   bubble("user", text);
-  const ai = bubble("assistant", "");
+  // 文章とカード(承認・ツール結果)を時系列に並べる。カードの後の文章は新しい吹き出しにする。
+  let seg = bubble("assistant", "");
+  const log = $("log");
+  const addCard = (node) => {
+    if (seg && !seg.textContent) seg.remove();
+    seg = null; log.appendChild(node); log.scrollTop = log.scrollHeight;
+  };
   try {
     const res = await api(`/api/conversations/${current}/messages`, {
       method: "POST", body: JSON.stringify({ content: text, profile: $("profile").value || "fast" }),
@@ -240,13 +271,19 @@ async function send(text) {
         const ev = JSON.parse(line.slice(5));
         if (ev.type === "status") setState(ev.state);
         else if (ev.type === "activity") onActivity(ev);
-        else if (ev.type === "delta") { ai.textContent += ev.text; $("log").scrollTop = $("log").scrollHeight; }
+        else if (ev.type === "delta") {
+          if (!seg) { if (!ev.text.trim()) continue; seg = bubble("assistant", ""); }
+          seg.textContent += ev.text; log.scrollTop = log.scrollHeight;
+        }
+        else if (ev.type === "approval_request") addCard(approvalCard(ev, { json, showError }));
+        else if (ev.type === "approval_resolved") markApproval(log, ev);
+        else if (ev.type === "tool_result") addCard(toolChip(ev, { openOutput }));
         else if (ev.type === "done") { if (ttsOn) speak(ev.message.content); }
-        else if (ev.type === "error") { setState("error"); showError(ev.message); if (!ai.textContent) ai.remove(); }
+        else if (ev.type === "error") { setState("error"); showError(ev.message); if (seg && !seg.textContent) seg.remove(); }
       }
     }
   } catch (e) {
-    setState("error"); showError("送信に失敗しました: " + e.message); if (!ai.textContent) ai.remove();
+    setState("error"); showError("送信に失敗しました: " + e.message); if (seg && !seg.textContent) seg.remove();
   }
   busy = false; $("send").disabled = false;
   convs = await json("/api/conversations"); renderList(); refreshStatus();

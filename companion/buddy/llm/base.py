@@ -5,17 +5,30 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
 
-ROLES = ("system", "user", "assistant")
+ROLES = ("system", "user", "assistant", "tool")
+
+
+@dataclass(frozen=True)
+class ToolCallRequest:
+    """LLM が要求したツール呼び出し。arguments は JSON 文字列(未検証)。"""
+
+    id: str
+    name: str
+    arguments: str
 
 
 @dataclass(frozen=True)
 class ChatMessage:
     role: str
     content: str
+    tool_calls: tuple[ToolCallRequest, ...] = ()  # role=assistant のみ
+    tool_call_id: Optional[str] = None  # role=tool のみ
 
     def __post_init__(self) -> None:
         if self.role not in ROLES:
             raise ValueError(f"unknown role: {self.role!r}")
+        if self.role == "tool" and not self.tool_call_id:
+            raise ValueError("tool message requires tool_call_id")
 
 
 class LLMError(Exception):
@@ -32,6 +45,8 @@ class LLMProvider(ABC):
     def model(self) -> str:
         """現在使用するモデル名(表示用)。"""
 
+    supports_tools: bool = False
+
     @abstractmethod
     def stream(
         self,
@@ -39,11 +54,15 @@ class LLMProvider(ABC):
         *,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-    ) -> AsyncIterator[str]:
-        """応答テキストの断片を順次返す。失敗時は LLMError。"""
+        tools: Optional[list[dict]] = None,
+    ) -> AsyncIterator["str | ToolCallRequest"]:
+        """応答テキストの断片(str)を順次返し、最後にツール呼び出し要求があれば ToolCallRequest を返す。
+
+        tools は OpenAI 形式の関数定義。対応しないプロバイダは無視してよい。失敗時は LLMError。
+        """
 
     async def complete(self, messages: list[ChatMessage], **kwargs) -> str:
-        return "".join([chunk async for chunk in self.stream(messages, **kwargs)])
+        return "".join([c async for c in self.stream(messages, **kwargs) if isinstance(c, str)])
 
     async def health(self) -> tuple[bool, str]:
         """疎通確認。(ok, 説明)。既定は常にOK。"""

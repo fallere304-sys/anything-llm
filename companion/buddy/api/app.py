@@ -15,11 +15,16 @@ from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..activity import describe_nodes
-from ..chat.service import MAX_USER_CHARS, Busy, ChatService, UnknownProfile
+from ..agent.approvals import ApprovalBroker
+from ..chat.service import MAX_USER_CHARS, AgentLimits, Busy, ChatService, UnknownProfile
 from ..config import Settings
 from ..llm.base import LLMProvider
 from ..memory.service import MemoryService, MemoryValidationError
 from ..memory.store import MemoryStore, ProjectInUse
+from ..tools.builtin import build_policy, build_registry
+from ..tools.registry import ToolRegistry
+from ..tools.workspace import safe_path
+from ..tools.registry import ToolError
 from ..tts.base import TTSError, TTSProvider
 from ..storage.db import Database, NotFound
 
@@ -63,6 +68,10 @@ class MemoryPatch(BaseModel):
     confidence: Optional[float] = Field(default=None, ge=0, le=1)
 
 
+class ApprovalDecision(BaseModel):
+    approve: bool
+
+
 class ProjectIn(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     description: str = Field(default="", max_length=500)
@@ -78,14 +87,18 @@ def create_app(
     providers: LLMProvider | dict[str, LLMProvider],
     db: Optional[Database] = None,
     tts: Optional[TTSProvider] = None,
+    registry: Optional[ToolRegistry] = None,
 ) -> FastAPI:
     if isinstance(providers, LLMProvider):
         providers = {"fast": providers}
     provider = providers["fast"]
     database = db or Database(settings.db_path)
     memory = MemoryService(MemoryStore(database), settings.max_memory_chars)
+    tools = registry if registry is not None else build_registry(settings, memory)
     service = ChatService(
-        database, providers, settings.load_system_prompt(), settings.max_context_chars, memory
+        database, providers, settings.load_system_prompt(), settings.max_context_chars, memory,
+        tools=tools, policy=build_policy(settings), approvals=ApprovalBroker(),
+        limits=AgentLimits(settings.agent_max_steps, settings.agent_tool_timeout, settings.agent_approval_timeout),
     )
 
     @asynccontextmanager
@@ -130,7 +143,7 @@ def create_app(
             }
         return {
             **service.status(), "llm_reachable": ok, "llm_detail": detail,
-            "tts": tts_info, "nodes": describe_nodes(providers, tts), "version": __version__,
+            "tts": tts_info, "nodes": describe_nodes(providers, tts, tools), "version": __version__,
         }
 
     @app.post("/api/tts", dependencies=auth)
@@ -261,6 +274,29 @@ def create_app(
             raise HTTPException(
                 409, f"このプロジェクトには記憶が {exc.args[0]} 件あります。先に記憶を削除してください。"
             ) from None
+
+    # ---------- 承認(Human-in-the-loop) ----------
+    @app.get("/api/approvals", dependencies=auth)
+    def list_approvals() -> list[dict]:
+        return service.approvals.list()
+
+    @app.post("/api/approvals/{approval_id}", dependencies=auth)
+    def decide_approval(approval_id: str, body: ApprovalDecision) -> dict:
+        if not service.approvals.resolve(approval_id, body.approve):
+            raise HTTPException(404, "承認待ちが見つかりません(既に処理済みか時間切れ)。")
+        log.info("approval %s: %s", approval_id, "approved" if body.approve else "denied")
+        return {"id": approval_id, "approved": body.approve}
+
+    # ---------- 成果物(作業フォルダ outputs/ のみ) ----------
+    @app.get("/api/outputs/{name}", dependencies=auth)
+    def get_output(name: str) -> FileResponse:
+        try:
+            path = safe_path(settings.workspace_dir / "outputs", name)
+        except ToolError:
+            raise HTTPException(400, "不正なファイル名です。") from None
+        if not path.is_file():
+            raise HTTPException(404, "ファイルが見つかりません。")
+        return FileResponse(path, filename=path.name)
 
     @app.get("/api/worklog", dependencies=auth)
     def worklog(limit: int = Query(default=50, ge=1, le=500)) -> list[dict]:

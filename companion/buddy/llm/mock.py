@@ -24,6 +24,7 @@ class MockProvider(LLMProvider):
         *,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        tools: Optional[list[dict]] = None,
     ) -> AsyncIterator[str]:
         last_user = next((m.content for m in reversed(messages) if m.role == "user"), "")
         history_turns = sum(1 for m in messages if m.role == "user")

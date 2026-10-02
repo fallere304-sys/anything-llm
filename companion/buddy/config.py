@@ -61,6 +61,24 @@ class Settings:
     tts_speed: float = 1.0
     tts_pitch: float = 1.0
     tts_volume: float = 1.0
+    # --- エージェント / ツール ---
+    workspace_dir: Path = Path("./workspace")
+    agent_max_steps: int = 6
+    agent_tool_timeout: float = 600.0
+    agent_approval_timeout: float = 900.0
+    tool_auto_max_level: int = 1  # これ以下のレベルは自動許可(外部送信と Lv4 は除く)
+    tool_auto_approve: tuple[str, ...] = ()  # 外部送信でも自動許可するツール名(Lv4 は不可)
+    # --- Claude(成果物) ---
+    anthropic_api_key: str = field(default="", repr=False)
+    claude_model: str = ""
+    claude_effort: str = "high"
+    claude_max_tokens: int = 32000
+    claude_refusal_fallback: str = "default"  # default | off
+    claude_base_url: str = "https://api.anthropic.com"
+    # --- Perplexity(調査) ---
+    perplexity_api_key: str = field(default="", repr=False)
+    perplexity_model: str = ""
+    perplexity_base_url: str = "https://api.perplexity.ai"
 
     @property
     def db_path(self) -> Path:
@@ -78,6 +96,12 @@ class Settings:
             )
         if self.max_context_chars < 500:
             raise ConfigError("BUDDY_MAX_CONTEXT_CHARS は 500 以上にしてください。")
+        if not 0 <= self.tool_auto_max_level <= 3:
+            raise ConfigError("TOOL_AUTO_APPROVE_MAX_LEVEL は 0〜3 です(Lv4 は常に承認が必要)。")
+        if not 1 <= self.agent_max_steps <= 20:
+            raise ConfigError("AGENT_MAX_STEPS は 1〜20 です。")
+        if self.claude_refusal_fallback not in ("default", "off"):
+            raise ConfigError("CLAUDE_REFUSAL_FALLBACK は default / off です。")
         if not 0 <= self.max_memory_chars < self.max_context_chars:
             raise ConfigError("BUDDY_MAX_MEMORY_CHARS は 0 以上、BUDDY_MAX_CONTEXT_CHARS 未満にしてください。")
 
@@ -130,6 +154,21 @@ def load_settings(
         tts_speed=_float(env, "TTS_SPEED", d.tts_speed),
         tts_pitch=_float(env, "TTS_PITCH", d.tts_pitch),
         tts_volume=_float(env, "TTS_VOLUME", d.tts_volume),
+        workspace_dir=Path(env.get("BUDDY_WORKSPACE_DIR", "").strip() or d.workspace_dir),
+        agent_max_steps=_int(env, "AGENT_MAX_STEPS", d.agent_max_steps),
+        agent_tool_timeout=_float(env, "AGENT_TOOL_TIMEOUT_SECONDS", d.agent_tool_timeout),
+        agent_approval_timeout=_float(env, "AGENT_APPROVAL_TIMEOUT_SECONDS", d.agent_approval_timeout),
+        tool_auto_max_level=_int(env, "TOOL_AUTO_APPROVE_MAX_LEVEL", d.tool_auto_max_level),
+        tool_auto_approve=tuple(t.strip() for t in env.get("TOOL_AUTO_APPROVE", "").split(",") if t.strip()),
+        anthropic_api_key=env.get("ANTHROPIC_API_KEY", "").strip(),
+        claude_model=env.get("CLAUDE_MODEL", "").strip(),
+        claude_effort=env.get("CLAUDE_EFFORT", d.claude_effort).strip(),
+        claude_max_tokens=_int(env, "CLAUDE_MAX_TOKENS", d.claude_max_tokens),
+        claude_refusal_fallback=(env.get("CLAUDE_REFUSAL_FALLBACK", "").strip() or d.claude_refusal_fallback).lower(),
+        claude_base_url=env.get("CLAUDE_BASE_URL", "").strip() or d.claude_base_url,
+        perplexity_api_key=env.get("PERPLEXITY_API_KEY", "").strip(),
+        perplexity_model=env.get("PERPLEXITY_MODEL", "").strip(),
+        perplexity_base_url=env.get("PERPLEXITY_BASE_URL", "").strip() or d.perplexity_base_url,
     )
     settings.validate()
     return settings

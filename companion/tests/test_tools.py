@@ -1,0 +1,234 @@
+import json
+from types import SimpleNamespace
+
+import anthropic
+import httpx
+import pytest
+
+from buddy.config import load_settings
+from buddy.llm.base import ChatMessage, ToolCallRequest
+from buddy.llm.openai_compat import OpenAICompatProvider
+from buddy.memory.service import MemoryService
+from buddy.memory.store import MemoryStore
+from buddy.storage.db import Database
+from buddy.tools.builtin import build_policy, build_registry
+from buddy.tools.deliverable import ClaudeWriter, deliverable_tool, save_output, slugify
+from buddy.tools.memory_tools import propose_memory_tool
+from buddy.tools.registry import Level, ToolContext, ToolError, ToolRegistry
+from buddy.tools.research import PerplexityClient, research_tool
+from buddy.tools.workspace import list_files_tool, read_file_tool, safe_path
+
+CTX = ToolContext(conversation_id="c1")
+
+
+# ---------- 作業フォルダ ----------
+def test_safe_path_blocks_escape(tmp_path):
+    (tmp_path / "ws").mkdir()
+    root = tmp_path / "ws"
+    assert safe_path(root, "a/b.txt") == (root / "a/b.txt").resolve()
+    for bad in ("../x", "a/../../x", str(tmp_path / "other")):
+        with pytest.raises(ToolError):
+            safe_path(root, bad)
+
+
+async def test_list_and_read(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "a.md").write_text("こんにちは", encoding="utf-8")
+    (tmp_path / "bin.dat").write_bytes(b"\0\1\2")
+    r = await list_files_tool(tmp_path).execute({"recursive": True}, CTX)
+    assert "docs/a.md (15 bytes)" in r.content
+    r = await read_file_tool(tmp_path).execute({"path": "docs/a.md"}, CTX)
+    assert r.content == "こんにちは"
+    with pytest.raises(ToolError, match="テキスト"):
+        await read_file_tool(tmp_path).execute({"path": "bin.dat"}, CTX)
+    with pytest.raises(ToolError, match="外"):
+        await read_file_tool(tmp_path).execute({"path": "../../etc/passwd"}, CTX)
+
+
+# ---------- 記憶ツール ----------
+async def test_propose_memory_tool_creates_pending():
+    mem = MemoryService(MemoryStore(Database(":memory:")))
+    tool = propose_memory_tool(mem)
+    r = await tool.execute({"content": "コーヒー派"}, CTX)
+    assert "承認" in r.content and mem.store.list_memories(status="pending")[0]["content"] == "コーヒー派"
+    with pytest.raises(ToolError, match="プロジェクト"):
+        await tool.execute({"content": "x", "kind": "project"}, CTX)
+
+
+# ---------- Perplexity ----------
+def pplx(handler):
+    return PerplexityClient("pk", "sonar-x", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+
+
+async def test_research_parses_search_results():
+    seen = {}
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        seen["auth"] = req.headers["authorization"]
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "答え"}}],
+            "search_results": [{"title": "記事A", "url": "https://a.example", "date": "2026-09-01"}]})
+
+    r = await research_tool(pplx(handler)).execute({"query": "最新動向", "recency": "week"}, CTX)
+    assert seen["auth"] == "Bearer pk" and seen["body"]["model"] == "sonar-x"
+    assert seen["body"]["search_recency_filter"] == "week"
+    assert "[1] 記事A https://a.example" in r.content and r.data["sources"][0]["date"] == "2026-09-01"
+
+
+async def test_research_citations_fallback_and_errors():
+    ok = pplx(lambda r: httpx.Response(200, json={"choices": [{"message": {"content": "x"}}],
+                                                  "citations": ["https://c.example"]}))
+    r = await research_tool(ok).execute({"query": "q"}, CTX)
+    assert r.data["sources"][0]["url"] == "https://c.example"
+    for status, msg in ((401, "APIキー"), (429, "上限"), (500, "HTTP 500")):
+        with pytest.raises(ToolError, match=msg):
+            await pplx(lambda r, s=status: httpx.Response(s, text="e")).ask("q")
+
+    def boom(req):
+        raise httpx.ConnectError("x")
+    with pytest.raises(ToolError, match="接続"):
+        await pplx(boom).ask("q")
+
+
+# ---------- Claude ----------
+class FakeStream:
+    def __init__(self, msg, record, kw):
+        self.msg, self.record, self.kw = msg, record, kw
+
+    async def __aenter__(self):
+        self.record.append(self.kw)
+        if isinstance(self.msg, Exception):
+            raise self.msg
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get_final_message(self):
+        return self.msg
+
+
+class FakeAnthropic:
+    def __init__(self, msg):
+        self.calls = []
+        mk = lambda kind: SimpleNamespace(stream=lambda **kw: FakeStream(msg, self.calls, {"_kind": kind, **kw}))
+        self.messages = mk("std")
+        self.beta = SimpleNamespace(messages=mk("beta"))
+
+
+def claude_msg(text, stop="end_turn"):
+    return SimpleNamespace(stop_reason=stop, model="claude-x", content=[SimpleNamespace(type="text", text=text)])
+
+
+async def test_claude_writer_uses_fallback_and_effort(tmp_path):
+    fake = FakeAnthropic(claude_msg("# 報告書\n本文"))
+    tool = deliverable_tool(ClaudeWriter("k", "claude-x", client=fake), tmp_path)
+    r = await tool.execute({"title": "週次/報告:案", "instructions": "まとめて", "materials": "材料"}, CTX)
+    call = fake.calls[0]
+    assert call["_kind"] == "beta" and call["fallbacks"] == "default"
+    assert call["betas"] == ["server-side-fallback-2026-07-01"]
+    assert call["output_config"] == {"effort": "high"} and call["model"] == "claude-x"
+    assert "材料" in call["messages"][0]["content"]
+    saved = tmp_path / r.data["file"]
+    assert saved.read_text(encoding="utf-8") == "# 報告書\n本文"
+    assert "/" not in r.data["name"] and ":" not in r.data["name"]
+
+
+async def test_claude_writer_without_fallback_and_code_fence(tmp_path):
+    fake = FakeAnthropic(claude_msg("```python\nprint(1)\n```"))
+    w = ClaudeWriter("k", "claude-x", fallback="off", effort="", client=fake)
+    r = await deliverable_tool(w, tmp_path).execute({"title": "t", "instructions": "i", "format": "python"}, CTX)
+    assert fake.calls[0]["_kind"] == "std" and "output_config" not in fake.calls[0]
+    assert (tmp_path / r.data["file"]).read_text(encoding="utf-8") == "print(1)"
+
+
+@pytest.mark.parametrize("msg,match", [
+    (claude_msg("", "refusal"), "辞退"),
+    (claude_msg("   "), "空"),
+    (anthropic.APIConnectionError(request=__import__("httpx2").Request("POST", "https://x")), "接続"),
+])
+async def test_claude_writer_errors(tmp_path, msg, match):
+    with pytest.raises(ToolError, match=match):
+        await ClaudeWriter("k", "m", client=FakeAnthropic(msg)).write("p")
+
+
+async def test_claude_truncated_flag(tmp_path):
+    w = ClaudeWriter("k", "m", client=FakeAnthropic(claude_msg("途中", "max_tokens")))
+    r = await deliverable_tool(w, tmp_path).execute({"title": "t", "instructions": "i"}, CTX)
+    assert r.data["truncated"] and "途中終了" in r.summary
+
+
+def test_save_output_never_overwrites(tmp_path):
+    a = save_output(tmp_path, "同じ", ".md", "1")
+    b = save_output(tmp_path, "同じ", ".md", "2")
+    assert a != b and a.read_text(encoding="utf-8") == "1"
+    assert slugify('a<b>:"c"/d') == "a_b_c_d" and slugify("...") == "output"
+
+
+# ---------- OpenAI 互換のツール呼び出し ----------
+async def test_openai_streaming_tool_calls_and_wire_format():
+    seen = {}
+    chunks = [
+        {"choices": [{"delta": {"content": "調べます"}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "research_web", "arguments": "{\"qu"}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "ery\": \"天気\"}"}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 1, "id": "call_2", "function": {"name": "list_workspace_files", "arguments": "{}"}}]}}]},
+    ]
+    sse = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, text=sse)
+
+    p = OpenAICompatProvider("http://x/v1", "m", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    history = [ChatMessage("user", "q"),
+               ChatMessage("assistant", "", tool_calls=(ToolCallRequest("old", "f", "{}"),)),
+               ChatMessage("tool", "結果", tool_call_id="old")]
+    out = [c async for c in p.stream(history, tools=[{"type": "function", "function": {"name": "f"}}])]
+    assert out[0] == "調べます"
+    assert out[1] == ToolCallRequest("call_1", "research_web", '{"query": "天気"}')
+    assert out[2].name == "list_workspace_files"
+    wire = seen["body"]["messages"]
+    assert wire[1]["tool_calls"][0]["function"]["name"] == "f" and wire[1]["content"] is None
+    assert wire[2] == {"role": "tool", "tool_call_id": "old", "content": "結果"}
+    assert seen["body"]["tools"][0]["function"]["name"] == "f"
+
+
+# ---------- 組み立て ----------
+def test_build_registry_registers_only_configured(tmp_path):
+    mem = MemoryService(MemoryStore(Database(":memory:")))
+    base = {"BUDDY_WORKSPACE_DIR": str(tmp_path / "ws")}
+    reg = build_registry(load_settings(env=base), mem)
+    assert reg.names() == ["list_workspace_files", "propose_memory", "read_workspace_file"]
+    full = build_registry(load_settings(env={**base, "PERPLEXITY_API_KEY": "p", "PERPLEXITY_MODEL": "sonar",
+                                             "ANTHROPIC_API_KEY": "a", "CLAUDE_MODEL": "claude-x"}), mem)
+    assert {"research_web", "create_deliverable"} <= set(full.names())
+    assert full.get("research_web").external and full.get("create_deliverable").level == Level.IMPORTANT
+    pol = build_policy(load_settings(env={"TOOL_AUTO_APPROVE": "research_web, x"}))
+    assert pol.auto_tools == frozenset({"research_web", "x"})
+
+
+def test_registry_rejects_duplicates_and_bad_schema():
+    reg = ToolRegistry()
+    t = propose_memory_tool(MemoryService(MemoryStore(Database(":memory:"))))
+    reg.register(t)
+    with pytest.raises(ValueError):
+        reg.register(t)
+
+
+def test_outputs_endpoint(tmp_path):
+    from fastapi.testclient import TestClient
+    from buddy.api.app import create_app
+    from buddy.llm.mock import MockProvider
+    from .conftest import make_settings
+    s = make_settings(tmp_path)
+    (s.workspace_dir / "outputs").mkdir(parents=True)
+    (s.workspace_dir / "outputs" / "r.md").write_text("中身", encoding="utf-8")
+    (s.workspace_dir / "secret.txt").write_text("x", encoding="utf-8")
+    with TestClient(create_app(s, MockProvider(), Database(":memory:"))) as c:
+        r = c.get("/api/outputs/r.md")
+        assert r.status_code == 200 and r.text == "中身"
+        assert c.get("/api/outputs/none.md").status_code == 404
+        assert c.get("/api/outputs/..").status_code in (400, 404)
+        assert c.get("/api/outputs/..%2Fsecret.txt").status_code in (400, 404)

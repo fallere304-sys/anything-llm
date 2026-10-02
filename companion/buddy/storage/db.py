@@ -48,6 +48,10 @@ class Database:
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(SCHEMA)
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(messages)")}
+            if "tools_json" not in cols:  # 旧DBの移行(Phase 4)
+                self._conn.execute("ALTER TABLE messages ADD COLUMN tools_json TEXT")
+                self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -118,13 +122,15 @@ class Database:
 
     # --- messages ---
     def add_message(
-        self, cid: str, role: str, content: str, provider: Optional[str] = None, model: Optional[str] = None
+        self, cid: str, role: str, content: str, provider: Optional[str] = None,
+        model: Optional[str] = None, tools_json: Optional[str] = None,
     ) -> dict:
         ts = now_iso()
         with self._lock, self._conn:
             cur = self._conn.execute(
-                "INSERT INTO messages (conversation_id, role, content, provider, model, created_at) VALUES (?,?,?,?,?,?)",
-                (cid, role, content, provider, model, ts),
+                "INSERT INTO messages (conversation_id, role, content, provider, model, created_at, tools_json)"
+                " VALUES (?,?,?,?,?,?,?)",
+                (cid, role, content, provider, model, ts, tools_json),
             )
             self._conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (ts, cid))
             row = self._conn.execute("SELECT * FROM messages WHERE id = ?", (cur.lastrowid,)).fetchone()

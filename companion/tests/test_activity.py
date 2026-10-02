@@ -53,8 +53,10 @@ def test_nodes_reflect_real_availability():
     assert nodes["persona"]["available"] and nodes["llm:fast"]["available"]
     assert not nodes["llm:strong"]["available"] and not nodes["tts"]["available"]
     assert nodes["memory"]["available"] and nodes["project"]["available"]
-    for planned in ("web", "files", "tools"):
-        assert nodes[planned]["available"] is False and nodes[planned]["planned_phase"] == 4
+    # ツール未登録なら外部連携・作業フォルダは利用不可、Canva は常に未接続
+    for nid in ("research", "claude", "files", "canva"):
+        assert nodes[nid]["available"] is False, nid
+    assert nodes["canva"]["note"] == "未接続"
     with_tts = {n["id"]: n for n in describe_nodes({"fast": MockProvider()}, MockTTSProvider())}
     assert with_tts["tts"]["available"]
 
@@ -62,5 +64,5 @@ def test_nodes_reflect_real_availability():
 def test_status_and_static_assets(client):
     st = client.get("/api/status").json()
     assert {n["id"] for n in st["nodes"]} >= {"persona", "history", "llm:fast", "memory"}
-    for f in ("app.js", "viz.js", "style.css"):
+    for f in ("app.js", "viz.js", "memory.js", "agent.js", "style.css"):
         assert client.get(f"/static/{f}").status_code == 200, f

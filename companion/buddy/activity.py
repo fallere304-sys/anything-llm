@@ -8,26 +8,23 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from .llm.base import LLMProvider
 from .tts.base import TTSProvider
 
-# (id, 球体内の短い表示, 名称, 説明, 予定フェーズ) — 予定フェーズが None なら実装済み
-_PLANNED = [
-    ("web", "Web", "Web検索", "外部情報の調査", 4),
-    ("files", "File", "ファイル", "PC上のファイル参照・作成", 4),
-    ("tools", "Tool", "ツール", "コマンド・Python・Git 等の実行", 4),
-]
-
+if TYPE_CHECKING:
+    from .tools.registry import ToolRegistry
 
 def describe_nodes(
-    providers: dict[str, LLMProvider], tts: Optional[TTSProvider]
+    providers: dict[str, LLMProvider], tts: Optional[TTSProvider], tools: Optional["ToolRegistry"] = None
 ) -> list[dict]:
-    def node(id_, short, label, desc, available, phase=None, external=False):
+    names = set(tools.names()) if tools is not None else set()
+
+    def node(id_, short, label, desc, available, phase=None, external=False, note=None):
         return {
             "id": id_, "short": short, "label": label, "description": desc,
-            "available": available, "planned_phase": phase, "external": external,
+            "available": available, "planned_phase": phase, "external": external, "note": note,
         }
 
     nodes = [
@@ -40,15 +37,24 @@ def describe_nodes(
         p = providers.get(profile)
         nodes.append(node(
             f"llm:{profile}", short, label,
-            f"{p.name} / {p.model}" if p else "未設定(.env の LLM_MODEL_STRONG)",
+            f"会話・思考・タスク振り分け: {p.name} / {p.model}" if p else "未設定(.env の LLM_MODEL_STRONG)",
             p is not None, external=bool(p and p.sends_data_externally),
         ))
-    nodes.append(node(
-        "tts", "声", "音声出力",
-        f"{tts.name} / {tts.voice}" if tts else "未設定(.env の TTS_PROVIDER)",
-        tts is not None, external=bool(tts and tts.sends_data_externally),
-    ))
-    nodes += [node(i, s, l, d, False, phase) for i, s, l, d, phase in _PLANNED]
+    nodes += [
+        node("research", "調査", "Perplexity", "Web 調査(出典付き)。.env の PERPLEXITY_API_KEY / PERPLEXITY_MODEL",
+             "research_web" in names, external=True, note=None if "research_web" in names else "未設定"),
+        node("claude", "制作", "Claude", "成果物の作成(outputs/ に保存)。.env の ANTHROPIC_API_KEY / CLAUDE_MODEL",
+             "create_deliverable" in names, external=True, note=None if "create_deliverable" in names else "未設定"),
+        node("canva", "画像", "Canva", "画像・デザイン。接続方式を検討中(公開APIに画像生成が無いため)",
+             False, note="未接続"),
+        node("files", "File", "作業フォルダ", "作業フォルダの読み取り(.env の BUDDY_WORKSPACE_DIR)",
+             "read_workspace_file" in names),
+        node(
+            "tts", "声", "音声出力",
+            f"{tts.name} / {tts.voice}" if tts else "未設定(.env の TTS_PROVIDER)",
+            tts is not None, external=bool(tts and tts.sends_data_externally),
+        ),
+    ]
     return nodes
 
 

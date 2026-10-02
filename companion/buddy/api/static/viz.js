@@ -15,8 +15,8 @@ const C = {
 const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 // 関連するものが隣り合う並び
-const ORDER = ["persona", "history", "memory", "project", "llm:fast", "llm:strong", "web", "files", "tools", "tts"];
-const STATE_SPEED = { idle: 1.2, thinking: 4, responding: 7, error: 2 };
+const ORDER = ["persona", "history", "memory", "project", "llm:fast", "llm:strong", "research", "claude", "canva", "files", "tts"];
+const STATE_SPEED = { idle: 1.2, thinking: 4, responding: 7, working: 5, waiting: 2.5, error: 2 };
 
 function rng(seed) { // mulberry32: リサイズしても同じ配置になるよう決定的に
   return () => {
@@ -260,7 +260,9 @@ export class NetworkViz {
     const { ctx, core, t } = this, s = this.coreR;
     const speed = STATE_SPEED[this.state] || 1.2;
     const pulse = 0.5 + 0.5 * Math.sin(t * speed);
-    const col = this.state === "error" ? C.red : this.state === "thinking" ? C.amber : C.green;
+    const col = this.state === "error" ? C.red
+      : this.state === "thinking" || this.state === "waiting" ? C.amber
+      : this.state === "working" ? C.cyan : C.green;
     // 外側の回転リング
     ctx.save(); ctx.translate(core.x, core.y); ctx.rotate(t * speed * 0.15);
     ctx.strokeStyle = rgba(C.cyan, 0.5); ctx.lineWidth = 1.2; ctx.setLineDash([6, 5]);
@@ -335,7 +337,7 @@ export class NetworkViz {
     if (n.available || !narrow) {
       ctx.font = `${narrow ? 10 : 11}px system-ui,"Yu Gothic UI",sans-serif`;
       ctx.fillStyle = n.available ? "rgba(210,255,240,0.9)" : "rgba(140,160,155,0.65)";
-      ctx.fillText(n.available ? n.label : `${n.label}(${n.planned_phase ? "未実装" : "未設定"})`, n.x, n.y + r + 11);
+      ctx.fillText(n.available ? n.label : `${n.label}(${n.note || (n.planned_phase ? "未実装" : "未設定")})`, n.x, n.y + r + 11);
     }
     ctx.restore();
   }
