@@ -1,8 +1,8 @@
 """VOICEROID2(琴葉茜・葵 等)アダプタ。Windows + pyvcroid2 が必要。
 
-!! 実機未検証 !! 開発環境(Linux)には VOICEROID2 が無く、pyvcroid2 の API は
-ライブラリの公開仕様に基づく想定で書いている。Windows 実機で TTS_PROVIDER=voiceroid2 を
-試し、`python -m buddy.tts.voiceroid2` で声の一覧を確認すること。
+!! 実機未検証 !! 開発環境(Linux)には VOICEROID2 が無く、pyvcroid2 の API は想定で書いている。
+注意: pyvcroid2 は PyPI に無い(2026-10 時点、CI の pip install で確認)。配布版(exe)には同梱していない。
+接続方式(HTTP で喋らせる外部ツール経由など)を見直し中。
 
 DLL はスレッド親和性が不明なため、専用の単一スレッドで初期化・実行する。
 """
@@ -20,8 +20,8 @@ def _import_pyvcroid2() -> Any:
         import pyvcroid2  # type: ignore
     except ImportError as exc:
         raise TTSError(
-            "pyvcroid2 が見つかりません。Windows で `pip install pyvcroid2` を実行し、"
-            "VOICEROID2 がインストールされていることを確認してください。"
+            "VOICEROID2 連携用ライブラリ(pyvcroid2)がありません。PyPI では配布されておらず、"
+            "配布版(exe)にも同梱していません。VOICEROID2 の接続方式は見直し中です(TTS_PROVIDER=none を推奨)。"
         ) from exc
     return pyvcroid2
 

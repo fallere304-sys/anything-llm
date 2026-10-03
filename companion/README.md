@@ -63,15 +63,10 @@ cp .env.example .env
 - 他の経路(OpenAI / Perplexity / Claude API)は `.env` 末尾の「任意」欄で切り替え可能(いずれも API 課金)。
 
 ## 音声出力(琴葉葵 / VOICEROID2)
-```
-pip install pyvcroid2          # Windows。VOICEROID2 本体が必要
-python -m buddy.tts.voiceroid2 # 利用可能な声の名前を表示
-# .env
-TTS_PROVIDER=voiceroid2
-TTS_VOICE_NAME=<表示された琴葉葵の声の名前>
-```
-サーバー(PC)で合成した WAV を、UI(スマホ含む)で再生する。`TTS_PROVIDER=mock` でビープ音による動作確認ができる。
-**VOICEROID2 アダプタは実機未検証。** VOICEROID2 の利用規約上、この用途が許されるかはご自身で確認すること。
+**現状は使えない(接続方式を見直し中)。** 当初想定した Python ライブラリ `pyvcroid2` は PyPI で配布されておらず
+(Windows CI の `pip install` で確認)、配布版(exe)にも同梱できないため。
+候補: VOICEROID2 を HTTP で喋らせる外部ツール経由で接続する(仕様未確認)。音声出力の差し替え口(TTSProvider)はそのまま使える。
+動作確認だけなら `TTS_PROVIDER=mock`(ビープ音)。
 
 ## 権限と承認
 - 権限レベル: Lv0 情報取得 / Lv1 読み取り / Lv2 可逆な変更 / Lv3 重要・外部送信 / Lv4 不可逆な外部操作(常に承認)。
