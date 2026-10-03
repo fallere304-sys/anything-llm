@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def make_settings(tmp_path, **kw) -> Settings:
     base = dict(
         data_dir=tmp_path, system_prompt_file=ROOT / "prompts" / "system.md", llm_provider="mock",
-        workspace_dir=tmp_path / "workspace",
+        workspace_dir=tmp_path / "workspace", orchestrator="none",
     )
     base.update(kw)
     return Settings(**base)

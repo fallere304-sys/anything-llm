@@ -83,6 +83,15 @@ class Settings:
     gemini_api_key: str = field(default="", repr=False)
     gemini_image_model: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com"
+    gemini_text_model: str = ""  # 文書作成・調査に使う Gemini モデル
+    # --- 担当の切替(B案の既定: 作成・調査とも Gemini) ---
+    writer_provider: str = "gemini"  # gemini | claude_api
+    research_provider: str = "gemini"  # gemini | perplexity
+    # --- 司令塔(Claude Code・サブスク枠) ---
+    orchestrator: str = "claude_code"  # claude_code | none
+    claude_code_path: str = "claude"
+    claude_code_model: str = ""  # 空なら Claude Code の既定
+    claude_code_timeout: float = 1800.0
 
     @property
     def db_path(self) -> Path:
@@ -104,6 +113,11 @@ class Settings:
             raise ConfigError("TOOL_AUTO_APPROVE_MAX_LEVEL は 0〜3 です(Lv4 は常に承認が必要)。")
         if not 1 <= self.agent_max_steps <= 20:
             raise ConfigError("AGENT_MAX_STEPS は 1〜20 です。")
+        for key, val, allowed in (("WRITER_PROVIDER", self.writer_provider, ("gemini", "claude_api")),
+                                  ("RESEARCH_PROVIDER", self.research_provider, ("gemini", "perplexity")),
+                                  ("ORCHESTRATOR", self.orchestrator, ("claude_code", "none"))):
+            if val not in allowed:
+                raise ConfigError(f"{key} は {' / '.join(allowed)} のいずれかです: {val!r}")
         if self.claude_refusal_fallback not in ("default", "off"):
             raise ConfigError("CLAUDE_REFUSAL_FALLBACK は default / off です。")
         if not 0 <= self.max_memory_chars < self.max_context_chars:
@@ -176,6 +190,13 @@ def load_settings(
         gemini_api_key=env.get("GEMINI_API_KEY", "").strip(),
         gemini_image_model=env.get("GEMINI_IMAGE_MODEL", "").strip(),
         gemini_base_url=env.get("GEMINI_BASE_URL", "").strip() or d.gemini_base_url,
+        gemini_text_model=env.get("GEMINI_TEXT_MODEL", "").strip(),
+        writer_provider=(env.get("WRITER_PROVIDER", "").strip() or d.writer_provider).lower(),
+        research_provider=(env.get("RESEARCH_PROVIDER", "").strip() or d.research_provider).lower(),
+        orchestrator=(env.get("ORCHESTRATOR", "").strip() or d.orchestrator).lower(),
+        claude_code_path=env.get("CLAUDE_CODE_PATH", "").strip() or d.claude_code_path,
+        claude_code_model=env.get("CLAUDE_CODE_MODEL", "").strip(),
+        claude_code_timeout=_float(env, "CLAUDE_CODE_TIMEOUT_SECONDS", d.claude_code_timeout),
     )
     settings.validate()
     return settings

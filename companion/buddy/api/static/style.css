@@ -53,6 +53,7 @@ body.noviz #stage { display: none; }
 #feed { position: absolute; left: 8px; right: 8px; bottom: 40px; max-height: 55%; overflow-y: auto; margin: 0;
   padding: 6px 10px; list-style: none; font-size: 12px; background: rgba(1, 12, 8, 0.88);
   border: 1px solid var(--line); border-radius: 8px; }
+#feed:empty { display: none; }
 #feed li { padding: 3px 0; border-bottom: 1px solid rgba(90, 255, 210, 0.07); display: flex; gap: 8px; }
 #feed time { color: var(--dim); flex: none; font-variant-numeric: tabular-nums; }
 #feed .who { color: var(--cyan); flex: none; }
@@ -119,6 +120,9 @@ textarea { flex: 1; resize: none; background: var(--bg); color: var(--text); bor
 .chip summary { cursor: pointer; color: var(--dim); }
 .chip ol { margin: 4px 0 0; padding-left: 20px; }
 .chip a { color: var(--cyan); word-break: break-all; }
+.chip ol.subs { flex-basis: 100%; margin: 2px 0 0; padding-left: 18px; font-size: 12px; }
+.chip ol.subs li.ng { color: var(--err); }
+.chip .dim { flex-basis: 100%; }
 .chip img.thumb { flex-basis: 100%; max-width: 320px; max-height: 240px; object-fit: contain; border-radius: 8px;
   border: 1px solid rgba(120, 255, 240, 0.3); cursor: pointer; background: #000; }
 

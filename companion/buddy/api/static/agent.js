@@ -1,6 +1,6 @@
 // 承認カードとツール結果チップ。表示はすべて textContent(XSS対策)。
 const TOOL_LABEL = {
-  research_web: "Perplexity 調査", create_deliverable: "Claude 成果物作成",
+  research_web: "Web 調査", create_document: "文書作成", delegate_task: "Claude Code に依頼",
   list_workspace_files: "作業フォルダ一覧", read_workspace_file: "ファイル読み込み",
   propose_memory: "記憶の提案", generate_image: "Gemini 画像生成",
 };
@@ -63,6 +63,23 @@ export function toolChip(rec, { openOutput, outputUrl }) {
     outputUrl(data.name).then((u) => { img.src = u; }).catch(() => img.remove());
     img.onclick = () => openOutput(data.name);
     box.append(img);
+  }
+  // 司令塔(Claude Code)の内訳: サブ作業と消費トークン
+  if (Array.isArray(data.sub_results) && data.sub_results.length) {
+    const ol = el("ol", "subs");
+    data.sub_results.forEach((s) => {
+      const li = el("li", s.ok ? "" : "ng", `${s.ok ? "✓" : "✕"} ${toolLabel(s.tool)}: ${s.summary || ""}`);
+      if (s.data && s.data.name) {
+        const a = el("button", "link", "開く");
+        a.onclick = () => openOutput(s.data.name);
+        li.append(" ", a);
+      }
+      ol.append(li);
+    });
+    box.append(ol);
+  }
+  if (data.context_tokens) {
+    box.append(el("span", "dim", `Claude Code 入力 ${Number(data.context_tokens).toLocaleString()} tokens(キャッシュ込み) / 出力 ${Number(data.output_tokens || 0).toLocaleString()} tokens`));
   }
   if (data.name) {
     const a = el("button", "link", `開く: ${data.file}`);

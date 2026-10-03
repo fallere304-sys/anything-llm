@@ -14,6 +14,9 @@ RESEARCH_SYSTEM = (
 
 
 class PerplexityClient:
+    external = "Perplexity"
+    label = "Perplexity"
+
     def __init__(self, api_key: str, model: str, base_url: str = "https://api.perplexity.ai",
                  timeout: float = 120.0, client: Optional[httpx.AsyncClient] = None) -> None:
         if not api_key or not model:
@@ -64,18 +67,19 @@ def _sources(obj: dict) -> list[dict]:
     return out[:20]
 
 
-def research_tool(client: PerplexityClient) -> Tool:
+def research_tool(client) -> Tool:
+    """client: `async ask(query, recency) -> (answer, sources)` と external / label / model を持つ。"""
     async def run(args: dict, ctx: ToolContext) -> ToolResult:
         answer, sources = await client.ask(args["query"], args.get("recency"))
         refs = "\n".join(f"[{i}] {s['title']} {s['url']}" for i, s in enumerate(sources, 1))
         content = answer + (f"\n\n出典:\n{refs}" if refs else "\n\n(出典情報なし)")
         return ToolResult(content=content, summary=f"調査完了(出典 {len(sources)}件)",
-                          data={"sources": sources, "model": client.model})
+                          data={"sources": sources, "model": client.model})  # 調査結果は材料なので司令塔にも全文を返す
 
     return Tool(
         name="research_web",
         description=(
-            "Perplexity に Web 調査を依頼する。最新情報・事実確認・出典が必要なときに使う。"
+            f"{client.label} に Web 調査を依頼する。最新情報・事実確認・出典が必要なときに使う。"
             "質問は具体的に1つのテーマに絞ること。結果には出典 URL が付く。"
         ),
         input_schema={"type": "object", "properties": {
@@ -83,6 +87,6 @@ def research_tool(client: PerplexityClient) -> Tool:
             "recency": {"type": "string", "enum": ["day", "week", "month", "year"],
                         "description": "情報の新しさで絞り込む場合のみ指定"},
         }, "required": ["query"]},
-        level=Level.IMPORTANT, execute=run, node="research", external="Perplexity",
+        level=Level.IMPORTANT, execute=run, node="research", external=client.external,
         preview=lambda a: str(a.get("query", ""))[:300],
     )

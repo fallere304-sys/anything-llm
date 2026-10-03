@@ -15,7 +15,7 @@ const C = {
 const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 // 関連するものが隣り合う並び
-const ORDER = ["persona", "history", "memory", "project", "llm:fast", "llm:strong", "research", "claude", "image", "files", "tts"];
+const ORDER = ["persona", "history", "memory", "project", "llm:fast", "llm:strong", "orchestrator", "research", "create", "image", "files", "tts"];
 const STATE_SPEED = { idle: 1.2, thinking: 4, responding: 7, working: 5, waiting: 2.5, error: 2 };
 
 function rng(seed) { // mulberry32: リサイズしても同じ配置になるよう決定的に

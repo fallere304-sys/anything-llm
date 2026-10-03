@@ -33,6 +33,9 @@ class ToolError(Exception):
 class ToolContext:
     conversation_id: str
     project_id: Optional[str] = None
+    # 実行中のイベント(承認依頼・可視化)を画面へ中継する口。司令塔のサブツール実行で使う
+    emit: Callable[[dict], None] = field(default=lambda ev: None, repr=False)
+    origin: str = "conversation"  # conversation | orchestrator(誰がツールを呼んだか)
 
 
 @dataclass
@@ -40,6 +43,7 @@ class ToolResult:
     content: str  # AI に返す内容
     summary: str  # 画面・作業履歴に出す短い要約(本文を含めない)
     data: dict = field(default_factory=dict)  # UI 用の付加情報(出典 / 作成ファイル等)
+    brief: Optional[str] = None  # 司令塔(Claude Code)へ返す短い結果。省略時は content を短く切って使う
 
 
 Executor = Callable[[dict, ToolContext], Awaitable[ToolResult]]
@@ -55,6 +59,7 @@ class Tool:
     node: str  # 可視化ノード ID
     external: Optional[str] = None  # 送信先サービス名(端末外へ出る場合)
     preview: Callable[[dict], str] = lambda args: ""  # 承認画面に出す引数の要約
+    timeout: Optional[float] = None  # 実行タイムアウト(秒)。None なら全体設定
 
 
 PURPOSE = {"type": "string", "description": "このツールを使う理由を日本語で1文(ユーザーの承認画面に表示される)"}

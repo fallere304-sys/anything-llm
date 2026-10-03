@@ -55,7 +55,7 @@ def test_nodes_reflect_real_availability():
     assert not nodes["llm:strong"]["available"] and not nodes["tts"]["available"]
     assert nodes["memory"]["available"] and nodes["project"]["available"]
     # ツール未登録なら外部連携・作業フォルダは利用不可
-    for nid in ("research", "claude", "image", "files"):
+    for nid in ("orchestrator", "research", "create", "image", "files"):
         assert nodes[nid]["available"] is False, nid
     # 可視化の表記は英語のみ(日本語を含まない)
     import re

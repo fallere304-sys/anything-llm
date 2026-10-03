@@ -12,7 +12,8 @@ from buddy.memory.service import MemoryService
 from buddy.memory.store import MemoryStore
 from buddy.storage.db import Database
 from buddy.tools.builtin import build_policy, build_registry
-from buddy.tools.deliverable import ClaudeWriter, deliverable_tool
+from buddy.tools.deliverable import ClaudeWriter
+from buddy.tools.documents import document_tool
 from buddy.tools.outputs import save_output, slugify
 from buddy.tools.memory_tools import propose_memory_tool
 from buddy.tools.registry import Level, ToolContext, ToolError, ToolRegistry
@@ -124,7 +125,7 @@ def claude_msg(text, stop="end_turn"):
 
 async def test_claude_writer_uses_fallback_and_effort(tmp_path):
     fake = FakeAnthropic(claude_msg("# 報告書\n本文"))
-    tool = deliverable_tool(ClaudeWriter("k", "claude-x", client=fake), tmp_path)
+    tool = document_tool(ClaudeWriter("k", "claude-x", client=fake), tmp_path)
     r = await tool.execute({"title": "週次/報告:案", "instructions": "まとめて", "materials": "材料"}, CTX)
     call = fake.calls[0]
     assert call["_kind"] == "beta" and call["fallbacks"] == "default"
@@ -139,7 +140,7 @@ async def test_claude_writer_uses_fallback_and_effort(tmp_path):
 async def test_claude_writer_without_fallback_and_code_fence(tmp_path):
     fake = FakeAnthropic(claude_msg("```python\nprint(1)\n```"))
     w = ClaudeWriter("k", "claude-x", fallback="off", effort="", client=fake)
-    r = await deliverable_tool(w, tmp_path).execute({"title": "t", "instructions": "i", "format": "python"}, CTX)
+    r = await document_tool(w, tmp_path).execute({"title": "t", "instructions": "i", "format": "python"}, CTX)
     assert fake.calls[0]["_kind"] == "std" and "output_config" not in fake.calls[0]
     assert (tmp_path / r.data["file"]).read_text(encoding="utf-8") == "print(1)"
 
@@ -156,7 +157,7 @@ async def test_claude_writer_errors(tmp_path, msg, match):
 
 async def test_claude_truncated_flag(tmp_path):
     w = ClaudeWriter("k", "m", client=FakeAnthropic(claude_msg("途中", "max_tokens")))
-    r = await deliverable_tool(w, tmp_path).execute({"title": "t", "instructions": "i"}, CTX)
+    r = await document_tool(w, tmp_path).execute({"title": "t", "instructions": "i"}, CTX)
     assert r.data["truncated"] and "途中終了" in r.summary
 
 
@@ -202,10 +203,22 @@ def test_build_registry_registers_only_configured(tmp_path):
     base = {"BUDDY_WORKSPACE_DIR": str(tmp_path / "ws")}
     reg = build_registry(load_settings(env=base), mem)
     assert reg.names() == ["list_workspace_files", "propose_memory", "read_workspace_file"]
-    full = build_registry(load_settings(env={**base, "PERPLEXITY_API_KEY": "p", "PERPLEXITY_MODEL": "sonar",
+    # 任意の経路: 調査=Perplexity、作成=Claude API
+    full = build_registry(load_settings(env={**base, "RESEARCH_PROVIDER": "perplexity", "WRITER_PROVIDER": "claude_api",
+                                             "PERPLEXITY_API_KEY": "p", "PERPLEXITY_MODEL": "sonar",
                                              "ANTHROPIC_API_KEY": "a", "CLAUDE_MODEL": "claude-x"}), mem)
-    assert {"research_web", "create_deliverable"} <= set(full.names())
-    assert full.get("research_web").external and full.get("create_deliverable").level == Level.IMPORTANT
+    assert {"research_web", "create_document"} <= set(full.names())
+    assert full.get("research_web").external == "Perplexity"
+    assert full.get("create_document").external == "Anthropic (Claude API)"
+    assert full.get("create_document").level == Level.IMPORTANT
+    # B案の既定: 作成・調査・画像とも Gemini
+    b = build_registry(load_settings(env={**base, "GEMINI_API_KEY": "g", "GEMINI_TEXT_MODEL": "t",
+                                          "GEMINI_IMAGE_MODEL": "i"}), mem)
+    for name in ("create_document", "research_web", "generate_image"):
+        assert b.get(name).external == "Google (Gemini)", name
+    # Perplexity キーがあっても、担当が gemini なら Perplexity は使わない
+    b2 = build_registry(load_settings(env={**base, "PERPLEXITY_API_KEY": "p", "PERPLEXITY_MODEL": "sonar"}), mem)
+    assert "research_web" not in b2.names()
     pol = build_policy(load_settings(env={"TOOL_AUTO_APPROVE": "research_web, x"}))
     assert pol.auto_tools == frozenset({"research_web", "x"})
 
@@ -315,3 +328,88 @@ def test_build_registry_registers_gemini(tmp_path):
                                             "GEMINI_API_KEY": "g", "GEMINI_IMAGE_MODEL": "m"}), mem)
     t = reg.get("generate_image")
     assert t and t.external == "Google (Gemini)" and t.level == Level.IMPORTANT and t.node == "image"
+
+
+# ---------- Gemini: 会話(OpenAI 互換窓口)・文書作成・調査 ----------
+from buddy.llm.registry import build_providers
+from buddy.tools.gemini_api import GeminiAPI
+from buddy.tools.gemini_text import GeminiResearch, GeminiWriter
+from buddy.tools.research import research_tool as _research_tool
+
+
+def test_gemini_conversation_preset():
+    from buddy.config import ConfigError
+    p = build_providers(load_settings(env={"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "gk", "LLM_MODEL": "gem-fast"}))
+    fast = p["fast"]
+    assert fast.name == "gemini" and fast.sends_data_externally and fast.model == "gem-fast"
+    assert fast._base_url == "https://generativelanguage.googleapis.com/v1beta/openai"
+    assert fast._headers()["Authorization"] == "Bearer gk"
+    with pytest.raises(ConfigError, match="GEMINI_API_KEY"):
+        build_providers(load_settings(env={"LLM_PROVIDER": "gemini", "LLM_MODEL": "m"}))
+
+
+def gapi(handler):
+    return GeminiAPI("AIza-t", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+
+
+async def test_gemini_writer_wire_format_and_save(tmp_path):
+    seen = {}
+
+    def handler(req):
+        seen.update(url=str(req.url), body=json.loads(req.content))
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "# 企画書\n本文"}]},
+                                                         "finishReason": "STOP"}]})
+
+    r = await document_tool(GeminiWriter(gapi(handler), "gem-text"), tmp_path).execute(
+        {"title": "企画", "instructions": "まとめて", "materials": "材料X"}, CTX)
+    assert seen["url"].endswith("/v1beta/models/gem-text:generateContent")
+    # 公式 SDK と同じ形(systemInstruction は role:user + parts)
+    assert seen["body"]["systemInstruction"]["role"] == "user"
+    assert "成果物の作成担当" in seen["body"]["systemInstruction"]["parts"][0]["text"]
+    assert "材料X" in seen["body"]["contents"][0]["parts"][0]["text"]
+    assert (tmp_path / r.data["file"]).read_text(encoding="utf-8") == "# 企画書\n本文"
+    assert r.brief.startswith("outputs/") and "冒頭: # 企画書 本文" in r.brief  # 司令塔には本文全体を返さない
+
+
+async def test_gemini_writer_truncated_and_empty():
+    w = GeminiWriter(gapi(lambda r: httpx.Response(200, json={"candidates": [
+        {"content": {"parts": [{"text": "途中"}]}, "finishReason": "MAX_TOKENS"}]})), "m")
+    assert (await w.write("p")).truncated
+    empty = GeminiWriter(gapi(lambda r: httpx.Response(200, json={"candidates": [
+        {"content": {"parts": []}, "finishReason": "SAFETY"}]})), "m")
+    with pytest.raises(ToolError, match="SAFETY"):
+        await empty.write("p")
+
+
+async def test_gemini_research_grounding():
+    seen = {}
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json={"candidates": [{
+            "content": {"parts": [{"text": "結論です"}]}, "finishReason": "STOP",
+            "groundingMetadata": {"webSearchQueries": ["q"], "groundingChunks": [
+                {"web": {"uri": "https://a.example/x", "title": "a.example"}},
+                {"web": {"uri": "https://a.example/x", "title": "dup"}},
+                {"web": {"uri": "https://b.example/y", "title": "b.example"}}]}}]})
+
+    tool = _research_tool(GeminiResearch(gapi(handler), "gem-text"))
+    r = await tool.execute({"query": "最新の動向", "recency": "week"}, CTX)
+    assert seen["body"]["tools"] == [{"googleSearch": {}}]  # 公式 SDK と同じ形
+    assert "直近1週間" in seen["body"]["contents"][0]["parts"][0]["text"]
+    assert [s["url"] for s in r.data["sources"]] == ["https://a.example/x", "https://b.example/y"]
+    assert tool.external == "Google (Gemini)" and "[1] a.example" in r.content
+
+
+async def test_gemini_list_models():
+    def handler(req):
+        assert req.url.path == "/v1beta/models" and req.headers["x-goog-api-key"] == "AIza-t"
+        return httpx.Response(200, json={"models": [{"name": "models/g1", "supportedGenerationMethods": ["generateContent"]}]})
+    assert (await gapi(handler).list_models())[0]["name"] == "models/g1"
+
+
+def test_settings_reject_unknown_providers():
+    from buddy.config import ConfigError
+    for k in ("WRITER_PROVIDER", "RESEARCH_PROVIDER", "ORCHESTRATOR"):
+        with pytest.raises(ConfigError, match=k):
+            load_settings(env={k: "nope"})

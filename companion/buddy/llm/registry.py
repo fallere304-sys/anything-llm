@@ -14,6 +14,7 @@ from .openai_compat import OpenAICompatProvider
 PROFILES = ("fast", "strong")
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
+GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"  # Gemini の OpenAI 互換窓口
 
 
 def _mock(s: Settings, model: str) -> LLMProvider:
@@ -39,10 +40,21 @@ def _openai(s: Settings, model: str) -> LLMProvider:
     )
 
 
+def _gemini(s: Settings, model: str) -> LLMProvider:
+    key = s.llm_api_key or s.gemini_api_key  # 会話・作成・調査で同じ Gemini キーを使える
+    if not key:
+        raise ConfigError("LLM_PROVIDER=gemini には GEMINI_API_KEY(または LLM_API_KEY)が必要です。")
+    return OpenAICompatProvider(
+        base_url=s.llm_base_url or GEMINI_OPENAI_BASE_URL, model=model, api_key=key,
+        timeout=s.llm_timeout, name="gemini", force_external=True,
+    )
+
+
 _FACTORIES: dict[str, Callable[[Settings, str], LLMProvider]] = {
     "mock": _mock,
     "openai_compat": _openai_compat,
     "openai": _openai,
+    "gemini": _gemini,
 }
 
 

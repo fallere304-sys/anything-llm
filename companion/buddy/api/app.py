@@ -16,12 +16,15 @@ from pydantic import BaseModel, Field
 from .. import __version__
 from ..activity import describe_nodes
 from ..agent.approvals import ApprovalBroker
+from ..agent.runs import RunRegistry
+from .mcp import build_mcp_router
 from ..chat.service import MAX_USER_CHARS, AgentLimits, Busy, ChatService, UnknownProfile
 from ..config import Settings
 from ..llm.base import LLMProvider
 from ..memory.service import MemoryService, MemoryValidationError
 from ..memory.store import MemoryStore, ProjectInUse
-from ..tools.builtin import build_policy, build_registry
+from ..agent.orchestrator import ClaudeCodeOrchestrator, OrchestratorConfig, delegate_tool
+from ..tools.builtin import build_policy, build_registry, claude_code_executable
 from ..tools.registry import ToolRegistry
 from ..tools.workspace import safe_path
 from ..tools.registry import ToolError
@@ -117,6 +120,20 @@ def create_app(
     app = FastAPI(title="AI Buddy", version=__version__, lifespan=lifespan)
     app.state.service = service
     app.state.memory = memory
+    runs = RunRegistry()
+    app.state.runs = runs
+    app.include_router(build_mcp_router(service, runs))
+    # 司令塔(Claude Code)。テスト等でツール一式を外から渡した場合は自動登録しない
+    exe = claude_code_executable(settings) if registry is None else None
+    if exe:
+        tools.register(delegate_tool(ClaudeCodeOrchestrator(OrchestratorConfig(
+            executable=exe, server_url=f"http://127.0.0.1:{settings.port}",
+            workdir=settings.data_dir / "claude_code", model=settings.claude_code_model,
+            timeout=settings.claude_code_timeout,
+            mcp_tool_timeout=settings.agent_approval_timeout + settings.agent_tool_timeout), runs)))
+        log.info("司令塔 Claude Code を有効化: %s", exe)
+    elif registry is None and settings.orchestrator == "claude_code":
+        log.info("Claude Code(%s)が見つからないため司令塔は無効", settings.claude_code_path)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     def require_auth(x_buddy_token: str = Header(default="")) -> None:

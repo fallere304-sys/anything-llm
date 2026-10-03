@@ -171,3 +171,36 @@
 ### 問題点・未検証
 - 実 Gemini API では未検証。モデル名・無料枠での画像生成可否は AI Studio で要確認
 - 無料枠では送信内容が Google の製品改善に使われる場合がある
+
+## 構成変更: B案(会話 = Gemini / 司令塔 = Claude Code / 作成・調査・画像 = Gemini) — 完了(2026-10-03)
+方針: 有料契約は Claude のサブスクのみ。Claude の性能は「計画・判断・検証」に絞り、量の多い会話・生成は Gemini 無料枠へ。
+
+### 実装
+- 会話: `LLM_PROVIDER=gemini`(Gemini の OpenAI 互換窓口を既存の接続口で利用)。モデル一覧: `python -m buddy.tools.gemini_api`
+- 作成・調査: `create_document`(書き手を Gemini / Claude API で切替)、`research_web`(Gemini + Google 検索 / Perplexity で切替)
+  - Gemini の送信形式(systemInstruction・googleSearch・出典 groundingChunks)は公式 SDK の実送信を記録して照合
+- 司令塔: `delegate_task` → Claude Code を最小構成で非対話起動
+  - `--tools ""` `--system-prompt` `--restricted` `--strict-mcp-config` `--mcp-config` `--allowedTools mcp__buddy`
+  - `--bare` は使わない(OAuth を読まず、サブスクのログインが使えないため)。`--max-turns` はこの版に無いのでタイムアウトと呼び出し上限で制御
+  - 指示書は標準入力で渡す / API キー環境変数を外して起動 / 起動情報が API キーなら即中止
+  - stream-json を可視化イベントに変換(Session started / Dispatch -> ツール名 / Planning)
+- MCP 窓口 `/mcp/{run}`: JSON-RPC(initialize / tools/list / tools/call / ping)。実行ごとの使い捨てトークン・PC内のみ・
+  `delegate_task` は非公開(再帰防止)・1回の依頼でサブツール 30 回まで。ツール呼び出しは会話側と同じ権限判定・承認を通る
+- ツール実行中のイベント中継(ToolContext.emit): Claude Code のサブ作業の承認カード・点灯がリアルタイムに画面へ
+- 司令塔へ返す結果は短い要約(brief)。文書作成は保存先と冒頭 300 文字のみ
+- ツールごとの実行タイムアウト(司令塔は 30 分)
+- 可視化: COMMAND(Claude Code)ノード追加、各ノードの表示名は実際の担当から自動決定。完了チップにサブ作業と消費トークン
+
+### テスト
+- pytest 134件成功(MCP の認証・プロトコル・承認待ち・中継・上限、司令塔の起動引数・環境・API課金検知・失敗・
+  タイムアウト・相対パス回帰、Gemini 会話/作成/調査の送信形式、.env.example がそのまま B案で起動できること)
+- **実 Claude Code CLI(v2.1.288)で E2E**: 疑似 Gemini の会話 → 委任の承認 → Claude Code が MCP 経由で調査・文書作成を実行
+  → outputs/ に保存 → 報告 → Gemini が伝える。約15秒、3ターンで Claude Code 入力 約12,400 トークン(キャッシュ込み累計)
+  - この E2E で、相対パスの作業ディレクトリが原因の不具合(MCP 設定が見つからない)を発見・修正
+- 実測: Claude Code 1回あたりの入力 既定 約31,900 → 最小構成 約1,200 トークン
+
+### 問題点・未検証
+- **Windows 実機での Claude Code 起動は未検証**(`claude` が .cmd の場合などの差異があり得る)
+- 実 Gemini API(会話の OpenAI 互換窓口でのツール呼び出し・Google 検索の無料枠)は未検証
+- Claude Code の利用量はサブスクの上限と共有。残量の取得手段は無い
+- 自分の PC で公式 CLI を自分用に自動実行する使い方は問題ないと考えるが、規約上の確認は推定(配布する場合は API キー方式が必要)

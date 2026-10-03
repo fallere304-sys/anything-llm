@@ -21,6 +21,14 @@ def describe_nodes(
 ) -> list[dict]:
     names = set(tools.names()) if tools is not None else set()
 
+    def via(tool_name: str, fallback: str) -> str:
+        """登録済みツールの送信先から表示名を決める(例: Google (Gemini) -> Gemini)。"""
+        t = tools.get(tool_name) if tools is not None else None
+        if t is None or not t.external:
+            return fallback
+        return {"Google (Gemini)": "Gemini", "Anthropic (Claude API)": "Claude API",
+                "Anthropic (Claude Code)": "Claude Code"}.get(t.external, t.external)
+
     def node(id_, short, label, desc, available, phase=None, external=False, note=None):
         return {
             "id": id_, "short": short, "label": label, "description": desc,
@@ -42,10 +50,13 @@ def describe_nodes(
             p is not None, external=bool(p and p.sends_data_externally),
         ))
     nodes += [
-        node("research", "RESEARCH", "Perplexity", "Web research with sources (PERPLEXITY_API_KEY / PERPLEXITY_MODEL)",
+        node("orchestrator", "COMMAND", "Claude Code",
+             "Plans and dispatches multi-step tasks with a minimal context (Claude subscription)",
+             "delegate_task" in names, external=True),
+        node("research", "RESEARCH", via("research_web", "Gemini"), "Web research with sources (RESEARCH_PROVIDER)",
              "research_web" in names, external=True),
-        node("claude", "CREATE", "Claude", "Deliverables saved to outputs/ (ANTHROPIC_API_KEY / CLAUDE_MODEL)",
-             "create_deliverable" in names, external=True),
+        node("create", "CREATE", via("create_document", "Gemini"), "Documents saved to outputs/ (WRITER_PROVIDER)",
+             "create_document" in names, external=True),
         node("image", "IMAGE", "Gemini", "Image generation saved to outputs/ (GEMINI_API_KEY / GEMINI_IMAGE_MODEL)",
              "generate_image" in names, external=True),
         node("files", "FILES", "Workspace", "Read-only access to the workspace folder (BUDDY_WORKSPACE_DIR)",

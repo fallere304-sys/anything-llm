@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import time
@@ -18,7 +19,7 @@ from ..llm.base import ChatMessage, LLMError, LLMProvider, ToolCallRequest
 from ..memory.service import MemoryService, Retrieval
 from ..storage.db import Database
 from ..tools.permissions import PermissionPolicy
-from ..tools.registry import LEVEL_LABEL, ToolContext, ToolError, ToolRegistry
+from ..tools.registry import LEVEL_LABEL, ToolContext, ToolError, ToolRegistry, ToolResult
 from .context import build_context
 
 log = logging.getLogger("buddy.chat")
@@ -47,6 +48,8 @@ class AgentLimits:
 class _ToolOutcome:
     content: str  # LLM に返す内容
     record: dict = field(default_factory=dict)  # 会話に残す作業記録
+    brief: Optional[str] = None  # 司令塔へ返す短い結果
+    ok: bool = False
 
 
 class ChatService:
@@ -177,7 +180,7 @@ class ChatService:
                 messages.append(ChatMessage("assistant", text, tool_calls=tuple(calls)))
                 for call in calls:
                     outcome: Optional[_ToolOutcome] = None
-                    async for item in self._run_tool(call, ctx):
+                    async for item in self.run_tool(call, ctx):
                         if isinstance(item, _ToolOutcome):
                             outcome = item
                         else:
@@ -212,7 +215,11 @@ class ChatService:
             if self.state in ("thinking", "responding", "working", "waiting"):
                 self.state = "idle"
 
-    async def _run_tool(self, call: ToolCallRequest, ctx: ToolContext) -> AsyncIterator["dict | _ToolOutcome"]:
+    async def run_tool(self, call: ToolCallRequest, ctx: ToolContext) -> AsyncIterator["dict | _ToolOutcome"]:
+        """1件のツール呼び出しを、検証 → 権限判定 → (必要なら承認待ち) → 実行 の順に処理する。
+
+        会話 LLM からの呼び出しと、司令塔(MCP 経由)からの呼び出しの両方がここを通る。
+        途中のイベントを順に返し、最後に _ToolOutcome を返す。"""
         cid = ctx.conversation_id
         record = {"tool": call.name, "ok": False, "summary": ""}
 
@@ -270,14 +277,20 @@ class ChatService:
         yield self._set("working")
         t0 = time.monotonic()
         try:
-            result = await asyncio.wait_for(tool.execute(args, ctx), self.limits.tool_timeout)
+            result = None
+            async for item in self._execute_relaying(tool, args, ctx):
+                if isinstance(item, ToolResult):
+                    result = item
+                else:
+                    yield item  # 実行中に中継されたイベント(サブツールの承認依頼など)
+            assert result is not None
         except ToolError as exc:
             yield activity(tool.node, "end", f"{tool.name}: failed", act["id"], ok=False)
             yield {"type": "tool_result", "tool": tool.name, "ok": False, "summary": str(exc)}
             yield fail(str(exc), f"失敗: {exc}")
             return
         except asyncio.TimeoutError:
-            msg = f"{int(self.limits.tool_timeout)}秒以内に終わらなかったため中止しました。"
+            msg = f"{int(tool.timeout or self.limits.tool_timeout)}秒以内に終わらなかったため中止しました。"
             yield activity(tool.node, "end", f"{tool.name}: timed out", act["id"], ok=False)
             yield {"type": "tool_result", "tool": tool.name, "ok": False, "summary": msg}
             yield fail(msg, "時間切れ")
@@ -295,7 +308,30 @@ class ChatService:
         yield activity(tool.node, "end", f"{tool.name}: done ({elapsed:.1f}s)", act["id"], ok=True)
         yield {"type": "tool_result", "tool": tool.name, "ok": True, "summary": result.summary,
                "data": result.data, "external": tool.external}
-        yield _ToolOutcome(result.content, record)
+        yield _ToolOutcome(result.content, record, brief=result.brief, ok=True)
+
+    async def _execute_relaying(self, tool, args: dict, ctx: ToolContext) -> AsyncIterator["dict | ToolResult"]:
+        """ツールを実行しつつ、ctx.emit で送られたイベントをその場で返す(タイムアウト付き)。
+
+        呼び出し側の切断(キャンセル)時は実行中のツールも取り消す。"""
+        queue: asyncio.Queue = asyncio.Queue()
+        run_ctx = dataclasses.replace(ctx, emit=queue.put_nowait)
+        task = asyncio.ensure_future(asyncio.wait_for(tool.execute(args, run_ctx), tool.timeout or self.limits.tool_timeout))
+        try:
+            while True:
+                getter = asyncio.ensure_future(queue.get())
+                done, _ = await asyncio.wait({task, getter}, return_when=asyncio.FIRST_COMPLETED)
+                if getter in done:
+                    yield getter.result()
+                    continue
+                getter.cancel()
+                break
+            while not queue.empty():
+                yield queue.get_nowait()
+            yield task.result()  # 例外はここで呼び出し側へ
+        finally:
+            if not task.done():
+                task.cancel()
 
     @staticmethod
     def _history_entry(m: dict) -> dict:
