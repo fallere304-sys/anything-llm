@@ -47,16 +47,32 @@ NVIDIA のドライバの「システム メモリ フォールバック」で�
 
 ## 使い方
 
+`LocalCoder.exe` を開くと画面が出る (初回は置き場所・モデルなどを選ぶ窓が先に出る)。
+
+- **下の欄**に日本語で頼みを書いて「送る」(Ctrl+Enter)。改行してよい (何行でも 1 つの頼みとして届く)
+- **上の行**に、いまの状態が出る: 「頼みを読んでいます… 12 秒」「返事を書いています」「run を実行しています」
+  「write_file を準備しています (1,234 字)」など。**「最後に受け取ってから ○ 秒」** はモデルから最後に何か届いてからの時間
+  (大きいモデルは、頼みを読み込む間 数十秒〜数分なにも届かないことがある)。「受け取った文字」が増えていれば動いている
+- **やりとりの欄**: モデル自身の考え (薄い字。「モデルの考えを表示する」で隠せる)・本文・道具を使ったこと (緑)・その結果・速さ
+  - 考えが出るのは、考えてから答える型のモデル (gpt-oss・GLM-4.5-Air など) だけ。標準の Qwen3-Coder は考えを出さない
+    代わりに、道具を使う前に「これから何をするか」を 1 文書くように頼んである
+- **■ 止める**: 返事の途中ならモデルへの接続を切り (llama-server はそこで作るのをやめる)、コマンドの実行中ならそのコマンドを
+  (そこから起きたプログラムごと) 止める。止めたあとも、そのまま次の頼みや「続けて」を送れる
+- **新しい話** / **作業フォルダ…** / 「コマンドを確かめずに実行する」(切っておくと、コマンドの前に確認の窓が出る)
+- 窓を閉じると、モデル (llama-server) も止まる。モデルが落ちたときは、その旨が赤字で出る
+
+コマンドプロンプトで使うときは `LocalCoderCLI.exe` (止めるのは Ctrl+C):
+
 ```
-LocalCoder.exe                      対話 (日本語で頼む)
-LocalCoder.exe --setup              置き場所・モデルを選び直す
-LocalCoder.exe --task "…" --yes     1 つの頼みをやり切って終わる
-LocalCoderUninstall.exe             取り除いて、入れる前の姿に戻す (LocalCoder.exe --uninstall でも同じ)
+LocalCoderCLI.exe                      対話 (日本語で頼む)
+LocalCoderCLI.exe --setup              置き場所・モデルを選び直す
+LocalCoderCLI.exe --task "…" --yes     1 つの頼みをやり切って終わる
+LocalCoderUninstall.exe                取り除いて、入れる前の姿に戻す (LocalCoderCLI.exe --uninstall でも同じ)
 ```
 
-対話中: `/new` (話を切り替える) `/cd フォルダ` (作業フォルダ) `/auto` (コマンドを毎回確かめない) `/status` `/exit`
+対話中: `/new` (話を切り替える) `/cd フォルダ` (作業フォルダ) `/auto` (コマンドを毎回確かめない) `/gpu shared|normal` `/status` `/exit`
 
-- コマンドを実行する前に確かめる (`a` で以後は聞かない)。ファイルは作業フォルダの外には触れない
+- ファイルは作業フォルダの外には触れない
 - 外へ出る通信は、準備のときの取得 (llama.cpp・モデル・Python) だけ。頼みごと・コード・結果は外に出ない
 - 記録: `<置き場所>\logs\llama-server.log`
 
@@ -93,10 +109,12 @@ LocalCoderUninstall.exe --home D:\LocalCoder   設定が消えていても、そ
 
 ```
 pip install pyinstaller
-pyinstaller --onefile --console --name LocalCoder LocalCoder.py
+pyinstaller --onefile --windowed --name LocalCoder LocalCoder.py
+pyinstaller --onefile --console --name LocalCoderCLI LocalCoderCLI.py
 pyinstaller --onefile --console --name LocalCoderUninstall LocalCoderUninstall.py
 python -m unittest discover -s tests
 ```
-GitHub Actions ("Build LocalCoder.exe") が exe を作り、実物の llama.cpp (CPU 版) と小さなモデルで
+GitHub Actions ("Build LocalCoder.exe") が exe を作り、できた LocalCoder.exe の画面を自己点検 (`--selftest`: 台本どおりに答える
+偽のモデルにつなぎ、考え・道具・報告が出ること、返事を待っている途中で「止める」が数秒で効くこと) し、実物の llama.cpp (CPU 版) と小さなモデルで
 「日本語で頼む → ファイルができる」までと、`.exe` にする道具が動くこと、そのあと取り除いて
 置き場所・設定・Python の登録が残っていないこと (2 回目は「もう何もありません」) を確かめる。

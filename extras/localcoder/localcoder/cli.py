@@ -1,11 +1,13 @@
 """LocalCoder: 日本語で頼むと、この PC の中だけでプログラムを書いて・動かして・直して・.exe にする相棒。
 
-    LocalCoder.exe                    初回は置き場所 (SSD) とモデルを選んで準備し、対話を始める
-    LocalCoder.exe --setup            置き場所・モデルを選び直す
-    LocalCoder.exe --task "…" --yes   1 つの頼みをやり切って終わる (確認なし)
-    LocalCoder.exe --uninstall        取り除いて入れる前の姿に戻す (LocalCoderUninstall.exe と同じ)
+    LocalCoder.exe                       画面で使う (初回は置き場所とモデルを選ぶ画面が出る)
+    LocalCoderCLI.exe                    コマンドプロンプトで使う (以下はどちらでも使える)
+    LocalCoderCLI.exe --setup            置き場所・モデルを選び直す
+    LocalCoderCLI.exe --task "…" --yes   1 つの頼みをやり切って終わる (確認なし)
+    LocalCoderCLI.exe --uninstall        取り除いて入れる前の姿に戻す (LocalCoderUninstall.exe と同じ)
+    LocalCoderCLI.exe --gpu-memory normal  共有 GPU メモリを使わない (既定は shared: PC のメモリも GPU 用に使う)
 
-    LocalCoder.exe --gpu-memory normal  共有 GPU メモリを使わない (既定は shared: PC のメモリも GPU 用に使う)
+止めるとき: 画面では「止める」ボタン、コマンドプロンプトでは Ctrl+C (返事の途中でも、コマンドの実行中でも止まる)。
 
 対話中のコマンド: /new (話を切り替える)  /cd フォルダ (作業フォルダ)  /auto (コマンドを毎回確かめない)
                   /gpu shared|normal (共有 GPU メモリを使うか。次の起動から)  /status  /help  /exit
@@ -19,6 +21,7 @@ import re
 import string
 import subprocess
 import sys
+import threading
 
 from . import models, server, toolchain, uninstall
 from .agent import Agent, Client, ModelError, Status
@@ -27,7 +30,13 @@ from .tools import Tools
 CONFIG = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "LocalCoder", "config.json")
 
 
+_hook = None          # 画面で動くときの say の行き先: _hook(文, end)
+
+
 def say(*a, **k):
+    if _hook is not None:
+        _hook(" ".join(str(x) for x in a), k.get("end", "\n"))
+        return
     try:
         print(*a, **k, flush=True)
     except UnicodeEncodeError:
@@ -66,7 +75,8 @@ def drives():
                 ["powershell", "-NoProfile", "-Command",
                  "Get-Partition | Where-Object DriveLetter | ForEach-Object { $d = Get-PhysicalDisk | "
                  "Where-Object DeviceId -eq $_.DiskNumber; \"$($_.DriveLetter)`t$($d.MediaType)\" }"],
-                capture_output=True, text=True, timeout=30).stdout
+                capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
             for line in out.splitlines():
                 letter, _, media = line.partition("\t")
                 kinds[letter.strip().upper()] = media.strip()
@@ -105,7 +115,12 @@ def setup(cfg, interactive, model_key=None, path=CONFIG):
         tools_ok = ask("プログラムを .exe にする道具 (Python・約 150MB) も用意しますか？ [Y/n]", "Y").lower() != "n"
         gpu = "normal" if ask("GPU のメモリに入りきらない分を、PC のメモリ (共有 GPU メモリ) に置きますか？"
                               " (大きいモデルを GPU で動かせる。速くなるとは限らない) [Y/n]", "Y").lower() == "n" else "shared"
-    cfg.update(home=home, model_key=entry["key"], model=None, toolchain=tools_ok, gpu_memory=gpu)
+    return apply_setup(cfg, home, entry["key"], tools_ok, gpu, path)
+
+
+def apply_setup(cfg, home, model_key, tools_ok, gpu_memory, path=CONFIG):
+    os.makedirs(home, exist_ok=True)
+    cfg.update(home=home, model_key=model_key, model=None, toolchain=tools_ok, gpu_memory=gpu_memory)
     save(cfg, path)
     return cfg
 
@@ -181,11 +196,9 @@ def repl(agent, tools, state, cfg):
             continue
         say("")
         try:
-            agent.ask(text)
+            ask_stoppable(agent, text)
         except ModelError as e:
             say(f"\n(モデルとのやりとりに失敗しました: {e})")
-        except KeyboardInterrupt:
-            say("\n(止めました)")
 
 
 def check_gpu(kinds, gpu_memory, info=None):
@@ -204,11 +217,7 @@ def check_gpu(kinds, gpu_memory, info=None):
     return gpu_memory
 
 
-def main(argv=None):
-    argv = list(sys.argv[1:] if argv is None else argv)
-    if "--uninstall" in argv:
-        argv.remove("--uninstall")
-        return uninstall.main(argv)
+def parser():
     ap = argparse.ArgumentParser(prog="LocalCoder", description="日本語で頼むと、プログラムを作る相棒 (ローカル)")
     ap.add_argument("--setup", action="store_true", help="置き場所・モデルを選び直す")
     ap.add_argument("--home", help="置き場所 (SSD のフォルダ)")
@@ -224,14 +233,10 @@ def main(argv=None):
     ap.add_argument("--ctx", type=int, default=32768)
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--config", default=CONFIG)
-    args = ap.parse_args(argv)
-    if hasattr(sys.stdout, "reconfigure"):
-        # 画面 (コンソール) ならそのまま。ファイルや別のプログラムに渡すときは UTF-8 で書く (日本語が ??? にならない)
-        if sys.stdout.isatty():
-            sys.stdout.reconfigure(errors="replace")
-        else:
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    interactive = sys.stdin is not None and sys.stdin.isatty() and not args.task
+    return ap
+
+
+def load_config(args):
     cfg = load(args.config)
     if not cfg:
         cfg["before"] = uninstall.snapshot()      # 入れる前の姿 (取り除くとき、もともとあったものを残すため)
@@ -241,43 +246,111 @@ def main(argv=None):
         cfg["home"] = args.home
     if args.no_toolchain:
         cfg["toolchain"] = False
-    if args.setup or not cfg.get("home") or (args.model_key and args.model_key != cfg.get("model_key")):
-        cfg = setup(cfg, interactive, args.model_key, args.config)
+    return cfg
+
+
+def needs_setup(cfg, args):
+    return bool(args.setup or not cfg.get("home") or (args.model_key and args.model_key != cfg.get("model_key")))
+
+
+def finish_setup(cfg, args):
     if args.no_toolchain:
         cfg["toolchain"] = False
     cfg["homes"] = list(dict.fromkeys(cfg.get("homes", []) + [cfg["home"]]))   # 選び直しても、前の置き場所を忘れない
     save(cfg, args.config)
+
+
+class StartError(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def start_model(cfg, args, on_server=None):
+    """llama.cpp・モデル・道具をそろえ、モデルを動かす。動いている Server を返す。
+    on_server(srv) は Server を作った直後に呼ぶ (画面を閉じたとき、起動の途中でも止められるように)。"""
     kinds = [k for k in args.kinds.split(",") if k in server.KINDS]
     try:
         model = prepare(cfg, args, kinds)
     except OSError as e:
-        say(f"準備できませんでした: {e}")
-        return 2
+        raise StartError(2, f"準備できませんでした: {e}") from e
     if args.gpu_memory:
         cfg["gpu_memory"] = args.gpu_memory
-    gpu_memory = cfg.setdefault("gpu_memory", "shared")
-    gpu_memory = check_gpu(kinds, gpu_memory)
+    gpu_memory = check_gpu(kinds, cfg.setdefault("gpu_memory", "shared"))
     srv = server.Server(cfg["home"], port=args.port, ctx=args.ctx, say=say, gpu_memory=gpu_memory)
+    if on_server:
+        on_server(srv)
     order = [cfg["kind"]] + [k for k in kinds if k != cfg.get("kind")] if cfg.get("kind") in kinds else kinds
     kind = srv.start_best(model, order)
     if not kind:
-        say(f"モデルを動かせませんでした。記録: {srv.log_path}")
-        return 3
+        raise StartError(3, f"モデルを動かせませんでした。記録: {srv.log_path}")
     cfg["kind"], cfg["shared_now"], cfg["_path"] = kind, srv.shared, args.config
     save(cfg, args.config)
-    state = {"auto": bool(args.yes)}
+    return srv
+
+
+def make_agent(cfg, args, srv, confirm, **kw):
     ws = args.workspace or os.path.join(cfg["home"], "workspace", "default")
     tools = Tools(ws, env=toolchain.env(cfg["home"]))
     # 文脈の上限 (字): 日本語は 1 トークン ≒ 1〜1.5 字。指示文と道具の説明 (約 2000 トークン) の分を残す
+    agent = Agent(Client(srv.url), tools, confirm=confirm, out=say,
+                  ctx_chars=max(4000, int((args.ctx - 2500) * 1.2)), **kw)
+    return agent, tools
+
+
+def ask_stoppable(agent, text):
+    """頼みを別の糸で進め、Ctrl+C で止められるようにする (待っている途中でも止まる)。"""
+    box = {}
+
+    def work():
+        try:
+            box["r"] = agent.ask(text)
+        except BaseException as e:  # noqa: BLE001
+            box["e"] = e
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    while t.is_alive():
+        try:
+            t.join(0.2)
+        except KeyboardInterrupt:
+            say("\n(止めています…)")
+            agent.cancel()
+    if "e" in box:
+        raise box["e"]
+    return box.get("r")
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--uninstall" in argv:
+        argv.remove("--uninstall")
+        return uninstall.main(argv)
+    args = parser().parse_args(argv)
+    if hasattr(sys.stdout, "reconfigure"):
+        # 画面 (コンソール) ならそのまま。ファイルや別のプログラムに渡すときは UTF-8 で書く (日本語が ??? にならない)
+        if sys.stdout.isatty():
+            sys.stdout.reconfigure(errors="replace")
+        else:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    interactive = sys.stdin is not None and sys.stdin.isatty() and not args.task
+    cfg = load_config(args)
+    if needs_setup(cfg, args):
+        cfg = setup(cfg, interactive, args.model_key, args.config)
+    finish_setup(cfg, args)
+    try:
+        srv = start_model(cfg, args)
+    except StartError as e:
+        say(str(e))
+        return e.code
+    state = {"auto": bool(args.yes)}
     status = Status(lambda t: print(t, end="", flush=True)) if sys.stdout.isatty() else None
-    agent = Agent(Client(srv.url), tools, confirm=confirm_factory(state, interactive), out=say,
-                  ctx_chars=max(4000, int((args.ctx - 2500) * 1.2)), status=status)
+    agent, tools = make_agent(cfg, args, srv, confirm_factory(state, interactive), status=status)
     say(f"作業フォルダ: {tools.root}")
     try:
         if args.task:
             say(f"\nあなた> {args.task}\n")
-            agent.ask(args.task)
-            return 0 if agent.finished else 5          # 報告まで行かなかった (繰り返し・回数切れ)
+            ask_stoppable(agent, args.task)
+            return 0 if agent.finished else 5          # 報告まで行かなかった (繰り返し・回数切れ・止めた)
         repl(agent, tools, state, cfg)
         return 0
     except ModelError as e:

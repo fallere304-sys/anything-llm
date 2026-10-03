@@ -1,6 +1,6 @@
 name: Build LocalCoder.exe
 
-# extras/localcoder を Windows 用の 1 つのアプリ (LocalCoder.exe) にし、実物の llama.cpp と小さなモデルで
+# extras/localcoder を Windows 用のアプリ (LocalCoder.exe = 画面、LocalCoderCLI.exe = コマンドプロンプト) にし、実物の llama.cpp と小さなモデルで
 # 「日本語で頼む → ファイルができる」までを通しで確かめる。
 on:
   push:
@@ -33,8 +33,17 @@ jobs:
       - name: Build LocalCoder.exe
         run: |
           python -m pip install --upgrade pip pyinstaller
-          pyinstaller --noconfirm --clean --onefile --console --name LocalCoder LocalCoder.py
+          pyinstaller --noconfirm --clean --onefile --windowed --name LocalCoder LocalCoder.py
+          pyinstaller --noconfirm --clean --onefile --console --name LocalCoderCLI LocalCoderCLI.py
           pyinstaller --noconfirm --clean --onefile --console --name LocalCoderUninstall LocalCoderUninstall.py
+
+      - name: "Window: the built LocalCoder.exe opens its window, shows progress and stops on request"
+        timeout-minutes: 5
+        run: |
+          $out = "$env:RUNNER_TEMP\selftest.txt"
+          $p = Start-Process -FilePath dist\LocalCoder.exe -ArgumentList @("--selftest", $out, "--config", "$env:RUNNER_TEMP\st.json") -Wait -PassThru
+          if (Test-Path $out) { Get-Content $out -Encoding utf8 }
+          if ($p.ExitCode -ne 0) { throw "window selftest failed ($($p.ExitCode))" }
 
       - name: "End to end: real llama.cpp (CPU) + small model, one Japanese request"
         env:
@@ -44,11 +53,11 @@ jobs:
           $ws = "$env:RUNNER_TEMP\ws"
           # 利用者と同じく、ダウンロードした場所から動かす (取り除くときに、この写しも消えることを確かめる)
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\app" | Out-Null
-          Copy-Item dist\LocalCoder.exe "$env:RUNNER_TEMP\app\LocalCoder.exe"
+          Copy-Item dist\LocalCoderCLI.exe "$env:RUNNER_TEMP\app\LocalCoderCLI.exe"
           $a = @("--home", $h, "--config", "$env:RUNNER_TEMP\lc.json", "--model", "small", "--kinds", "cpu",
                  "--no-toolchain", "--ctx", "8192", "--workspace", $ws, "--yes",
                  "--task", "hello.txt というファイルを作って、中身を「こんにちは」の 1 行にしてください。")
-          & "$env:RUNNER_TEMP\app\LocalCoder.exe" @a 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\e2e.txt"
+          & "$env:RUNNER_TEMP\app\LocalCoderCLI.exe" @a 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\e2e.txt"
           $code = $LASTEXITCODE
           Get-Content "$env:RUNNER_TEMP\e2e.txt"
           if (Test-Path "$h\logs\llama-server.log") { Get-Content "$h\logs\llama-server.log" -Tail 20 }
@@ -116,7 +125,7 @@ jobs:
           if ($code -ne 0) { throw "uninstall failed ($code)" }
           if (Test-Path $h) { Get-ChildItem -Recurse $h | Select-Object -First 20; throw "the folder is still there" }
           if (Test-Path $cfg) { throw "config is still there" }
-          if (Test-Path "$env:RUNNER_TEMP\app\LocalCoder.exe") { throw "LocalCoder.exe is still there" }
+          if (Test-Path "$env:RUNNER_TEMP\app\LocalCoderCLI.exe") { throw "LocalCoderCLI.exe is still there" }
           if ((Test-Path $core) -and "$((Get-ItemProperty $core).'(default)')".StartsWith($h)) { throw "Python is still registered" }
           & {
             "toolcache python.exe: $(Test-Path "$env:pythonLocation\python.exe")"
@@ -137,5 +146,6 @@ jobs:
           name: LocalCoder-windows
           path: |
             extras/localcoder/dist/LocalCoder.exe
+            extras/localcoder/dist/LocalCoderCLI.exe
             extras/localcoder/dist/LocalCoderUninstall.exe
           retention-days: 30

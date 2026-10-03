@@ -14,6 +14,7 @@ import subprocess
 from .server import download
 
 PY_VERSION = "3.12.10"
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 INSTALLER = f"https://www.python.org/ftp/python/{PY_VERSION}/python-{PY_VERSION}-amd64.exe"
 
 
@@ -115,23 +116,23 @@ def ensure(home, say=print, run=subprocess.run, found=None):
             download(INSTALLER, inst, say)
         run([inst, "/quiet", "InstallAllUsers=0", f"TargetDir={python_dir(home)}", "Include_launcher=0",
              "InstallLauncherAllUsers=0", "PrependPath=0", "Include_test=0", "Include_doc=0", "Shortcuts=0",
-             "AssociateFiles=0", "Include_tcltk=1", "Include_pip=1"], capture_output=True)
+             "AssociateFiles=0", "Include_tcltk=1", "Include_pip=1"], capture_output=True, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     if python_exe(home) is None:
         # 同じ 3.12 系がもうある (正式な入れる道具はそれを更新・修復してしまう) か、入れられなかった:
         # もとからある Python には触れず、置き場所の中に仮想環境を作る
         base = _base_python(others)
         if base:
             say(f"もとからある Python ({base}) には触れず、置き場所の中に仮想環境を作ります")
-            run([base, "-m", "venv", python_dir(home)], capture_output=True)
+            run([base, "-m", "venv", python_dir(home)], capture_output=True, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     exe = python_exe(home)
     if exe is None:
         say("Python を用意できませんでした。.exe にする機能は使えません (ほかの作業はできます)")
         return None
-    r = run([exe, "-m", "PyInstaller", "--version"], capture_output=True)
+    r = run([exe, "-m", "PyInstaller", "--version"], capture_output=True, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     if r.returncode != 0:
         say("PyInstaller を入れます")
         run([exe, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location",
-             "pyinstaller"], capture_output=True, env=env(home))
+             "pyinstaller"], capture_output=True, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW, env=env(home))
     return exe
 
 

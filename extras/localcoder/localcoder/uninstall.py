@@ -158,7 +158,7 @@ class System:
     def run(self, cmd, timeout=300):
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                               timeout=timeout, creationflags=CREATE_NO_WINDOW)
+                               timeout=timeout, stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
             return r.returncode, r.stdout
         except (OSError, subprocess.SubprocessError):
             return 127, ""

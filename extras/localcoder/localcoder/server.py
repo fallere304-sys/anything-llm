@@ -153,7 +153,7 @@ def gpu_info(run=subprocess.run):
     """NVIDIA の GPU の {name, driver, vram_mb}。分からなければ None。"""
     try:
         r = run(["nvidia-smi", "--query-gpu=name,driver_version,memory.total", "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=20, creationflags=CREATE_NO_WINDOW)
+                capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return None
     line = (r.stdout or "").strip().splitlines()[:1]
@@ -234,8 +234,8 @@ class Server:
             self.stop()
             log = open(self.log_path, "w", encoding="utf-8", errors="replace")
             self.proc = self.popen([exe] + server_args(kind, model, self.port, self.ctx, self.threads, minimal, shared),
-                                   cwd=os.path.dirname(exe), stdout=log, stderr=subprocess.STDOUT,
-                                   creationflags=CREATE_NO_WINDOW)
+                                   cwd=os.path.dirname(exe), stdin=subprocess.DEVNULL, stdout=log,
+                                   stderr=subprocess.STDOUT, creationflags=CREATE_NO_WINDOW)
             t0 = time.time()
             while time.time() - t0 < wait_s:
                 if self._health():

@@ -6,13 +6,14 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from localcoder import cli, models, server, toolchain, uninstall  # noqa: E402
-from localcoder.agent import Agent, Client, rescue_calls  # noqa: E402
+from localcoder.agent import Agent, Client, Status, rescue_calls  # noqa: E402
 from localcoder.tools import ToolError, Tools  # noqa: E402
 
 
@@ -65,10 +66,11 @@ class FakeModel(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         FakeModel.seen.append(body)
         step = FakeModel.script.pop(0)
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.end_headers()
+        time.sleep(step.get("delay", 0))              # 頼みを読み込んでいる間 (返事の最初の文字までの待ち)
+        late = step.get("late", 0)                    # 返事の頭だけ届き、中身がなかなか来ない
         chunks = []
+        for part in step.get("think", []):            # 考えてから答える型のモデルの、考えの部分
+            chunks.append({"choices": [{"delta": {"reasoning_content": part}}]})
         if "text" in step:
             for part in (step["text"][:3], step["text"][3:]):
                 chunks.append({"choices": [{"delta": {"content": part}}]})
@@ -79,14 +81,23 @@ class FakeModel(BaseHTTPRequestHandler):
             chunks.append({"choices": [{"delta": {"tool_calls": [
                 {"index": i, "function": {"arguments": raw[5:]}}]}}]})
         chunks.append({"choices": [], "timings": {"predicted_per_second": 7.5}})
-        for c in chunks:
-            self.wfile.write(f"data: {json.dumps(c, ensure_ascii=False)}\n\n".encode())
-        self.wfile.write(b"data: [DONE]\n\n")
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.flush()
+            time.sleep(late)
+            for c in chunks:
+                self.wfile.write(f"data: {json.dumps(c, ensure_ascii=False)}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+        except OSError:
+            pass                                      # 相棒が止めて、接続が切れた
 
 
 class AgentTest(unittest.TestCase):
     def setUp(self):
-        self.srv = HTTPServer(("127.0.0.1", 0), FakeModel)
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeModel)
+        self.srv.daemon_threads = True
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
         self.tmp = tempfile.mkdtemp()
@@ -136,6 +147,112 @@ class AgentTest(unittest.TestCase):
         self.assertIn("そんな道具はありません", results[1])
 
 
+class ProgressAndStopTest(AgentTest):
+    def events_agent(self):
+        self.events = []
+        return Agent(Client(self.url), Tools(self.tmp), on_event=lambda k, d: self.events.append((k, d)))
+
+    def test_model_reasoning_is_shown_apart_from_the_reply(self):
+        FakeModel.script = [{"think": ["まず中身を", "確かめる"], "text": "読みます。",
+                             "calls": [("list_files", {})]},
+                            {"text": "<think>もう十分</think>終わりました。"}]
+        a = self.events_agent()
+        self.assertEqual(a.ask("見て"), "終わりました。")
+        think = "".join(d for k, d in self.events if k == "think")
+        text = "".join(d for k, d in self.events if k == "text")
+        self.assertEqual(think, "まず中身を確かめるもう十分")
+        self.assertNotIn("think", text)
+        self.assertNotIn("十分", text)                 # 考えは本文 (モデルへ戻す会話) に混ぜない
+        self.assertNotIn("十分", a.messages[-1]["content"])
+        self.assertIn(("tool", ("list_files", "")), self.events)
+        self.assertTrue(any(k == "progress" and d[0] == "list_files" for k, d in self.events))
+        self.assertTrue(any(k == "speed" for k, d in self.events))
+
+    def test_stop_while_the_model_is_still_reading(self):
+        for wait in ({"delay": 3}, {"late": 3}):       # 返事の頭が届く前 / 頭は届いて中身を待っている
+            with self.subTest(wait=wait):
+                self._stop_while_waiting(wait)
+
+    def _stop_while_waiting(self, wait):
+        FakeModel.script = [dict(wait, text="遅い返事")]
+        a = self.events_agent()
+        out = {}
+        t = threading.Thread(target=lambda: out.setdefault("r", a.ask("ゆっくり")))
+        t0 = time.time()
+        t.start()
+        time.sleep(0.3)
+        a.cancel()
+        t.join(2)
+        self.assertFalse(t.is_alive())
+        self.assertLess(time.time() - t0, 2)
+        self.assertEqual(out["r"], "")
+        self.assertIn("止め", a.messages[-1]["content"])
+        self.assertFalse(a.finished)
+        FakeModel.script = [{"text": "はい"}]          # 止めた後も、次の頼みはふつうに通る
+        self.assertEqual(a.ask("続けて"), "はい")
+
+    def test_stop_kills_a_running_command(self):
+        t = Tools(self.tmp)
+        out = {}
+        th = threading.Thread(target=lambda: out.setdefault("r", t.run("sleep 30" if os.name != "nt" else
+                                                                         "Start-Sleep -Seconds 30")))
+        t0 = time.time()
+        th.start()
+        time.sleep(0.5)
+        t.cancel()
+        th.join(10)
+        self.assertFalse(th.is_alive())
+        self.assertLess(time.time() - t0, 10)
+        self.assertIn("止めました", out["r"])
+
+    def test_think_tag_split_across_chunks(self):
+        got = {"think": [], "text": []}
+        lines = [f"data: {json.dumps({'choices': [{'delta': {'content': p}}]})}".encode()
+                 for p in ("<th", "ink>考え", "中</th", "ink>答え")] + [b"data: [DONE]"]
+        r = Client(self.url)._stream(iter(lines), on_text=got["text"].append, on_think=got["think"].append)
+        self.assertEqual("".join(got["think"]), "考え中")
+        self.assertEqual(r["content"], "答え")
+
+
+class GuiTest(unittest.TestCase):
+    """画面の自己点検 (exe の --selftest と同じもの)。画面を出せない環境では飛ばす。"""
+
+    def test_window_selftest(self):
+        try:
+            import tkinter
+            root = tkinter.Tk()
+        except Exception as e:  # noqa: BLE001
+            self.skipTest(f"画面を出せない: {e}")
+        from localcoder import selftest
+        out = os.path.join(tempfile.mkdtemp(), "selftest.txt")
+        code = selftest.run(root, cli.parser().parse_args(["--config", os.path.join(tempfile.mkdtemp(), "c.json")]),
+                            out)
+        with open(out, encoding="utf-8") as f:
+            report = f.read()
+        self.assertEqual(code, 0, report)
+        self.assertTrue(report.strip().endswith("OK"), report)
+
+
+class StatusTest(unittest.TestCase):
+    def test_waiting_line_is_shown_then_cleared_and_text_flows(self):
+        out = []
+        now = [100.0]
+        st = Status(out.append, clock=lambda: now[0], interval=3600)
+        st.begin()
+        now[0] = 112
+        st.show()
+        self.assertIn("考えています… 12 秒", out[-1])
+        st.text("はい、作ります")
+        self.assertEqual(out[-1], "はい、作ります")
+        self.assertEqual(out[-2].strip(), "")                  # 待ちの表示を消してから本文
+        st.tool("write_file", 1234)
+        st.show()
+        self.assertEqual(out[-2], "\n")                        # 本文の行は消さずに改行してから
+        self.assertIn("write_file を準備しています (1,234 字)", out[-1])
+        st.end()
+        self.assertEqual(out[-1].strip(), "")
+
+
 class RepeatTest(AgentTest):
     def test_text_calls_get_plain_results_and_repeats_stop(self):
         block = '```json\n{"name": "write_file", "arguments": {"path": "hello.txt", "content": "こんにちは"}}\n```'
@@ -163,7 +280,7 @@ class RepeatTest(AgentTest):
         calls = []
 
         class Tight:
-            def chat(self, messages, tools=None, on_text=None, on_tool=None):
+            def chat(self, messages, tools=None, on_text=None, **kw):
                 calls.append(sum(len(m.get("content") or "") for m in messages))
                 if len(calls) == 1:
                     from localcoder.agent import ModelError

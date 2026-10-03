@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 
 MAX_READ = 60_000          # 一度に読ませる文字数の上限 (文脈を食いつぶさないように)
 MAX_OUT = 12_000           # コマンドの出力は末尾をこれだけ返す
@@ -66,6 +67,17 @@ class Tools:
         self.env = env
         self.shell = shell or (["powershell", "-NoProfile", "-NonInteractive", "-Command"] if os.name == "nt"
                                else ["sh", "-c"])
+        self.cancelled = threading.Event()
+        self._proc = None
+        self._lock = threading.Lock()
+
+    def cancel(self):
+        """実行中のコマンドを (そこから起きたプログラムごと) 止める。"""
+        self.cancelled.set()
+        with self._lock:
+            p = self._proc
+        if p is not None:
+            _kill_tree(p)
 
     # ------------------------------------------------------------ 場所
     def path(self, rel):
@@ -172,15 +184,44 @@ class Tools:
             command = ("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
                        "$OutputEncoding = [System.Text.Encoding]::UTF8; " + command)
         try:
-            p = subprocess.run(self.shell + [command], cwd=self.root, env=self.env, capture_output=True,
-                               timeout=max(5, min(int(timeout), 3600)),
-                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            p = subprocess.Popen(self.shell + [command], cwd=self.root, env=self.env, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                                 start_new_session=os.name != "nt")
+        except OSError as e:
+            return f"エラー: コマンドを始められません: {e}"
+        with self._lock:
+            self._proc = p
+        try:
+            stdout, stderr = p.communicate(timeout=max(5, min(int(timeout), 3600)))
         except subprocess.TimeoutExpired:
+            _kill_tree(p)
+            p.communicate()
             return f"(時間切れ: {timeout} 秒で止めました)"
-        out = _decode(p.stdout) + (("\n[stderr]\n" + _decode(p.stderr)) if p.stderr else "")
+        finally:
+            with self._lock:
+                self._proc = None
+        if self.cancelled.is_set():
+            return "(相棒が「止める」を押したので、途中で止めました)"
+        out = _decode(stdout) + (("\n[stderr]\n" + _decode(stderr)) if stderr else "")
         if len(out) > MAX_OUT:
             out = "… (前半は省略)\n" + out[-MAX_OUT:]
         return f"(終了コード {p.returncode})\n{out.strip()}"
+
+
+def _kill_tree(p):
+    """コマンドと、そこから起きたプログラムをまとめて止める。"""
+    if p.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], stdin=subprocess.DEVNULL,
+                       capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    else:
+        import signal
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            p.kill()
 
 
 def _decode(b):
