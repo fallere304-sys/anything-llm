@@ -5,12 +5,19 @@
 
 ## 起動
 
-### Windows 10
+### Windows 10(配布版 AI-Buddy.exe・おすすめ)
+Python のインストールは不要。
+1. GitHub の **Actions → 「Build AI-Buddy.exe」** の最新の成功した実行を開き、Artifacts の **AI-Buddy-windows** をダウンロードして展開する。
+2. `AI-Buddy` フォルダを好きな場所に置き、`AI-Buddy.exe` をダブルクリック。
+3. 初回は `.env`(設定)が作られてメモ帳で開くので、`GEMINI_API_KEY` とモデル名を設定して再起動。ブラウザで画面が開く。
+- 設定・会話データ・作業フォルダはすべて `AI-Buddy` フォルダの中(フォルダごと移動・バックアップ可能)。
+- 署名なしのため、初回に SmartScreen の警告が出ることがある(「詳細情報」→「実行」)。
+- 自分の PC で exe を作る場合は `build_exe.bat`(Python 3.10+ が必要)。
+
+### Windows 10(Python から起動)
 1. Python 3.10 以上をインストール(https://www.python.org/ 、無料)。
 2. `start.bat` をダブルクリック(初回は仮想環境の作成と依存導入を自動実行)。
 3. ブラウザで http://127.0.0.1:8765/ を開く。
-
-> Windows での実機検証は未実施(開発は Linux 上)。パスは `pathlib`、文字コードは UTF-8 で書いてあるが、問題があれば報告のこと。
 
 ### Linux / macOS
 ```
@@ -86,6 +93,8 @@ TTS_VOICE_NAME=<表示された琴葉葵の声の名前>
 ## ファイル構成
 ```
 buddy/config.py          設定(.env / 環境変数)。秘密情報は repr に出さない
+buddy/bootstrap.py       配布版の起動準備(exe の隣に設定・データを置く、初回ファイルの作成)
+packaging/               配布版のビルド(PyInstaller)。CI: .github/workflows/companion-windows-exe.yml
 buddy/logging_setup.py   秘密情報マスク付きログ
 buddy/llm/               LLMProvider 抽象 + mock / openai_compat + registry
 buddy/storage/db.py      SQLite 会話ストア

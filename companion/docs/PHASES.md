@@ -204,3 +204,17 @@
 - 実 Gemini API(会話の OpenAI 互換窓口でのツール呼び出し・Google 検索の無料枠)は未検証
 - Claude Code の利用量はサブスクの上限と共有。残量の取得手段は無い
 - 自分の PC で公式 CLI を自分用に自動実行する使い方は問題ないと考えるが、規約上の確認は推定(配布する場合は API キー方式が必要)
+
+## 配布版: AI-Buddy.exe(Windows・Python 不要) — 2026-10-03
+### 実装
+- PyInstaller の onedir 形式(起動が速く、onefile より誤検知されにくい)。`packaging/build_exe.py` / `build_exe.bat`
+- exe のあるフォルダを「ホーム」とし、.env / data / workspace / prompts をそこに置く(起動場所に依存しない)
+- 初回起動で .env と人格ファイルを作成(既存は上書きしない)、Windows ではメモ帳で .env を開く
+- 起動後にブラウザを自動で開く。設定エラー時は Enter 待ちにしてウィンドウがすぐ閉じないようにする
+- GitHub Actions(windows-latest): Windows で全テスト → ビルド → exe を別の場所から起動して画面・チャット応答を確認
+  → zip に個人ファイル(.env / data)が入っていないことを確認 → zip を成果物として保存
+- Windows で子プロセス(Claude Code)を起動できることを確認: uvicorn は通常起動時 ProactorEventLoop を使う(0.54 のソース)
+
+### テスト
+- Linux で同じ手順でビルドし、展開した配布物を別の場所から起動: 初回準備・キー未設定時のエラーと Enter 待ち・
+  画面/静的ファイル/チャット応答を確認

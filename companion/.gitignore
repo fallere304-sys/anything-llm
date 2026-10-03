@@ -6,3 +6,5 @@ data/
 .pytest_cache/
 workspace/
 *.pid
+dist/
+build/

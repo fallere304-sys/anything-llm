@@ -1,0 +1,88 @@
+# AI相棒(companion)の Windows 用配布物(AI-Buddy.exe)を作る。
+# Windows 上で全テスト → PyInstaller でビルド → exe を実際に起動して応答を確認 → zip を成果物として保存。
+name: Build AI-Buddy.exe
+
+on:
+  push:
+    branches: [claude/ai-companion-phase1]
+    paths: ["companion/**", ".github/workflows/companion-windows-exe.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: companion-windows-exe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: companion
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt pyinstaller
+
+      - name: Install VOICEROID2 bridge (optional)
+        continue-on-error: true
+        run: python -m pip install pyvcroid2
+
+      - name: Run tests on Windows
+        run: python -m pytest -q
+
+      - name: Build AI-Buddy.exe
+        run: python packaging/build_exe.py
+
+      - name: Smoke test the built exe
+        shell: pwsh
+        run: |
+          $env:LLM_PROVIDER = "mock"; $env:ORCHESTRATOR = "none"; $env:BUDDY_OPEN_BROWSER = "0"; $env:BUDDY_PORT = "8799"
+          $exe = (Resolve-Path "dist/AI-Buddy/AI-Buddy.exe").Path
+          # 利用者がダブルクリックした時と違う場所から起動しても、exe の隣に設定が作られること
+          $p = Start-Process -FilePath $exe -WorkingDirectory $env:RUNNER_TEMP -PassThru `
+                 -RedirectStandardOutput "$env:RUNNER_TEMP/smoke-out.txt" -RedirectStandardError "$env:RUNNER_TEMP/smoke-err.txt"
+          $ok = $false
+          for ($i = 0; $i -lt 90; $i++) {
+            try { if ((Invoke-WebRequest "http://127.0.0.1:8799/api/status" -UseBasicParsing).StatusCode -eq 200) { $ok = $true; break } } catch {}
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ok) { Get-Content "$env:RUNNER_TEMP/smoke-out.txt", "$env:RUNNER_TEMP/smoke-err.txt"; Stop-Process $p -Force; exit 1 }
+          if ((Invoke-WebRequest "http://127.0.0.1:8799/" -UseBasicParsing).StatusCode -ne 200) { exit 1 }
+          if ((Invoke-WebRequest "http://127.0.0.1:8799/static/viz.js" -UseBasicParsing).StatusCode -ne 200) { exit 1 }
+          $conv = Invoke-RestMethod -Method Post "http://127.0.0.1:8799/api/conversations" -ContentType "application/json" -Body "{}"
+          $body = [System.Text.Encoding]::UTF8.GetBytes('{"content":"exe smoke test"}')
+          $msg = Invoke-WebRequest -Method Post "http://127.0.0.1:8799/api/conversations/$($conv.id)/messages" `
+                   -ContentType "application/json; charset=utf-8" -Body $body -UseBasicParsing
+          if ($msg.Content -notmatch '"type": "done"') { $msg.Content; Stop-Process $p -Force; exit 1 }
+          Stop-Process $p -Force
+          foreach ($f in @(".env", "prompts/system.md", "data/buddy.sqlite3")) {
+            if (-not (Test-Path "dist/AI-Buddy/$f")) { "missing next to exe: $f"; exit 1 }
+          }
+          "smoke test passed"
+          Get-Content "$env:RUNNER_TEMP/smoke-err.txt" -Tail 5
+
+      - name: Check the zip has no personal files
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $names = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path "dist/AI-Buddy-windows.zip")).Entries.FullName
+          $bad = $names | Where-Object { $_ -match '(^|/)\.env$' -or $_ -match '/data/' }
+          if ($bad) { "unexpected files in zip: $bad"; exit 1 }
+          "zip entries: $($names.Count)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AI-Buddy-windows
+          path: companion/dist/AI-Buddy-windows.zip
+          if-no-files-found: error
