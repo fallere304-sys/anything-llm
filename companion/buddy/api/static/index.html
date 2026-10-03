@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#010604">
+<title>AI相棒</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+<script type="module" src="/static/app.js"></script>
+</head>
+<body>
+<div id="app">
+  <header>
+    <button id="menu" type="button" aria-label="会話一覧">☰</button>
+    <div id="dot"></div>
+    <h1>AI相棒</h1>
+    <span id="state">待機中</span>
+    <button id="memBtn" type="button" title="記憶・作業履歴" aria-label="記憶">🧠<span id="pendingBadge" class="badge" hidden></span></button>
+    <button id="vizToggle" type="button" title="可視化の表示/非表示" aria-pressed="true">◉</button>
+    <button id="new" type="button">＋ 新規</button>
+  </header>
+  <div id="tools">
+    <label>モデル <select id="profile"></select></label>
+    <label>PJ <select id="project" title="この会話を紐付けるプロジェクト"></select></label>
+    <div id="meta"></div>
+    <button id="speak" type="button" title="AIの返答を音声で読み上げる" disabled>🔈 音声: OFF</button>
+  </div>
+  <div id="banner" role="alert"></div>
+  <div id="main">
+    <section id="stage">
+      <canvas id="viz" role="img" aria-label="AI knowledge and process access map"></canvas>
+      <div id="nodeinfo" hidden></div>
+      <ol id="feed" hidden aria-label="Activity log"></ol>
+      <button id="ticker" type="button" title="Toggle activity log"><b>ACTIVITY</b><span id="tickerText">Standby</span></button>
+    </section>
+    <section id="chatcol">
+      <div id="log"></div>
+      <form id="form">
+        <textarea id="input" rows="1" placeholder="メッセージを入力" maxlength="8000"></textarea>
+        <button class="primary" id="send" type="submit">送信</button>
+      </form>
+    </section>
+  </div>
+  <nav id="list" aria-label="会話一覧"></nav>
+  <aside id="memPanel" hidden aria-label="記憶">
+    <div class="mp-head"><b>記憶</b><button id="memClose" type="button" aria-label="閉じる">✕</button></div>
+    <div class="tabs">
+      <button type="button" data-tab="list" class="on">記憶</button>
+      <button type="button" data-tab="pending">承認待ち<span id="pendingBadge2" class="badge" hidden></span></button>
+      <button type="button" data-tab="log">作業履歴</button>
+      <button type="button" data-tab="projects">プロジェクト</button>
+    </div>
+    <div id="mpBody"></div>
+  </aside>
+</div>
+</body>
+</html>
