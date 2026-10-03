@@ -6,7 +6,6 @@
 取りこぼし (本文に書かれた道具呼び出し) も拾う。遅いモデルでも進み具合が見えるよう、文字は届いた順に出す。
 """
 
-import http.client
 import json
 import re
 import socket
@@ -50,6 +49,95 @@ class Cancelled(Exception):
     """相棒が「止める」を押した。"""
 
 
+class _Reply:
+    """HTTP の返事を、止める合図を見ながら読む (0.5 秒ごとに見る)。
+
+    別の糸で接続を閉じても、Windows では読んで待っている糸は起きないため、待つのを短く区切っている。
+    本文は Transfer-Encoding: chunked (llama-server) と、長さ指定・接続が閉じるまでの 3 通りに対応する。"""
+
+    def __init__(self, sock, cancelled, idle_timeout):
+        self.sock, self.cancelled, self.idle = sock, cancelled, idle_timeout
+        self.buf = b""
+        self.eof = False
+        sock.settimeout(0.5)
+        head = self._until(b"\r\n\r\n")
+        if head is None:
+            raise ConnectionError("返事の頭が届く前に接続が切れました")
+        lines = head.decode("iso-8859-1").split("\r\n")
+        self.status = int(lines[0].split()[1])
+        self.headers = {k.strip().lower(): v.strip() for k, _, v in (h.partition(":") for h in lines[1:] if h)}
+
+    def _fill(self):
+        """塊を 1 つ読む。読めたら True、相手が閉じたら False。"""
+        if self.eof:
+            return False
+        last = time.time()
+        while True:
+            if self.cancelled.is_set():
+                raise Cancelled()
+            try:
+                chunk = self.sock.recv(65536)
+            except socket.timeout:
+                if time.time() - last > self.idle:
+                    raise TimeoutError(f"{self.idle} 秒、何も届きませんでした")
+                continue
+            if not chunk:
+                self.eof = True
+                return False
+            self.buf += chunk
+            return True
+
+    def _until(self, sep):
+        while sep not in self.buf:
+            if not self._fill():
+                return None
+        out, _, self.buf = self.buf.partition(sep)
+        return out
+
+    def _exactly(self, n):
+        while len(self.buf) < n:
+            if not self._fill():
+                raise ConnectionError("返事の途中で接続が切れました")
+        out, self.buf = self.buf[:n], self.buf[n:]
+        return out
+
+    def body(self):
+        """本文を、届いた順に少しずつ返す。"""
+        if "chunked" in self.headers.get("transfer-encoding", "").lower():
+            while True:
+                size = self._until(b"\r\n")
+                if size is None:
+                    return
+                n = int(size.split(b";")[0].strip() or b"0", 16)
+                if n == 0:
+                    return
+                yield self._exactly(n)
+                self._exactly(2)
+        elif "content-length" in self.headers:
+            yield self._exactly(int(self.headers["content-length"]))
+        else:
+            while True:
+                if self.buf:
+                    out, self.buf = self.buf, b""
+                    yield out
+                if not self._fill():
+                    if self.buf:
+                        yield self.buf
+                    return
+
+    def read_all(self):
+        return b"".join(self.body())
+
+    def lines(self):
+        rest = b""
+        for piece in self.body():
+            rest += piece
+            *done, rest = rest.split(b"\n")
+            yield from done
+        if rest:
+            yield rest
+
+
 class Client:
     """llama-server の OpenAI 互換 API。cancel() で、待っている途中でも接続を切って止められる
     (llama-server は接続が切れると、その返事を作るのをやめる)。"""
@@ -81,35 +169,36 @@ class Client:
                 "stream": on_text is not None}
         if tools:
             body["tools"] = tools
-        conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
+        if self.cancelled.is_set():
+            raise Cancelled()
         try:
-            if self.cancelled.is_set():
-                raise Cancelled()
-            conn.connect()
-            with self._lock:
-                # 接続そのものを持っておく (返事に長さが無いと http.client は途中で手放すため、止めるときに要る)
-                self._sock = conn.sock
-            if self.cancelled.is_set():
-                raise Cancelled()
-            conn.request("POST", self.PATH, body=json.dumps(body).encode("utf-8"),
-                         headers={"Content-Type": "application/json"})
-            r = conn.getresponse()
+            sock = socket.create_connection((self.host, self.port), timeout=30)
+        except OSError as e:
+            raise ModelError(f"モデルのサーバーにつながりません ({self.url}): {e}") from e
+        with self._lock:
+            self._sock = sock
+        try:
+            data = json.dumps(body).encode("utf-8")
+            sock.sendall((f"POST {self.PATH} HTTP/1.1\r\nHost: {self.host}:{self.port}\r\n"
+                          f"Content-Type: application/json\r\nContent-Length: {len(data)}\r\n"
+                          "Connection: close\r\n\r\n").encode("ascii") + data)
+            r = _Reply(sock, self.cancelled, self.timeout)
             if r.status >= 400:
-                raise ModelError(f"HTTP {r.status}: {r.read().decode('utf-8', 'replace')[:500]}")
+                raise ModelError(f"HTTP {r.status}: {r.read_all().decode('utf-8', 'replace')[:500]}")
             if not body["stream"]:
-                data = json.loads(r.read().decode("utf-8"))
+                data = json.loads(r.read_all().decode("utf-8"))
                 msg = data["choices"][0]["message"]
                 return {"content": msg.get("content") or "", "tool_calls": msg.get("tool_calls") or [],
                         "timings": data.get("timings")}
-            return self._stream(r, on_text, on_tool, on_think)
-        except (OSError, http.client.HTTPException, ValueError) as e:
+            return self._stream(r.lines(), on_text, on_tool, on_think)
+        except (OSError, ValueError) as e:
             if self.cancelled.is_set():
                 raise Cancelled() from e
-            raise ModelError(f"モデルのサーバーにつながりません ({self.url}): {e}") from e
+            raise ModelError(f"モデルとのやりとりが途切れました ({self.url}): {e}") from e
         finally:
             with self._lock:
                 self._sock = None
-            conn.close()
+            sock.close()                 # 接続を切る: 途中なら llama-server はここで作るのをやめる
 
     def _stream(self, r, on_text, on_tool=None, on_think=None):
         content, calls, timings = [], {}, None

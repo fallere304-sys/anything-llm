@@ -233,6 +233,60 @@ class GuiTest(unittest.TestCase):
         self.assertTrue(report.strip().endswith("OK"), report)
 
 
+class ChunkedModel(BaseHTTPRequestHandler):
+    """llama-server と同じく HTTP/1.1 の chunked で流す偽サーバー (塊の切れ目は行の途中にも来る)。"""
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if not body["stream"]:
+            data = json.dumps({"choices": [{"message": {"content": "まとめて"}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        sse = "".join(f"data: {json.dumps(c, ensure_ascii=False)}\n\n" for c in (
+            {"choices": [{"delta": {"reasoning_content": "考えて"}}]},
+            {"choices": [{"delta": {"content": "こんにちは"}}]},
+            {"choices": [{"delta": {"content": "、世界"}}]})) + "data: [DONE]\n\n"
+        raw = sse.encode()
+        for i in range(0, len(raw), 7):             # 7 バイトずつ: 文字や行の途中で切れる
+            part = raw[i:i + 7]
+            self.wfile.write(f"{len(part):x}\r\n".encode() + part + b"\r\n")
+            self.wfile.flush()
+        self.wfile.write(b"0\r\n\r\n")
+
+
+class ClientTransferTest(unittest.TestCase):
+    def test_chunked_stream_and_fixed_length(self):
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), ChunkedModel)
+        srv.daemon_threads = True
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            c = Client(f"http://127.0.0.1:{srv.server_address[1]}")
+            text, think = [], []
+            r = c.chat([{"role": "user", "content": "x"}], on_text=text.append, on_think=think.append)
+            self.assertEqual(r["content"], "こんにちは、世界")
+            self.assertEqual("".join(think), "考えて")
+            self.assertEqual(c.chat([{"role": "user", "content": "x"}])["content"], "まとめて")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_unreachable_server_is_a_model_error(self):
+        from localcoder.agent import ModelError
+        with self.assertRaises(ModelError):
+            Client("http://127.0.0.1:9").chat([{"role": "user", "content": "x"}], on_text=lambda t: None)
+
+
 class StatusTest(unittest.TestCase):
     def test_waiting_line_is_shown_then_cleared_and_text_flows(self):
         out = []
