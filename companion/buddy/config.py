@@ -79,6 +79,10 @@ class Settings:
     perplexity_api_key: str = field(default="", repr=False)
     perplexity_model: str = ""
     perplexity_base_url: str = "https://api.perplexity.ai"
+    # --- Gemini(画像) ---
+    gemini_api_key: str = field(default="", repr=False)
+    gemini_image_model: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com"
 
     @property
     def db_path(self) -> Path:
@@ -169,6 +173,9 @@ def load_settings(
         perplexity_api_key=env.get("PERPLEXITY_API_KEY", "").strip(),
         perplexity_model=env.get("PERPLEXITY_MODEL", "").strip(),
         perplexity_base_url=env.get("PERPLEXITY_BASE_URL", "").strip() or d.perplexity_base_url,
+        gemini_api_key=env.get("GEMINI_API_KEY", "").strip(),
+        gemini_image_model=env.get("GEMINI_IMAGE_MODEL", "").strip(),
+        gemini_base_url=env.get("GEMINI_BASE_URL", "").strip() or d.gemini_base_url,
     )
     settings.validate()
     return settings

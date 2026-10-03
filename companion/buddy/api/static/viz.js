@@ -15,7 +15,7 @@ const C = {
 const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 // 関連するものが隣り合う並び
-const ORDER = ["persona", "history", "memory", "project", "llm:fast", "llm:strong", "research", "claude", "canva", "files", "tts"];
+const ORDER = ["persona", "history", "memory", "project", "llm:fast", "llm:strong", "research", "claude", "image", "files", "tts"];
 const STATE_SPEED = { idle: 1.2, thinking: 4, responding: 7, working: 5, waiting: 2.5, error: 2 };
 
 function rng(seed) { // mulberry32: リサイズしても同じ配置になるよう決定的に
@@ -288,7 +288,7 @@ export class NetworkViz {
         ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(c, d); ctx.stroke();
       });
     }
-    ctx.fillStyle = "rgba(0,30,10,0.85)"; ctx.font = `bold ${Math.round(s * 0.62)}px system-ui,sans-serif`;
+    ctx.fillStyle = "rgba(0,30,10,0.85)"; ctx.font = `700 ${Math.round(s * 0.62)}px ${HUD_FONT}`;
     ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("AI", 0, 1);
     ctx.restore();
   }
@@ -326,8 +326,7 @@ export class NetworkViz {
     }
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillStyle = n.available ? (n.glow > 0.3 ? "#ffd0c8" : "#ff5a48") : "rgba(140,160,155,0.6)";
-    ctx.font = `bold ${Math.round(r * 0.5)}px system-ui,"Yu Gothic UI",sans-serif`;
-    ctx.fillText(n.short, n.x, n.y + 1);
+    fitText(ctx, n.short, n.x, n.y + 1, r * 1.55, r * 0.42, 600);
     if (n.external && n.available) {
       ctx.fillStyle = rgba(C.amber, 0.95); ctx.font = `${Math.round(r * 0.42)}px system-ui,sans-serif`;
       ctx.fillText("☁", n.x + r * 0.72, n.y - r * 0.72);
@@ -335,9 +334,11 @@ export class NetworkViz {
     // 狭い画面では未実装ノードのラベルを省く(タップで詳細表示)
     const narrow = this.w < 600;
     if (n.available || !narrow) {
-      ctx.font = `${narrow ? 10 : 11}px system-ui,"Yu Gothic UI",sans-serif`;
+      ctx.font = `${narrow ? 10 : 11}px ${HUD_FONT}`;
+      if ("letterSpacing" in ctx) ctx.letterSpacing = "0.5px";
       ctx.fillStyle = n.available ? "rgba(210,255,240,0.9)" : "rgba(140,160,155,0.65)";
-      ctx.fillText(n.available ? n.label : `${n.label}(${n.note || (n.planned_phase ? "未実装" : "未設定")})`, n.x, n.y + r + 11);
+      ctx.fillText(n.available ? n.label : `${n.label} (${n.planned_phase ? "planned" : "not set"})`, n.x, n.y + r + 11);
+      if ("letterSpacing" in ctx) ctx.letterSpacing = "0px";
     }
     ctx.restore();
   }
@@ -349,6 +350,22 @@ export class NetworkViz {
     this.selected = hit;
     this.onSelect(hit);
   }
+}
+
+// 可視化パネルの表記は英語(ユーザー指定)。字幅の安定した欧文フォントを使う。
+const HUD_FONT = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
+
+// 指定幅に収まる最大の文字サイズで描く(上限 maxSize)。
+function fitText(ctx, text, x, y, maxWidth, maxSize, weight) {
+  let size = Math.round(maxSize);
+  const spacing = "letterSpacing" in ctx;
+  for (; size > 7; size--) {
+    ctx.font = `${weight} ${size}px ${HUD_FONT}`;
+    if (spacing) ctx.letterSpacing = `${Math.max(0.5, size * 0.08).toFixed(1)}px`;
+    if (ctx.measureText(text).width <= maxWidth) break;
+  }
+  ctx.fillText(text, x, y);
+  if (spacing) ctx.letterSpacing = "0px";
 }
 
 function roundRect(ctx, x, y, w, h, r) {

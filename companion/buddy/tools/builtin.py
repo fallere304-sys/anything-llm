@@ -6,6 +6,7 @@ import logging
 from ..config import Settings
 from ..memory.service import MemoryService
 from .deliverable import ClaudeWriter, deliverable_tool
+from .image import GeminiImageClient, image_tool
 from .memory_tools import propose_memory_tool
 from .permissions import PermissionPolicy
 from .registry import Level, ToolRegistry
@@ -33,6 +34,11 @@ def build_registry(settings: Settings, memory: MemoryService) -> ToolRegistry:
             base_url=settings.claude_base_url), settings.workspace_dir))
     else:
         log.info("Claude 未設定のため create_deliverable は無効")
+    if settings.gemini_api_key and settings.gemini_image_model:
+        reg.register(image_tool(GeminiImageClient(
+            settings.gemini_api_key, settings.gemini_image_model, settings.gemini_base_url), settings.workspace_dir))
+    else:
+        log.info("Gemini 未設定のため generate_image は無効")
     return reg
 
 

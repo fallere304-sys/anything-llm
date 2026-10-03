@@ -143,8 +143,8 @@ def test_chat_injects_memories_and_logs(tmp_path):
         assert "ユーザーは猫を飼っている" in system and "UIは緑基調" in system
         assert "承認待ちの内容" not in system
         acts = {e["target"]: e["summary"] for e in ev if e["type"] == "activity"}
-        assert acts["memory"].startswith("長期記憶 2件を参照")
-        assert acts["project"] == "プロジェクト「AI相棒開発」の記憶 1件を参照"
+        assert acts["memory"] == "Recalled 2 memories"
+        assert acts["project"] == 'Project "AI相棒開発": recalled 1'
         log = c.get("/api/worklog").json()
         assert log[0]["action"] == "llm_call" and log[0]["actor"] == "ai" and log[0]["conversation_id"] == cid
         # 紐付け解除

@@ -17,7 +17,8 @@ def main() -> int:
     try:
         settings = load_settings()
         setup_logging(secrets=[settings.access_token, settings.llm_api_key,
-                                settings.anthropic_api_key, settings.perplexity_api_key])
+                                settings.anthropic_api_key, settings.perplexity_api_key,
+                                settings.gemini_api_key])
         app = create_app(settings, build_providers(settings), tts=build_tts(settings))
     except (ConfigError, LLMError) as exc:
         print(f"[設定エラー] {exc}", file=sys.stderr)

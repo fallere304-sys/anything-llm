@@ -2,7 +2,7 @@
 const TOOL_LABEL = {
   research_web: "Perplexity 調査", create_deliverable: "Claude 成果物作成",
   list_workspace_files: "作業フォルダ一覧", read_workspace_file: "ファイル読み込み",
-  propose_memory: "記憶の提案",
+  propose_memory: "記憶の提案", generate_image: "Gemini 画像生成",
 };
 export const toolLabel = (name) => TOOL_LABEL[name] || name;
 
@@ -52,10 +52,18 @@ export function markApproval(logEl, ev) {
 }
 
 // rec: {tool, ok, summary, data}
-export function toolChip(rec, { openOutput }) {
+export function toolChip(rec, { openOutput, outputUrl }) {
   const box = el("div", "chip" + (rec.ok ? "" : " ng"));
   box.append(el("span", "chip-head", `${rec.ok ? "✓" : "✕"} ${toolLabel(rec.tool)}`), el("span", "", rec.summary || ""));
   const data = rec.data || {};
+  if (data.kind === "image" && data.name && outputUrl) {
+    const img = el("img", "thumb");
+    img.alt = rec.summary || "生成画像";
+    img.title = "クリックで保存";
+    outputUrl(data.name).then((u) => { img.src = u; }).catch(() => img.remove());
+    img.onclick = () => openOutput(data.name);
+    box.append(img);
+  }
   if (data.name) {
     const a = el("button", "link", `開く: ${data.file}`);
     a.onclick = () => openOutput(data.name);

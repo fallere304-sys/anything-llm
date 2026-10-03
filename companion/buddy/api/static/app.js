@@ -50,7 +50,7 @@ function onActivity(ev) {
   $("tickerText").textContent = `${label}: ${ev.summary}`;
   const li = document.createElement("li");
   const time = document.createElement("time");
-  time.textContent = new Date((ev.ts || Date.now() / 1000) * 1000).toLocaleTimeString("ja-JP", { hour12: false });
+  time.textContent = new Date((ev.ts || Date.now() / 1000) * 1000).toLocaleTimeString("en-GB", { hour12: false });
   const who = document.createElement("span"); who.className = "who"; who.textContent = label;
   const what = document.createElement("span"); what.textContent = ev.summary;
   if (ev.ok === false) what.className = "ng";
@@ -64,12 +64,13 @@ function showNodeInfo(n) {
   if (!n) { box.hidden = true; return; }
   box.innerHTML = "";
   const add = (tag, text, cls) => { const e = document.createElement(tag); e.textContent = text; if (cls) e.className = cls; box.appendChild(e); };
+  // 可視化パネル内の表記は英語(ユーザー指定)
   add("h3", n.label);
   add("p", n.description);
-  if (n.available) add("p", "状態: 利用可能");
-  else add("p", n.note === "未接続" ? "状態: 未接続" : n.planned_phase ? `状態: 未実装(Phase ${n.planned_phase} 予定)` : "状態: 未設定(.env で設定すると使えます)", "off");
-  if (n.external && n.available) add("p", "☁ データが外部サービスへ送信されます", "warn");
-  add("p", n.lastSummary ? `最新: ${n.lastSummary}` : "まだアクセスはありません", n.lastSummary ? "" : "off");
+  if (n.available) add("p", "Status: online");
+  else add("p", n.planned_phase ? `Status: planned (Phase ${n.planned_phase})` : "Status: not configured (.env)", "off");
+  if (n.external && n.available) add("p", "☁ Sends data to an external service", "warn");
+  add("p", n.lastSummary ? `Last: ${n.lastSummary}` : "No access yet", n.lastSummary ? "" : "off");
   box.hidden = false;
 }
 
@@ -136,16 +137,16 @@ $("speak").onclick = () => {
 };
 async function speak(text) {
   const id = "tts-" + Date.now();
-  onActivity({ id, target: "tts", phase: "start", summary: "音声を合成中", ts: Date.now() / 1000 });
+  onActivity({ id, target: "tts", phase: "start", summary: "Synthesizing", ts: Date.now() / 1000 });
   try {
     const res = await api("/api/tts", { method: "POST", body: JSON.stringify({ text: text.slice(0, 2000) }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
     const url = URL.createObjectURL(await res.blob());
     player.src = url; player.onended = () => URL.revokeObjectURL(url);
     await player.play();
-    onActivity({ id, target: "tts", phase: "end", summary: "再生開始", ok: true, ts: Date.now() / 1000 });
+    onActivity({ id, target: "tts", phase: "end", summary: "Playing", ok: true, ts: Date.now() / 1000 });
   } catch (e) {
-    onActivity({ id, target: "tts", phase: "end", summary: "失敗", ok: false, ts: Date.now() / 1000 });
+    onActivity({ id, target: "tts", phase: "end", summary: "Failed", ok: false, ts: Date.now() / 1000 });
     showError("音声出力に失敗しました: " + e.message);
   }
 }
@@ -162,10 +163,19 @@ function bubble(role, text, msg = null) {
     d.appendChild(b);
   }
   if (msg?.tools_json) {
-    try { JSON.parse(msg.tools_json).forEach((r) => d.appendChild(toolChip(r, { openOutput }))); }
+    try { JSON.parse(msg.tools_json).forEach((r) => d.appendChild(toolChip(r, { openOutput, outputUrl }))); }
     catch { /* 壊れた記録は表示しない */ }
   }
   $("log").appendChild(d); $("log").scrollTop = $("log").scrollHeight; return d;
+}
+
+// 成果物の表示用URL。トークン不要ならそのまま、必要なら取得して blob URL にする。
+async function outputUrl(name) {
+  const path = `/api/outputs/${encodeURIComponent(name)}`;
+  if (!token) return path;
+  const res = await api(path);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return URL.createObjectURL(await res.blob());
 }
 
 // 成果物のダウンロード。トークン不要(PC内のみ)なら直接リンクにして、
@@ -277,7 +287,7 @@ async function send(text) {
         }
         else if (ev.type === "approval_request") addCard(approvalCard(ev, { json, showError }));
         else if (ev.type === "approval_resolved") markApproval(log, ev);
-        else if (ev.type === "tool_result") addCard(toolChip(ev, { openOutput }));
+        else if (ev.type === "tool_result") addCard(toolChip(ev, { openOutput, outputUrl }));
         else if (ev.type === "done") { if (ttsOn) speak(ev.message.content); }
         else if (ev.type === "error") { setState("error"); showError(ev.message); if (seg && !seg.textContent) seg.remove(); }
       }

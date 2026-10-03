@@ -6,12 +6,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 import anthropic
 
+from .outputs import save_output
 from .registry import Level, Tool, ToolContext, ToolError, ToolResult
 
 FORMATS = {
@@ -78,24 +78,7 @@ class ClaudeWriter:
         return Draft(text=text, model=getattr(msg, "model", self.model), truncated=msg.stop_reason == "max_tokens")
 
 
-_BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 _FENCE = re.compile(r"^```[\w+-]*\n(.*)\n```\s*$", re.S)
-
-
-def slugify(title: str) -> str:
-    s = _BAD.sub("_", title).strip(" ._") or "output"
-    return s[:40]
-
-
-def save_output(outputs: Path, title: str, ext: str, text: str) -> Path:
-    outputs.mkdir(parents=True, exist_ok=True)
-    stem = f"{datetime.now():%Y%m%d-%H%M%S}_{slugify(title)}"
-    path, n = outputs / f"{stem}{ext}", 1
-    while path.exists():  # 上書きしない
-        n += 1
-        path = outputs / f"{stem}-{n}{ext}"
-    path.write_text(text, encoding="utf-8")
-    return path
 
 
 def deliverable_tool(writer: ClaudeWriter, workspace: Path) -> Tool:

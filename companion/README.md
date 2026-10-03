@@ -51,11 +51,12 @@ TTS_VOICE_NAME=<表示された琴葉葵の声の名前>
 | 会話・思考・タスク振り分け | ChatGPT(OpenAI API) | 司令塔。下のツールを呼び出す | 実装済み |
 | 成果物の作成 | Claude(Anthropic API) | `create_deliverable` → 作業フォルダ `outputs/` に新規保存 | 実装済み |
 | 調べ物 | Perplexity(Sonar API) | `research_web`(出典付き) | 実装済み |
-| 画像・デザイン | Canva | 公開APIに画像生成が無いため接続方式を検討中 | 未接続 |
+| 画像 | Gemini(Gemini API) | `generate_image` → `outputs/` に PNG 等で保存、チャットにサムネイル表示 | 実装済み |
 | 資料の読み取り | 作業フォルダ | `list_workspace_files` / `read_workspace_file` | 実装済み |
 | 記憶 | ローカル | `propose_memory`(提案のみ、保存はユーザー承認) | 実装済み |
 
-- 各 API は**それぞれ別契約の従量課金**(ChatGPT Plus・Claude.ai・Perplexity Pro などの契約とは別)。
+- 各 API は**それぞれ別契約**(ChatGPT Plus・Claude.ai・Perplexity Pro などのサブスクリプションとは別)。
+  OpenAI / Anthropic / Perplexity は従量課金(前払い)、Gemini は無料枠あり(回数制限・データ利用条件あり)。
 - 外部サービスへの送信は、既定で**毎回あなたの承認**が必要。承認画面に「送信先・AIの理由・送る内容」が出る。
 - 権限レベル: Lv0 情報取得 / Lv1 読み取り / Lv2 可逆な変更 / Lv3 重要・外部送信 / Lv4 不可逆な外部操作(常に承認)。
   ポリシーは起動時の `.env` からのみ決まり、AI が実行中に変更する手段は無い。

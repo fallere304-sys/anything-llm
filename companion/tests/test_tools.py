@@ -12,7 +12,8 @@ from buddy.memory.service import MemoryService
 from buddy.memory.store import MemoryStore
 from buddy.storage.db import Database
 from buddy.tools.builtin import build_policy, build_registry
-from buddy.tools.deliverable import ClaudeWriter, deliverable_tool, save_output, slugify
+from buddy.tools.deliverable import ClaudeWriter, deliverable_tool
+from buddy.tools.outputs import save_output, slugify
 from buddy.tools.memory_tools import propose_memory_tool
 from buddy.tools.registry import Level, ToolContext, ToolError, ToolRegistry
 from buddy.tools.research import PerplexityClient, research_tool
@@ -232,3 +233,85 @@ def test_outputs_endpoint(tmp_path):
         assert c.get("/api/outputs/none.md").status_code == 404
         assert c.get("/api/outputs/..").status_code in (400, 404)
         assert c.get("/api/outputs/..%2Fsecret.txt").status_code in (400, 404)
+
+
+# ---------- Gemini(画像) ----------
+import base64 as _b64
+
+from buddy.tools.image import GeminiImageClient, image_tool
+
+PNG = bytes.fromhex("89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C489"
+                    "0000000D4944415478DA63F8CFC0F01F0005000201E2B2B3A40000000049454E44AE426082")
+
+
+def gemini(handler):
+    return GeminiImageClient("AIza-test", "gemini-img-x",
+                             client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+
+
+def gemini_ok(parts=None, **extra):
+    parts = parts if parts is not None else [
+        {"text": "描きました"}, {"inlineData": {"mimeType": "image/png", "data": _b64.b64encode(PNG).decode()}}]
+    return {"candidates": [{"content": {"role": "model", "parts": parts}, "finishReason": "STOP"}], **extra}
+
+
+async def test_gemini_request_matches_official_sdk_and_saves(tmp_path):
+    seen = {}
+
+    def handler(req):
+        seen.update(url=str(req.url), key=req.headers.get("x-goog-api-key"), body=json.loads(req.content))
+        return httpx.Response(200, json=gemini_ok())
+
+    r = await image_tool(gemini(handler), tmp_path).execute(
+        {"prompt": "夕焼けの猫", "aspect_ratio": "16:9", "title": "猫/夕焼け"}, CTX)
+    assert seen["url"] == "https://generativelanguage.googleapis.com/v1beta/models/gemini-img-x:generateContent"
+    assert seen["key"] == "AIza-test"
+    # 公式 SDK(google-genai 2.28)が送る形と同じ構造
+    assert seen["body"]["contents"] == [{"role": "user", "parts": [{"text": "夕焼けの猫"}]}]
+    assert seen["body"]["generationConfig"]["imageConfig"] == {"aspectRatio": "16:9"}
+    assert "IMAGE" in seen["body"]["generationConfig"]["responseModalities"]
+    saved = tmp_path / r.data["file"]
+    assert saved.read_bytes() == PNG and saved.suffix == ".png" and r.data["kind"] == "image"
+    assert "/" not in r.data["name"] and "描きました" in r.content
+
+
+async def test_gemini_without_aspect_ratio_omits_image_config():
+    seen = {}
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json=gemini_ok())
+
+    await gemini(handler).generate("x")
+    assert "imageConfig" not in seen["body"]["generationConfig"]
+
+
+@pytest.mark.parametrize("payload,match", [
+    ({"promptFeedback": {"blockReason": "SAFETY"}}, "拒否.*SAFETY"),
+    (gemini_ok(parts=[{"text": "描けません"}]), "画像を返しませんでした.*描けません"),
+    ({"candidates": [{"content": {"parts": []}, "finishReason": "IMAGE_SAFETY"}]}, "IMAGE_SAFETY"),
+    (gemini_ok(parts=[{"inlineData": {"mimeType": "image/png", "data": "@@not-base64@@"}}]), "壊れて"),
+])
+async def test_gemini_no_image_cases(payload, match):
+    with pytest.raises(ToolError, match=match):
+        await gemini(lambda r: httpx.Response(200, json=payload)).generate("x")
+
+
+@pytest.mark.parametrize("status,match", [(403, "APIキー"), (404, "gemini-img-x"), (429, "上限"), (500, "HTTP 500")])
+async def test_gemini_http_errors(status, match):
+    with pytest.raises(ToolError, match=match):
+        await gemini(lambda r: httpx.Response(status, text="e")).generate("x")
+
+
+async def test_gemini_unexpected_mime_rejected(tmp_path):
+    payload = gemini_ok(parts=[{"inlineData": {"mimeType": "image/svg+xml", "data": _b64.b64encode(b"<svg/>").decode()}}])
+    with pytest.raises(ToolError, match="形式"):
+        await image_tool(gemini(lambda r: httpx.Response(200, json=payload)), tmp_path).execute({"prompt": "x"}, CTX)
+
+
+def test_build_registry_registers_gemini(tmp_path):
+    mem = MemoryService(MemoryStore(Database(":memory:")))
+    reg = build_registry(load_settings(env={"BUDDY_WORKSPACE_DIR": str(tmp_path),
+                                            "GEMINI_API_KEY": "g", "GEMINI_IMAGE_MODEL": "m"}), mem)
+    t = reg.get("generate_image")
+    assert t and t.external == "Google (Gemini)" and t.level == Level.IMPORTANT and t.node == "image"

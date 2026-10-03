@@ -140,7 +140,7 @@ class ChatService:
                 parts: list[str] = []
                 calls: list[ToolCallRequest] = []
                 t0 = time.monotonic()
-                llm_ev = activity(f"llm:{profile}", "start", f"{provider.model} に問い合わせ",
+                llm_ev = activity(f"llm:{profile}", "start", f"Query -> {provider.model}",
                                   external=provider.sends_data_externally)
                 log.info("activity llm:%s start model=%s step=%d", profile, provider.model, step)
                 yield llm_ev
@@ -160,15 +160,15 @@ class ChatService:
                 except LLMError as exc:
                     self.state, self.last_error = "error", str(exc)
                     log.error("LLM error in conversation %s: %s", cid, exc)
-                    yield activity(f"llm:{profile}", "end", "失敗", llm_ev["id"], ok=False)
+                    yield activity(f"llm:{profile}", "end", "Failed", llm_ev["id"], ok=False)
                     self._log("llm_call", f"llm:{profile}", f"{provider.model}: 失敗", False, cid)
                     yield {"type": "error", "message": str(exc)}
                     return
                 text = "".join(parts)
-                summary = f"応答受信 {len(text)}文字 / {time.monotonic() - t0:.1f}秒"
-                if calls:
-                    summary += f" / ツール要求 {len(calls)}件"
-                yield activity(f"llm:{profile}", "end", summary, llm_ev["id"], ok=True)
+                secs = time.monotonic() - t0
+                summary = f"応答受信 {len(text)}文字 / {secs:.1f}秒" + (f" / ツール要求 {len(calls)}件" if calls else "")
+                hud = f"Response {len(text)} chars / {secs:.1f}s" + (f" / {len(calls)} tool call(s)" if calls else "")
+                yield activity(f"llm:{profile}", "end", hud, llm_ev["id"], ok=True)
                 self._log("llm_call", f"llm:{profile}", f"{provider.model}: {summary}", True, cid)
                 if text.strip():
                     texts.append(text)
@@ -240,7 +240,7 @@ class ChatService:
             yield fail(str(exc), f"引数エラー: {exc}")
             return
         preview = tool.preview(args)
-        act = activity(tool.node, "start", f"{tool.name} を準備", external=tool.external)
+        act = activity(tool.node, "start", f"{tool.name}: preparing", external=tool.external)
         yield act
 
         if self.policy.requires_approval(tool):
@@ -258,7 +258,8 @@ class ChatService:
                            {"approved": "実行を承認", "denied": "実行を拒否", "timeout": "承認が時間切れ"}[outcome], cid)
             if outcome != "approved":
                 label = "拒否" if outcome == "denied" else "時間切れ"
-                yield activity(tool.node, "end", f"{tool.name}: {label}", act["id"], ok=False)
+                yield activity(tool.node, "end", f"{tool.name}: {'denied' if outcome == 'denied' else 'approval timed out'}",
+                               act["id"], ok=False)
                 yield {"type": "tool_result", "tool": tool.name, "ok": False, "summary": f"ユーザーが{label}"}
                 record["summary"] = f"ユーザーが{label}"
                 yield _ToolOutcome(
@@ -271,27 +272,27 @@ class ChatService:
         try:
             result = await asyncio.wait_for(tool.execute(args, ctx), self.limits.tool_timeout)
         except ToolError as exc:
-            yield activity(tool.node, "end", f"{tool.name}: 失敗", act["id"], ok=False)
+            yield activity(tool.node, "end", f"{tool.name}: failed", act["id"], ok=False)
             yield {"type": "tool_result", "tool": tool.name, "ok": False, "summary": str(exc)}
             yield fail(str(exc), f"失敗: {exc}")
             return
         except asyncio.TimeoutError:
             msg = f"{int(self.limits.tool_timeout)}秒以内に終わらなかったため中止しました。"
-            yield activity(tool.node, "end", f"{tool.name}: 時間切れ", act["id"], ok=False)
+            yield activity(tool.node, "end", f"{tool.name}: timed out", act["id"], ok=False)
             yield {"type": "tool_result", "tool": tool.name, "ok": False, "summary": msg}
             yield fail(msg, "時間切れ")
             return
         except Exception as exc:  # 想定外の不具合は握り潰さずログに残し、AI にも失敗を伝える
             log.exception("tool %s crashed", tool.name)
             msg = f"内部エラー({type(exc).__name__})"
-            yield activity(tool.node, "end", f"{tool.name}: 内部エラー", act["id"], ok=False)
+            yield activity(tool.node, "end", f"{tool.name}: internal error", act["id"], ok=False)
             yield {"type": "tool_result", "tool": tool.name, "ok": False, "summary": msg}
             yield fail(msg, msg)
             return
         elapsed = time.monotonic() - t0
         record.update(ok=True, summary=result.summary, data=result.data)
         self._log("tool_call", tool.name, f"{result.summary} / {elapsed:.1f}秒", True, cid)
-        yield activity(tool.node, "end", f"{tool.name}: {result.summary}", act["id"], ok=True)
+        yield activity(tool.node, "end", f"{tool.name}: done ({elapsed:.1f}s)", act["id"], ok=True)
         yield {"type": "tool_result", "tool": tool.name, "ok": True, "summary": result.summary,
                "data": result.data, "external": tool.external}
         yield _ToolOutcome(result.content, record)
@@ -325,21 +326,21 @@ class ChatService:
         kept = len(messages) - (1 if has_system else 0)
         events = []
         if has_system and messages[0].content:
-            events.append(activity("persona", "pulse", "人格・行動規則を適用"))
+            events.append(activity("persona", "pulse", "Persona & rules applied"))
         if recalled is not None:
             lt, imp = recalled.count("long_term"), recalled.important
-            note = f"(うち重要 {imp}件)" if imp else ""
-            text = f"長期記憶 {lt}件を参照{note}" if lt else "長期記憶を検索: 該当なし"
+            note = f" ({imp} pinned)" if imp else ""
+            text = f"Recalled {lt} memor{'y' if lt == 1 else 'ies'}{note}" if lt else "Memory search: no match"
             if recalled.dropped:
-                text += f" / 予算超過で{recalled.dropped}件省略"
+                text += f" / {recalled.dropped} skipped (budget)"
             events.append(activity("memory", "pulse", text))
             if recalled.project_name:
                 pj = recalled.count("project")
                 events.append(activity(
                     "project", "pulse",
-                    f"プロジェクト「{recalled.project_name}」の記憶 {pj}件を参照" if pj
-                    else f"プロジェクト「{recalled.project_name}」: 記憶なし",
+                    f"Project \"{recalled.project_name}\": recalled {pj}" if pj
+                    else f"Project \"{recalled.project_name}\": no memories",
                 ))
-        note = f"(古い{dropped}件は省略)" if dropped else ""
-        events.append(activity("history", "pulse", f"会話履歴 {kept}件を参照{note}"))
+        note = f" ({dropped} older trimmed)" if dropped else ""
+        events.append(activity("history", "pulse", f"Context: {kept} message{'' if kept == 1 else 's'}{note}"))
         return events
