@@ -9,6 +9,12 @@
   （録音全体の下位10%点）を基準にした「雑音下限からの持ち上がり量」
   (≒SNR) を比べる。ゲインは信号と雑音に等しく掛かるので dB の差を
   取ると打ち消される。
+
+  ただし雑音下限そのものがマイク間で違う場合（片方だけ PC のファンの
+  近くにある等）は、この補正が逆に偏りを生む。そこで第2段として、
+  発話中フレームの音量差の分布が「A発話の山」と「B発話の山」の2峰に
+  分かれることを利用し、2つの山の中点を0に合わせる自動バランス補正を
+  行う（_estimate_balance）。2峰に分かれない場合は第1段のみを使う。
 """
 from __future__ import annotations
 
@@ -36,6 +42,8 @@ class SpeakerTimeline:
     snr2: np.ndarray
     floor1_db: float
     floor2_db: float
+    balance_offset_db: float = 0.0  # 自動バランス補正で差し引いた量
+    balance_note: str = ""
 
     def segments(self) -> list[dict]:
         """無音以外の連続区間を [{start, end, speaker}] で返す（録音開始からの秒）。"""
@@ -157,6 +165,60 @@ def _absorb_short_runs(labels: np.ndarray, min_frames: int) -> np.ndarray:
     return labels
 
 
+def _estimate_balance(
+    d: np.ndarray,
+    s1: np.ndarray,
+    s2: np.ndarray,
+    min_rise_db: float = 1.5,
+    min_share: float = 0.05,
+) -> tuple[float, str]:
+    """発話中フレームの音量差 d (= s1 - s2) から、マイク間の残留オフセットを推定する。
+
+    1次元の2クラスタ k-means で「A発話の山」「B発話の山」に分け、
+    中心の中点をオフセットとする。2人の発話量が偏っていても中点は動かない。
+
+    1人しか話していない録音でも、声の大小で分布が2つに割れることがあるため、
+    物理的な整合性で「本当に2人の山か」を検証する:
+      上の山（A）ではマイク1自身の SNR が、下の山（B）ではマイク2自身の SNR が
+      それぞれ min_rise_db 以上高くなっていること。
+    （1人だけの場合、相手側マイクには回り込み音しか入らないので、
+      下の山でマイク2が大きくなることはない）
+    検証に通らなければ 0 を返し、第1段（雑音下限基準）の比較だけを使う。
+    """
+    ok = np.isfinite(d)
+    d, s1, s2 = d[ok], s1[ok], s2[ok]
+    if len(d) < 40:
+        return 0.0, "発話フレーム不足のため自動バランス補正なし"
+    lo, hi = float(np.percentile(d, 25)), float(np.percentile(d, 75))
+    if hi - lo < 1e-6:
+        return 0.0, "音量差がほぼ一定のため自動バランス補正なし"
+    for _ in range(50):
+        mid = (lo + hi) / 2
+        up = d > mid
+        if up.all() or not up.any():
+            return 0.0, "2峰に分かれないため自動バランス補正なし"
+        nhi, nlo = float(d[up].mean()), float(d[~up].mean())
+        if abs(nhi - hi) < 1e-4 and abs(nlo - lo) < 1e-4:
+            break
+        hi, lo = nhi, nlo
+    mid = (lo + hi) / 2
+    up = d > mid
+    share = min(up.mean(), 1 - up.mean())
+    if share < min_share:
+        return 0.0, f"片方の話者の発話が少ない（{share:.0%}）ため自動バランス補正なし"
+    rise1 = float(s1[up].mean() - s1[~up].mean())   # A の山でマイク1がどれだけ大きいか
+    rise2 = float(s2[~up].mean() - s2[up].mean())   # B の山でマイク2がどれだけ大きいか
+    if rise1 < min_rise_db or rise2 < min_rise_db:
+        return 0.0, (
+            f"2話者の山を確認できない（マイク1上昇 {rise1:+.1f} dB / マイク2上昇 {rise2:+.1f} dB）"
+            "ため自動バランス補正なし"
+        )
+    return mid, (
+        f"自動バランス補正 {mid:+.1f} dB（山の中心 {hi:+.1f} / {lo:+.1f} dB, "
+        f"マイク1上昇 {rise1:+.1f} dB / マイク2上昇 {rise2:+.1f} dB）"
+    )
+
+
 def diarize_by_volume(a: np.ndarray, b: np.ndarray, cfg: dict, sr: int = SR) -> SpeakerTimeline:
     frame_ms = float(cfg.get("frame_ms", 50))
     hop = max(1, int(sr * frame_ms / 1000))
@@ -186,6 +248,14 @@ def diarize_by_volume(a: np.ndarray, b: np.ndarray, cfg: dict, sr: int = SR) -> 
     active = np.maximum(snr1, snr2) > vad_th
     active = _moving_average(active.astype(np.float32), 3) > 0
 
+    # 第2段: 発話中フレームの音量差分布から残留オフセットを推定して差し引く
+    offset, note = 0.0, "自動バランス補正は無効"
+    if cfg.get("auto_balance", True):
+        core = np.maximum(snr1_s, snr2_s) > vad_th  # 平滑化後も明確に発話中のフレームのみ使う
+        offset, note = _estimate_balance(diff[core], snr1_s[core], snr2_s[core])
+        diff = diff - offset
+    log.info("diarize: %s", note)
+
     labels = np.full(n, LABEL_SILENCE, dtype=np.int8)
     labels[active & (diff > margin)] = LABEL_A
     labels[active & (diff < -margin)] = LABEL_B
@@ -200,4 +270,4 @@ def diarize_by_volume(a: np.ndarray, b: np.ndarray, cfg: dict, sr: int = SR) -> 
         int(np.sum(labels == LABEL_A)), int(np.sum(labels == LABEL_B)),
         int(np.sum(labels == LABEL_UNSURE)), int(np.sum(labels == LABEL_SILENCE)),
     )
-    return SpeakerTimeline(frame_sec, labels, diff, snr1, snr2, floor1, floor2)
+    return SpeakerTimeline(frame_sec, labels, diff, snr1, snr2, floor1, floor2, offset, note)

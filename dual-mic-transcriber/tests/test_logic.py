@@ -27,17 +27,18 @@ def _speech(dur, rng):
     return (rng.normal(0, 0.1, n) * env).astype(np.float32)
 
 
-def _scene(gain1=2.0, gain2=0.25, crosstalk=0.3, total=20.0, seed=0):
+def _scene(gain1=2.0, gain2=0.25, crosstalk=0.3, total=20.0, seed=0, a_turns=A_TURNS, b_turns=B_TURNS, noise1=0.0, noise2=0.0):
+    """noise1/noise2: 各マイク側だけに加わる環境雑音（ファン等）の標準偏差。"""
     rng = np.random.default_rng(seed)
     n = int(total * SR)
     a_src = np.zeros(n, np.float32)
     b_src = np.zeros(n, np.float32)
-    for s, e in A_TURNS:
-        a_src[int(s * SR):int(e * SR)] = _speech(e - s, rng)
-    for s, e in B_TURNS:
-        b_src[int(s * SR):int(e * SR)] = _speech(e - s, rng)
-    mic1 = gain1 * (a_src + crosstalk * b_src + rng.normal(0, 0.002, n))
-    mic2 = gain2 * (b_src + crosstalk * a_src + rng.normal(0, 0.002, n))
+    for src, turns in ((a_src, a_turns), (b_src, b_turns)):
+        for s, e in turns:
+            i0, i1 = int(s * SR), int(e * SR)
+            src[i0:i1] = _speech((i1 - i0) / SR, rng)
+    mic1 = gain1 * (a_src + crosstalk * b_src + rng.normal(0, 0.002 + noise1, n))
+    mic2 = gain2 * (b_src + crosstalk * a_src + rng.normal(0, 0.002 + noise2, n))
     return mic1.astype(np.float32), mic2.astype(np.float32)
 
 
@@ -132,3 +133,49 @@ def test_fmt_time():
 def test_clean_output_strips_preamble():
     raw = "以下が補正版です。\n```\n[00:01.0] 話者A: こんにちは\n[00:03.0] 話者B：どうも\n```"
     assert _clean_output(raw) == "[00:01.0] 話者A: こんにちは\n[00:03.0] 話者B：どうも"
+
+
+def _accuracy(tl, a_turns, b_turns):
+    ok = tot = 0
+    for spk, turns in (("A", a_turns), ("B", b_turns)):
+        for s, e in turns:
+            for t in np.arange(s + 0.2, e - 0.2, 0.25):
+                tot += 1
+                ok += tl.speaker_for_span(t, t + 0.25) == spk
+    return ok / tot
+
+
+@pytest.mark.parametrize("noise1,noise2", [(0.0, 0.01), (0.0, 0.02), (0.01, 0.0)])
+def test_auto_balance_corrects_unequal_ambient_noise(noise1, noise2):
+    """片方のマイクだけ環境雑音が大きい（雑音下限が14〜20dB高い）場合。"""
+    m1, m2 = _scene(noise1=noise1, noise2=noise2)
+    off = diarize_by_volume(m1, m2, {"auto_balance": False})
+    on = diarize_by_volume(m1, m2, {"auto_balance": True})
+    assert _accuracy(off, A_TURNS, B_TURNS) < 0.6  # 第1段だけでは片側に偏る
+    assert _accuracy(on, A_TURNS, B_TURNS) == 1.0
+    assert abs(on.balance_offset_db) > 10
+    assert [s["speaker"] for s in on.segments()] == ["A", "B", "A", "B"]
+
+
+def test_auto_balance_robust_to_unequal_talk_time():
+    a_turns, b_turns = [(0.5, 9.0), (10.0, 17.5)], [(18.0, 19.5)]
+    m1, m2 = _scene(a_turns=a_turns, b_turns=b_turns, noise2=0.01)
+    tl = diarize_by_volume(m1, m2, {})
+    assert _accuracy(tl, a_turns, b_turns) == 1.0
+
+
+@pytest.mark.parametrize("noise2", [0.0, 0.01])
+def test_auto_balance_skipped_for_single_speaker(noise2):
+    """1人しか話していない場合は、声の大小を2話者と誤認して補正してはいけない。"""
+    a_turns = [(1.0, 8.0), (10.0, 18.0)]
+    m1, m2 = _scene(a_turns=a_turns, b_turns=[], noise2=noise2)
+    tl = diarize_by_volume(m1, m2, {})
+    assert tl.balance_offset_db == 0.0
+    assert "補正なし" in tl.balance_note
+    assert {s["speaker"] for s in tl.segments()} == {"A"}
+
+
+def test_auto_balance_does_not_change_balanced_setup():
+    m1, m2 = _scene()
+    tl = diarize_by_volume(m1, m2, {})
+    assert abs(tl.balance_offset_db) < 1.0

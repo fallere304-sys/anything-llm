@@ -128,6 +128,8 @@ class Pipeline:
                     "note": "録音開始（2本の時刻合わせ後）からの秒数",
                     "frame_sec": timeline.frame_sec,
                     "noise_floor_db": {"mic1": timeline.floor1_db, "mic2": timeline.floor2_db},
+                    "balance_offset_db": timeline.balance_offset_db,
+                    "balance_note": timeline.balance_note,
                     "segments": segs,
                 },
                 ensure_ascii=False,
@@ -140,7 +142,7 @@ class Pipeline:
             w.writerow(["start_sec", "end_sec", "speaker"])
             for s in segs:
                 w.writerow([s["start"], s["end"], s["speaker"]])
-        timeline_text = "\n".join(f"{s['start']:9.2f} - {s['end']:9.2f}  話者{s['speaker']}" for s in segs)
+        timeline_text = f"[入力差の補正] {timeline.balance_note}\n" + "\n".join(f"{s['start']:9.2f} - {s['end']:9.2f}  話者{s['speaker']}" for s in segs)
 
         # ④ Whisper で2本とも文字起こし
         self._phase(2)

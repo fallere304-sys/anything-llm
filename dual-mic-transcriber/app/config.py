@@ -30,6 +30,7 @@ DEFAULTS: dict = {
     "frame_ms": 50,                   # 音量を測る1フレームの長さ
     "vad_threshold_db": 8.0,          # 雑音下限からこれ以上大きければ「発話あり」
     "dominance_margin_db": 3.0,       # 2マイクの差がこれ未満なら「判別不能(?)」
+    "auto_balance": True,             # 発話の音量差分布からマイク間の入力差を自動補正
     "smoothing_ms": 400,              # 音量差の移動平均窓
     "min_segment_ms": 300,            # これより短い話者区間は前後に吸収
     "utterance_gap_s": 1.0,           # 同一話者でもこれ以上空けば別発話
