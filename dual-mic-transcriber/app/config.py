@@ -41,11 +41,17 @@ DEFAULTS: dict = {
 log = logging.getLogger(__name__)
 
 
-def app_dir() -> Path:
+def app_dir(create: bool = True) -> Path:
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".local" / "share")
     p = Path(base) / APP_NAME
-    p.mkdir(parents=True, exist_ok=True)
+    if create:
+        p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def hf_home() -> Path:
+    """Hugging Face のキャッシュ（xet チャンクキャッシュ等）もアプリフォルダ内に閉じ込める。"""
+    return app_dir() / "hf_home"
 
 
 def models_dir() -> Path:
@@ -60,10 +66,38 @@ def logs_dir() -> Path:
     return p
 
 
-def sessions_dir() -> Path:
+def sessions_dir(create: bool = True) -> Path:
     p = Path.home() / "Documents" / APP_NAME
-    p.mkdir(parents=True, exist_ok=True)
+    if create:
+        p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def install_info_path() -> Path:
+    return app_dir(create=False) / "install_info.json"
+
+
+def record_exe_location():
+    """アンインストーラが本体 exe を見つけられるよう、起動した exe の場所を記録する。"""
+    import sys
+
+    if not getattr(sys, "frozen", False):
+        return
+    path = install_info_path()
+    try:
+        info = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except Exception:
+        info = {}
+    exes = info.get("exe_paths", [])
+    exe = str(Path(sys.executable).resolve())
+    if exe not in exes:
+        exes.append(exe)
+    info["exe_paths"] = exes
+    try:
+        app_dir().mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        log.exception("install_info.json の書き込みに失敗")
 
 
 def config_path() -> Path:

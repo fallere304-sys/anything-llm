@@ -48,12 +48,15 @@ def main():
 
         sys.exit(run(sys.argv[2] if len(sys.argv) >= 3 else "selftest.txt"))
     _setup_logging()
+    # huggingface_hub を import する前に設定する（共有キャッシュ ~/.cache/huggingface を汚さない）
+    os.environ["HF_HOME"] = str(config.hf_home())
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     _windows_init()
     log = logging.getLogger("main")
     log.info("start: python=%s frozen=%s", sys.version.split()[0], getattr(sys, "frozen", False))
+    config.record_exe_location()
     from .ui import App
 
     App().run()

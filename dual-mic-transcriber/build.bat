@@ -34,8 +34,13 @@ pyinstaller --noconfirm --clean --onefile --windowed --name DualMicTranscriber ^
   --hidden-import sounddevice ^
   run.py || goto :err
 
+rem Uninstaller: small exe that only needs tkinter and app/config.py
+pyinstaller --noconfirm --onefile --windowed --name DualMicTranscriber_Uninstall uninstall.py || goto :err
+
 echo.
-echo Build finished: %CD%\dist\DualMicTranscriber.exe
+echo Build finished:
+echo   %CD%\dist\DualMicTranscriber.exe
+echo   %CD%\dist\DualMicTranscriber_Uninstall.exe
 if not defined CI pause
 exit /b 0
 

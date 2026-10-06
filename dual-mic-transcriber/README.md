@@ -20,8 +20,10 @@
 
 | 方法 | 手順 |
 |---|---|
-| GitHub Actions（推奨） | このディレクトリに変更を push すると `.github/workflows/dual-mic-transcriber.yml` が Windows 上で exe をビルドし、Artifacts に `DualMicTranscriber-windows-x64` として添付します（Actions タブから手動実行も可） |
-| 手元でビルド | Windows に Python 3.11 を入れ、`build.bat` をダブルクリック → `dist\DualMicTranscriber.exe` |
+| GitHub Actions（推奨） | このディレクトリに変更を push すると `.github/workflows/dual-mic-transcriber.yml` が Windows 上で exe をビルドし、Artifacts に `DualMicTranscriber-windows-x64`（本体 exe ＋ アンインストーラ exe の zip）として添付します（Actions タブから手動実行も可） |
+| 手元でビルド | Windows に Python 3.11 を入れ、`build.bat` をダブルクリック → `dist\DualMicTranscriber.exe` と `dist\DualMicTranscriber_Uninstall.exe` |
+
+2つの exe は同じフォルダに置いてください（アンインストーラが隣の本体 exe を見つけて削除できるようにするため）。
 
 ### 1.2 起動（＝環境構築）
 
@@ -61,6 +63,23 @@
 - 各マイクは担当話者の口元から **30cm 以内**、相手からはできるだけ遠くに置く。2本のマイク間は 1m 以上離すのが望ましい。
 - 指向性マイク（単一指向性ピンマイク等）を担当話者に向けると、音量差が大きくなり識別精度が上がる。
 - 「同じ物理マイクの別ドライバ」（例: 同名の WASAPI 版と MME 版）を2つ選ぶと意味がありません（同名の場合は警告が出ます）。
+
+### 1.5 アンインストール
+
+`DualMicTranscriber_Uninstall.exe` をダブルクリックすると、このアプリがPCに残したものの一覧（場所と容量付き）が表示されます。チェックした項目を削除します。
+
+| 項目 | 場所 | 既定 |
+|---|---|---|
+| アプリ本体 | 本体が起動時に記録した場所 ＋ アンインストーラと同じフォルダの `DualMicTranscriber.exe` | 削除する |
+| モデル・設定・ログ | `%LOCALAPPDATA%\DualMicTranscriber`（モデル数GB・config.json・ログ・Hugging Face キャッシュ） | 削除する |
+| 一時展開フォルダの残り | `%TEMP%\_MEI*` のうち本体のもの（本体が異常終了したときだけ残る） | 削除する |
+| 録音・文字起こし結果 | `ドキュメント\DualMicTranscriber` | **削除しない**（チェックすれば削除可） |
+| アンインストーラ自身 | 実行中の exe | 閉じた数秒後に削除 |
+
+- これで全部です。本アプリは**レジストリ・スタートメニュー・環境変数・サービスには何も書き込みません**。
+- 録音データはユーザーの成果物なので、既定では残します。チェックした場合も、確認ダイアログで「元に戻せない」と明示します。
+- 誤削除の防止: 削除の直前に、各パスが本アプリのものであることを名前で再確認します（`DualMicTranscriber.exe` という名前の exe、`DualMicTranscriber` という名前のフォルダ、Whisper と llama.cpp を含む `_MEI` フォルダのみ）。他の PyInstaller アプリの `_MEI` フォルダや、記録ファイルが改ざんされて別の exe を指していた場合は削除しません。
+- 本体が起動中の場合は、閉じるよう求めて中断します（使用中のモデルファイルは削除できないため）。
 
 ---
 
@@ -154,6 +173,8 @@
 
 ログ: `%LOCALAPPDATA%\DualMicTranscriber\logs\app.log`
 
+モデルのダウンロードに使う Hugging Face のキャッシュ（`HF_HOME`）も `%LOCALAPPDATA%\DualMicTranscriber\hf_home` に限定しています。他のアプリと共有される `%USERPROFILE%\.cache\huggingface` には書き込みません。
+
 ---
 
 ## 5. 設定（config.json）
@@ -225,7 +246,9 @@ dual-mic-transcriber/
 │  ├─ pipeline.py         ②〜⑥ をワーカースレッドで順に実行
 │  ├─ models.py           モデル自動ダウンロード（途中再開対応）
 │  ├─ config.py           設定・保存先
-│  └─ selftest.py         ビルド後の exe 検査
+│  ├─ selftest.py         ビルド後の exe 検査
+│  └─ uninstall.py        アンインストーラ（対象列挙・安全確認・削除・GUI）
+├─ uninstall.py           アンインストーラ exe のエントリースクリプト
 └─ tests/                 ロジックのテスト（Whisper/LLM はモック）
 ```
 
@@ -237,6 +260,7 @@ python -m pytest -q tests
 ```
 
 - `tests/test_logic.py`: 合成した2話者・2マイク信号（マイク感度差 18dB、クロストーク −10dB）で、話者識別・時刻合わせ・話者付与・統合を検証。入力差補正については、片側だけ雑音が大きい（雑音下限 +14〜20dB）、発話量の偏り（85% vs 15%）、1人だけ話す（補正が誤作動しないこと）の各ケースを検証。
+- `tests/test_uninstall.py`: 一時ディレクトリに本体が作るファイル群を再現し、既定選択で本体・モデル・一時フォルダが消え録音は残ること、全選択で全て消えること、他アプリの `_MEI` フォルダ・改ざんされた記録・想定外のパスを削除しないことを検証。
 - `tests/test_pipeline.py`: 44.1kHz と 16kHz・開始 0.3 秒ずれの2本の WAV から、Whisper/LLM をモックにしてパイプライン全体（フェーズ順・出力ファイル・LLM 失敗時のフォールバック・停止）を検証。
 
 ### 開発時の実行
