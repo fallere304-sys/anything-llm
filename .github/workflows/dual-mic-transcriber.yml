@@ -1,0 +1,45 @@
+name: Build DualMicTranscriber (Windows exe)
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: ['master']
+    paths:
+      - 'dual-mic-transcriber/**'
+      - '.github/workflows/dual-mic-transcriber.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: dual-mic-transcriber
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Logic unit tests
+        run: |
+          python -m pip install numpy pytest
+          python -m pytest -q tests
+
+      - name: Build exe
+        shell: cmd
+        run: build.bat
+
+      - name: Smoke test (bundled libraries)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\DualMicTranscriber.exe -ArgumentList '--selftest','selftest.txt' -Wait -PassThru
+          Get-Content selftest.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DualMicTranscriber-windows-x64
+          path: dual-mic-transcriber/dist/DualMicTranscriber.exe
+          if-no-files-found: error

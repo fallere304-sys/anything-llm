@@ -1,0 +1,6 @@
+# 実行時依存（Windows x64 / Python 3.11 を想定）
+numpy>=1.26
+sounddevice>=0.4.6
+soxr>=0.3
+faster-whisper==1.2.1
+llama-cpp-python>=0.3.0
