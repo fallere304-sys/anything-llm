@@ -141,6 +141,85 @@ jobs:
           if (-not (Select-String -Path "$env:RUNNER_TEMP\un3.txt" -Pattern "もう何もありません" -Quiet)) { throw "second run found leftovers" }
           exit 0
 
+      - name: "USB all-in-one: make it on a connected PC"
+        timeout-minutes: 40
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $usb = "$env:RUNNER_TEMP\USB\LocalCoder"
+          & dist\LocalCoderCLI.exe --make-bundle $usb --models small --kinds "cuda,vulkan,cpu" 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\mk.txt"
+          $code = $LASTEXITCODE
+          Get-Content "$env:RUNNER_TEMP\mk.txt"
+          if ($code -ne 0) { throw "make-bundle failed ($code)" }
+          foreach ($f in "LocalCoder.exe", "LocalCoderCLI.exe", "LocalCoderUninstall.exe", "非常停止.bat", "はじめにお読みください.txt", "bundle\manifest.json") {
+            if (-not (Test-Path "$usb\$f")) { throw "missing on the USB: $f" }
+          }
+          Get-Content "$usb\bundle\manifest.json"
+          Get-ChildItem -Recurse "$usb" | Measure-Object -Property Length -Sum | ForEach-Object { "USB size: {0:N1} GB" -f ($_.Sum / 1GB) }
+
+      - name: "USB all-in-one: install and use with the network cut off"
+        timeout-minutes: 40
+        run: |
+          $usb = "$env:RUNNER_TEMP\USB\LocalCoder"
+          $h = "$env:RUNNER_TEMP\offline-home"
+          $cfg = "$env:RUNNER_TEMP\offline.json"
+          $ws = "$env:RUNNER_TEMP\offline-ws"
+          # 外へ出られないようにする: 使えない proxy と、USB の exe からの外向き通信を塞ぐファイアウォール (127.0.0.1 は通る)
+          $env:HTTP_PROXY = "http://127.0.0.1:9"; $env:HTTPS_PROXY = "http://127.0.0.1:9"; $env:NO_PROXY = "127.0.0.1,localhost"
+          $env:PIP_INDEX_URL = "http://127.0.0.1:9/simple"
+          foreach ($exe in "LocalCoder.exe", "LocalCoderCLI.exe") {
+            New-NetFirewallRule -DisplayName "lc-offline-$exe" -Direction Outbound -Action Block -Program "$usb\$exe" | Out-Null
+          }
+          $a = @("--home", $h, "--config", $cfg, "--kinds", "cpu", "--ctx", "8192", "--workspace", $ws, "--yes",
+                 "--task", "hello.txt というファイルを作って、中身を「こんにちは」の 1 行にしてください。")
+          & "$usb\LocalCoderCLI.exe" @a 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\offline.txt"
+          $code = $LASTEXITCODE
+          Get-Content "$env:RUNNER_TEMP\offline.txt"
+          if ($code -ne 0) { throw "offline run failed ($code)" }
+          $log = Get-Content "$env:RUNNER_TEMP\offline.txt" -Raw
+          if ($log -notmatch "USB オールインワンから導入します") { throw "did not use the USB bundle" }
+          if ($log -match "を取得します|llama\.cpp b\d+ を用意します|導入器を取得") { throw "something was downloaded" }
+          if (-not (Test-Path "$ws\hello.txt")) { throw "hello.txt was not created" }
+          Get-Content "$ws\hello.txt"
+          # .exe にする道具も、USB の wheel だけで入っている
+          $py = (Get-ChildItem -Recurse "$h\python" -Filter python.exe | Select-Object -First 1).FullName
+          if (-not $py) { throw "python was not prepared offline" }
+          & $py -m PyInstaller --version
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller was not installed offline" }
+          Set-Content -Path "$env:RUNNER_TEMP\hi2.py" -Value "print('hi offline')"
+          & $py -m PyInstaller --onefile --noconfirm --distpath "$env:RUNNER_TEMP\dist2" --workpath "$env:RUNNER_TEMP\build2" `
+            --specpath "$env:RUNNER_TEMP" "$env:RUNNER_TEMP\hi2.py" 2>&1 | Select-Object -Last 3
+          $out = & "$env:RUNNER_TEMP\dist2\hi2.exe"
+          if ($out -ne "hi offline") { throw "offline-built exe printed: $out" }
+
+      - name: "USB all-in-one: emergency stop (非常停止) and uninstall"
+        timeout-minutes: 20
+        run: |
+          $usb = "$env:RUNNER_TEMP\USB\LocalCoder"
+          $h = "$env:RUNNER_TEMP\offline-home"
+          $cfg = "$env:RUNNER_TEMP\offline.json"
+          $p = Start-Process -FilePath "$usb\LocalCoder.exe" -ArgumentList @("--config", $cfg, "--home", $h, "--kinds", "cpu", "--ctx", "8192") -PassThru
+          $t0 = Get-Date
+          do {
+            Start-Sleep -Seconds 3
+            $srv = Get-Process llama-server -ErrorAction SilentlyContinue
+            $rec = Test-Path "$h\logs\processes.json"
+          } until (($srv -and $rec) -or ((Get-Date) - $t0).TotalSeconds -gt 300)
+          if (-not $srv) { throw "the window did not start the model" }
+          Get-Content "$h\logs\processes.json"
+          & "$usb\LocalCoderCLI.exe" --force-stop --config $cfg 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\fs.txt"
+          Get-Content "$env:RUNNER_TEMP\fs.txt"
+          Start-Sleep -Seconds 3
+          if (Get-Process llama-server -ErrorAction SilentlyContinue) { throw "llama-server is still running" }
+          $left = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq "$usb\LocalCoder.exe" }
+          if ($left) { throw "LocalCoder.exe is still running" }
+          & "$usb\LocalCoderUninstall.exe" --config $cfg --yes --all 2>&1 | Out-File -Encoding utf8 "$env:RUNNER_TEMP\un-usb.txt"
+          Get-Content "$env:RUNNER_TEMP\un-usb.txt"
+          if (Test-Path $h) { throw "the offline install was not removed" }
+          foreach ($f in "LocalCoder.exe", "LocalCoderCLI.exe", "bundle\manifest.json") {
+            if (-not (Test-Path "$usb\$f")) { throw "the uninstaller removed $f from the USB" }
+          }
+
       - uses: actions/upload-artifact@v4
         with:
           name: LocalCoder-windows

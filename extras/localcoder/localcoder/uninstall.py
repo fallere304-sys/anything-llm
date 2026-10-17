@@ -259,6 +259,9 @@ class Uninstaller:
         for p in self.launched:
             if self.self_exe and os.path.normcase(p) == os.path.normcase(self.self_exe):
                 continue
+            if os.path.isfile(os.path.join(os.path.dirname(p), "bundle", "manifest.json")):
+                self.kept.append(f"USB オールインワンの {p}")       # USB の中身は消さない (ほかの PC にも使う)
+                continue
             items.append(Item(f"ダウンロードした {p}", lambda p=p: os.path.exists(p), lambda p=p: rmtree(p),
                               False, True, "入れ直すときにまた使うなら残す"))
         return items

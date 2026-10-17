@@ -100,8 +100,10 @@ def _base_python(found):
     return exe if exe and "WindowsApps" not in exe else None
 
 
-def ensure(home, say=print, run=subprocess.run, found=None):
-    """Python と PyInstaller を用意する。使える python.exe のパスを返す (用意できなければ None)。"""
+def ensure(home, say=print, run=subprocess.run, found=None, installer=None, wheels=None):
+    """Python と PyInstaller を用意する。使える python.exe のパスを返す (用意できなければ None)。
+
+    installer / wheels: USB オールインワンの Python 導入器と wheel のフォルダ (あればダウンロードしない)。"""
     minor = ".".join(PY_VERSION.split(".")[:2])
     found = registered_pythons(minor) if found is None else found
     mine = [f for f in found if f[1] and os.path.normcase(os.path.abspath(f[1])).startswith(
@@ -110,7 +112,7 @@ def ensure(home, say=print, run=subprocess.run, found=None):
     if python_exe(home) is None and not others and os.name == "nt":
         dl = os.path.join(home, "downloads")
         os.makedirs(dl, exist_ok=True)
-        inst = os.path.join(dl, os.path.basename(INSTALLER))
+        inst = installer or os.path.join(dl, os.path.basename(INSTALLER))
         if not os.path.exists(inst):
             say(f"プログラムを .exe にする道具 (Python {PY_VERSION}) を用意します")
             download(INSTALLER, inst, say)
@@ -131,8 +133,11 @@ def ensure(home, say=print, run=subprocess.run, found=None):
     r = run([exe, "-m", "PyInstaller", "--version"], capture_output=True, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     if r.returncode != 0:
         say("PyInstaller を入れます")
-        run([exe, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location",
-             "pyinstaller"], capture_output=True, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW, env=env(home))
+        offline = ["--no-index", "--find-links", wheels] if wheels else []
+        r = run([exe, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location", *offline,
+                 "pyinstaller"], capture_output=True, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW, env=env(home))
+        if getattr(r, "returncode", 0) != 0:
+            say("PyInstaller を入れられませんでした。.exe にする機能は使えません (ほかの作業はできます)")
     return exe
 
 

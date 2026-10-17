@@ -42,7 +42,17 @@ UA = {"User-Agent": "LocalCoder"}
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+OFFLINE = False          # USB オールインワンで動いているとき True: 外へ取りに行こうとしたら、その場で止める
+
+
+def guard(url):
+    if OFFLINE:
+        raise OSError(f"USB オールインワンで動いているので、外へは取りに行きません ({url})。"
+                      "USB に入っていないものが要るようです (USB を作り直すときに含めてください)")
+
+
 def _get(url, opener=urllib.request.urlopen, timeout=60):
+    guard(url)
     headers = dict(UA)
     if os.environ.get("GITHUB_TOKEN") and url.startswith("https://api.github.com/"):
         headers["Authorization"] = "Bearer " + os.environ["GITHUB_TOKEN"]
@@ -52,6 +62,7 @@ def _get(url, opener=urllib.request.urlopen, timeout=60):
 
 def _latest_tag(opener=urllib.request.urlopen):
     """「最新の版」のページの転送先 (…/releases/tag/b11255) から版の名前を読む (API の回数制限を受けない)。"""
+    guard(LATEST_PAGE)
     with opener(urllib.request.Request(LATEST_PAGE, headers=UA, method="HEAD"), timeout=60) as r:
         url = r.geturl()
     m = re.search(r"/releases/tag/([^/?#]+)", url)
@@ -90,6 +101,7 @@ def pick(assets, kind):
 
 def download(url, dst, say=print, opener=urllib.request.urlopen):
     """途中からの再開つきで取ってくる。"""
+    guard(url)
     part = dst + ".part"
     have = os.path.getsize(part) if os.path.exists(part) else 0
     headers = dict(UA, **({"Range": f"bytes={have}-"} if have else {}))

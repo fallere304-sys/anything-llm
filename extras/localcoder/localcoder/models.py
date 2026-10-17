@@ -10,6 +10,7 @@ import re
 import urllib.parse
 import urllib.request
 
+from . import server
 from .server import download
 
 API = "https://huggingface.co/api/models/"
@@ -58,6 +59,7 @@ def pick_files(siblings, prefer):
 
 
 def siblings(repo, opener=urllib.request.urlopen):
+    server.guard(API + repo)
     req = urllib.request.Request(API + repo, headers={"User-Agent": "LocalCoder"})
     with opener(req, timeout=60) as r:
         return [s["rfilename"] for s in json.loads(r.read().decode("utf-8")).get("siblings", [])]

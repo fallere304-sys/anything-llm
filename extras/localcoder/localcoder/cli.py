@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 
-from . import models, processes, server, toolchain, uninstall
+from . import bundle, models, processes, server, toolchain, uninstall
 from .agent import Agent, Client, ModelError, Status
 from .tools import Tools
 
@@ -88,6 +88,13 @@ def drives():
     return [(r, server.free_gb(r), kinds.get(r[0].upper(), "")) for r in roots]
 
 
+_args_for_setup = None
+
+
+def catalog_for_setup():
+    return catalog(_args_for_setup) if _args_for_setup is not None else list(models.CATALOG)
+
+
 def setup(cfg, interactive, model_key=None, path=CONFIG):
     ds = sorted(drives(), key=lambda d: -d[1])
     if interactive:
@@ -102,14 +109,15 @@ def setup(cfg, interactive, model_key=None, path=CONFIG):
     os.makedirs(home, exist_ok=True)
     free = server.free_gb(home)
     entry = models.by_key(model_key) if model_key else None
+    choices = catalog_for_setup()
     if entry is None and interactive:
         say(f"\n考える力 (モデル) を選んでください。空き {free:.0f} GB。大きいほど賢く、遅い")
-        for i, m in enumerate(models.CATALOG, 1):
+        for i, m in enumerate(choices, 1):
             warn = "  ← 空きが足りません" if m["gb"] + 5 > free else ""
             say(f"  {i}. {m['label']}  約 {m['gb']} GB  — {m['note']}{warn}")
         i = ask("番号:", "1")
-        entry = models.CATALOG[int(i) - 1] if i.isdigit() and 0 < int(i) <= len(models.CATALOG) else models.CATALOG[0]
-    entry = entry or models.CATALOG[0]
+        entry = choices[int(i) - 1] if i.isdigit() and 0 < int(i) <= len(choices) else choices[0]
+    entry = entry or choices[0]
     tools_ok, gpu = True, cfg.get("gpu_memory", "shared")
     if interactive:
         tools_ok = ask("プログラムを .exe にする道具 (Python・約 150MB) も用意しますか？ [Y/n]", "Y").lower() != "n"
@@ -127,18 +135,44 @@ def apply_setup(cfg, home, model_key, tools_ok, gpu_memory, path=CONFIG):
 
 def prepare(cfg, args, kinds):
     home = cfg["home"]
-    ready = [k for k in kinds if server.find_server(os.path.join(home, "llama", k))]
-    if len(ready) < len(kinds):
-        ready = server.install(home, kinds, say)
+    b = bundle.find(getattr(args, "bundle", None))
+    if b:
+        # USB オールインワン: USB から写すだけ。外へは取りに行かない
+        server.OFFLINE = True
+        say(f"USB オールインワンから導入します ({b})")
+        kinds = [k for k in kinds if k in bundle.kinds(b)] or bundle.kinds(b)
+        ready = bundle.install_llama(b, home, kinds, say)
+        if not ready:
+            raise OSError("USB の中に、この PC で使える llama.cpp がありません")
+    else:
+        ready = [k for k in kinds if server.find_server(os.path.join(home, "llama", k))]
+        if len(ready) < len(kinds):
+            ready = server.install(home, kinds, say)
     model = args.model_file or cfg.get("model")
     if not model or not os.path.exists(model):
-        entry = models.by_key(cfg.get("model_key") or "standard")
-        model = models.fetch(entry, os.path.join(home, "models"), say)
+        key = cfg.get("model_key") or "standard"
+        if b:
+            if key not in bundle.model_keys(b):
+                key = (bundle.model_keys(b) or [key])[0]
+                cfg["model_key"] = key
+            model = bundle.install_model(b, home, key, say)
+        else:
+            model = models.fetch(models.by_key(key), os.path.join(home, "models"), say)
         cfg["model"] = model
         save(cfg, args.config)
     if cfg.get("toolchain", True):
-        toolchain.ensure(home, say)
+        installer, wheels = bundle.toolchain_sources(b) if b else (None, None)
+        toolchain.ensure(home, say, installer=installer, wheels=wheels)
     return model
+
+
+def catalog(args):
+    """選べるモデル: USB オールインワンなら、その中にあるものだけ。"""
+    b = bundle.find(getattr(args, "bundle", None))
+    if b:
+        have = bundle.model_keys(b)
+        return [m for m in models.CATALOG if m["key"] in have]
+    return list(models.CATALOG)
 
 
 # ---------------------------------------------------------------- 対話
@@ -233,6 +267,10 @@ def parser():
     ap.add_argument("--ctx", type=int, default=32768)
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--config", default=CONFIG)
+    ap.add_argument("--bundle", help="USB オールインワンの bundle フォルダ (ふつうは exe の横の bundle を自動で使う)")
+    ap.add_argument("--make-bundle", nargs="?", const="", metavar="フォルダ",
+                    help="USB オールインワンを作る (ネットが要る)。--models で入れるモデルを選ぶ")
+    ap.add_argument("--models", help="--make-bundle で入れるモデル (例: standard,small)")
     ap.add_argument("--force-stop", action="store_true",
                     help="非常停止: 動いている LocalCoder と llama-server を止める (画面が固まったときなど)")
     return ap
@@ -251,6 +289,36 @@ def register_app(cfg):
 def unregister_app(cfg):
     for key in ("LocalCoder", "LocalCoder (起動役)"):
         processes.clear_process(cfg.get("home"), key)
+
+
+def make_bundle(args):
+    """USB オールインワンを作る (ネットにつながる PC で)。"""
+    interactive = sys.stdin is not None and sys.stdin.isatty()
+    here = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "frozen", False) else os.getcwd()
+    dest = args.make_bundle or (ask("USB オールインワンを作るフォルダ:", here) if interactive else here)
+    keys = [k.strip() for k in (args.models or "").split(",") if k.strip()]
+    if not keys:
+        if interactive:
+            say("\n入れるモデルを選んでください (番号をカンマ区切り。例: 1,4)")
+            for i, m in enumerate(models.CATALOG, 1):
+                say(f"  {i}. {m['label']}  約 {m['gb']} GB")
+            picked = ask("番号:", "1")
+            keys = [models.CATALOG[int(i) - 1]["key"] for i in picked.split(",")
+                    if i.strip().isdigit() and 0 < int(i) <= len(models.CATALOG)]
+        keys = keys or ["standard"]
+    need = sum(models.by_key(k)["gb"] for k in keys if models.by_key(k)) + 2.5
+    free = server.free_gb(os.path.dirname(os.path.abspath(dest)) or dest)
+    say(f"作り先: {dest}  /  入れるモデル: {', '.join(keys)}  /  要る空き: 約 {need:.0f} GB (いまの空き {free:.0f} GB)")
+    if free and free < need:
+        say("空きが足りません")
+        return 2
+    kinds = [k for k in args.kinds.split(",") if k in server.KINDS]
+    try:
+        bundle.make(dest, keys, kinds, say)
+    except OSError as e:
+        say(f"作れませんでした: {e}")
+        return 2
+    return 0
 
 
 def force_stop(args):
@@ -365,8 +433,12 @@ def main(argv=None):
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if args.force_stop:
         return force_stop(args)
+    if args.make_bundle is not None:
+        return make_bundle(args)
     interactive = sys.stdin is not None and sys.stdin.isatty() and not args.task
     cfg = load_config(args)
+    global _args_for_setup
+    _args_for_setup = args
     if needs_setup(cfg, args):
         cfg = setup(cfg, interactive, args.model_key, args.config)
     finish_setup(cfg, args)

@@ -30,8 +30,9 @@ MONO = "Consolas" if os.name == "nt" else "TkFixedFont"
 class SetupDialog:
     """初回 (と --setup) の設定: 置き場所・モデル・.exe にする道具・共有 GPU メモリ。"""
 
-    def __init__(self, root, cfg, drives):
+    def __init__(self, root, cfg, drives, choices=None):
         self.result = None
+        choices = choices or list(models.CATALOG)
         self.drives = drives or [(os.path.expanduser("~"), 0.0, "")]
         w = self.win = tk.Toplevel(root)
         w.title("LocalCoder の準備")
@@ -52,13 +53,14 @@ class SetupDialog:
 
         ttk.Label(f, text="考える力 (モデル)。大きいほど賢く、遅い").grid(row=3, column=0, columnspan=3,
                                                                     sticky="w", pady=(14, 2))
-        self.model = tk.StringVar(value=cfg.get("model_key") or models.CATALOG[0]["key"])
-        for i, m in enumerate(models.CATALOG):
+        keys = [m["key"] for m in choices]
+        self.model = tk.StringVar(value=cfg.get("model_key") if cfg.get("model_key") in keys else keys[0])
+        for i, m in enumerate(choices):
             ttk.Radiobutton(f, text=f"{m['label']}  約 {m['gb']} GB", value=m["key"], variable=self.model).grid(
                 row=4 + 2 * i, column=0, columnspan=3, sticky="w")
             ttk.Label(f, text="      " + m["note"], foreground="#777").grid(row=5 + 2 * i, column=0, columnspan=3,
                                                                           sticky="w")
-        r = 5 + 2 * len(models.CATALOG)
+        r = 5 + 2 * len(choices)
         self.tools = tk.BooleanVar(value=cfg.get("toolchain", True))
         ttk.Checkbutton(f, text="プログラムを .exe にする道具 (Python・約 150MB) も用意する",
                         variable=self.tools).grid(row=r, column=0, columnspan=3, sticky="w", pady=(14, 0))
@@ -217,10 +219,10 @@ class App:
             return
         self.q.put(("ready", (cfg, srv, agent, tools)))
 
-    def ask_setup(self, cfg, drives):
+    def ask_setup(self, cfg, drives, choices=None):
         """別の糸から呼ぶ: 画面の糸で設定の窓を出し、答えを待つ。"""
         box, ev = {}, threading.Event()
-        self.q.put(("setup", (cfg, drives, box, ev)))
+        self.q.put(("setup", (cfg, drives, choices, box, ev)))
         ev.wait()
         return box.get("result")
 
@@ -307,8 +309,8 @@ class App:
             self.bar.stop()
             messagebox.showerror("LocalCoder", str(data), parent=self.root)
         elif kind == "setup":
-            cfg, drives, box, ev = data
-            dlg = SetupDialog(self.root, cfg, drives)
+            cfg, drives, choices, box, ev = data
+            dlg = SetupDialog(self.root, cfg, drives, choices)
             self.root.wait_window(dlg.win)
             box["result"] = dlg.result
             ev.set()
@@ -457,7 +459,7 @@ def default_boot(app):
             cli.apply_setup(cfg, cfg["home"], args.model_key, cfg.get("toolchain", True),
                             cfg.get("gpu_memory", "shared"), args.config)
         else:
-            res = app.ask_setup(cfg, sorted(cli.drives(), key=lambda d: -d[1]))
+            res = app.ask_setup(cfg, sorted(cli.drives(), key=lambda d: -d[1]), cli.catalog(args))
             if res is None:
                 raise SystemExit(0)
             cli.apply_setup(cfg, res["home"], res["model_key"], res["tools"], res["gpu_memory"], args.config)

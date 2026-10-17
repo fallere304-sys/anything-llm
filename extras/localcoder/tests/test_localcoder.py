@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from localcoder import cli, models, processes, server, toolchain, uninstall  # noqa: E402
+from localcoder import bundle, cli, models, processes, server, toolchain, uninstall  # noqa: E402
 from localcoder.agent import Agent, Client, Status, rescue_calls  # noqa: E402
 from localcoder.tools import ToolError, Tools  # noqa: E402
 
@@ -271,6 +271,91 @@ class ForceStopTest(unittest.TestCase):
         finally:
             processes.force_stop = orig
         self.assertEqual(seen, [os.path.join(d, "a"), os.path.join(d, "b")])
+
+
+class BundleTest(unittest.TestCase):
+    def tearDown(self):
+        server.OFFLINE = False
+
+    def fake_pypi(self, pkgs):
+        """pkgs: {名前: {版: (wheel のタグ, [requires_dist])}}"""
+        def opener(req, timeout=None):
+            url = req.full_url
+            m = __import__("re").match(r"https://pypi.org/pypi/([^/]+)/(?:([^/]+)/)?json", url)
+            name, ver = m.group(1), m.group(2)
+            rels = pkgs[name]
+            if ver:
+                body = {"info": {"name": name, "requires_dist": rels[ver][1]}}
+            else:
+                body = {"info": {"name": name}, "releases": {
+                    v: [{"filename": f"{name}-{v}-{tag}.whl", "url": f"https://files/{name}-{v}.whl"}]
+                    for v, (tag, _) in rels.items()}}
+            return io.BytesIO(json.dumps(body).encode())
+        return opener
+
+    def test_resolve_wheels_follows_windows_requirements(self):
+        pkgs = {"pyinstaller": {"6.1.0": ("py3-none-win_amd64", ["pefile>=2022.5.30,!=2024.8.26; sys_platform == \"win32\"",
+                                                                   "macholib>=1.8; sys_platform == \"darwin\"",
+                                                                   "importlib-metadata; python_version < \"3.10\"",
+                                                                   "pytest; extra == \"hook-testing\"", "altgraph"])},
+                "pefile": {"2024.8.26": ("py3-none-any", []), "2023.2.7": ("py3-none-any", []),
+                           "2025.1.0rc1": ("py3-none-any", [])},
+                "altgraph": {"0.17.5": ("py2.py3-none-any", []), "0.18.0": ("cp313-cp313-manylinux_x86_64", [])}}
+        got = {n: v for n, v, f, u in bundle.resolve_wheels(["pyinstaller"], self.fake_pypi(pkgs))}
+        self.assertEqual(got, {"pyinstaller": "6.1.0", "pefile": "2023.2.7", "altgraph": "0.17.5"})
+
+    def test_markers_and_versions(self):
+        self.assertTrue(bundle._marker('sys_platform == "win32" and python_version >= "3.8"'))
+        self.assertFalse(bundle._marker('platform_system == "Darwin"'))
+        self.assertFalse(bundle._marker('__import__("os").system("x") == "1"'))
+        self.assertTrue(bundle._satisfies("2026.8", ">=2026.7"))
+        self.assertFalse(bundle._satisfies("1.0rc1", ">=0.1"))
+        self.assertTrue(bundle._satisfies("1.4.2", "~=1.4"))
+
+    def make_bundle_dir(self):
+        b = os.path.join(tempfile.mkdtemp(), "bundle")
+        os.makedirs(os.path.join(b, "llama", "cpu"))
+        open(os.path.join(b, "llama", "cpu", "llama-server.exe" if os.name == "nt" else "llama-server"), "w").close()
+        os.makedirs(os.path.join(b, "vcruntime"))
+        open(os.path.join(b, "vcruntime", "vcomp140.dll"), "w").close()
+        os.makedirs(os.path.join(b, "models", "unsloth__Small"))
+        with open(os.path.join(b, "models", "unsloth__Small", "small-Q4_K_M.gguf"), "wb") as f:
+            f.write(b"GGUF" + b"0" * 1000)
+        with open(os.path.join(b, bundle.MANIFEST), "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "models": {"small": ["unsloth__Small/small-Q4_K_M.gguf"]}, "python": None}, f)
+        return b
+
+    def test_offline_prepare_copies_from_the_usb_and_never_downloads(self):
+        b = self.make_bundle_dir()
+        home = tempfile.mkdtemp()
+        d = tempfile.mkdtemp()
+        args = cli.parser().parse_args(["--bundle", b, "--config", os.path.join(d, "c.json")])
+        cfg = {"home": home, "model_key": "standard", "toolchain": False}
+        self.assertEqual([m["key"] for m in cli.catalog(args)], ["small"])
+        model = cli.prepare(cfg, args, ["cuda", "vulkan", "cpu"])
+        self.assertEqual(model, os.path.join(home, "models", "unsloth__Small", "small-Q4_K_M.gguf"))
+        self.assertEqual(os.path.getsize(model), 1004)
+        self.assertEqual(cfg["model_key"], "small")                  # USB に無いモデルは選べない
+        self.assertTrue(os.path.exists(os.path.join(home, "llama", "cpu", "vcomp140.dll")))
+        self.assertTrue(server.OFFLINE)
+        with self.assertRaises(OSError) as e:
+            server.download("https://example.com/x", os.path.join(home, "x"))
+        self.assertIn("外へは取りに行きません", str(e.exception))
+        with self.assertRaises(OSError):
+            models.siblings("someone/model")
+
+    def test_uninstall_keeps_the_usb_copy(self):
+        b = self.make_bundle_dir()
+        exe = os.path.join(os.path.dirname(b), "LocalCoder.exe")
+        open(exe, "w").close()
+        d = tempfile.mkdtemp()
+        cfgp = os.path.join(d, "LocalCoder", "config.json")
+        cli.save({"home": os.path.join(d, "home"), "launched_from": [exe]}, cfgp)
+        un = uninstall.Uninstaller(config=cfgp, env={"LOCALAPPDATA": d, "TEMP": d}, system=FakeSystem(FakeRegistry()),
+                                   out=lambda m: None, pythons=lambda minor: [])
+        self.assertFalse(any(exe in it.label for it in un.plan()))
+        un.run(yes=True, include_unsure=True)
+        self.assertTrue(os.path.exists(exe))
 
 
 class GuiTest(unittest.TestCase):
