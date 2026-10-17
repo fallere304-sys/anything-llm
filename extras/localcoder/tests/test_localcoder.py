@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from localcoder import cli, models, server, toolchain, uninstall  # noqa: E402
+from localcoder import cli, models, processes, server, toolchain, uninstall  # noqa: E402
 from localcoder.agent import Agent, Client, Status, rescue_calls  # noqa: E402
 from localcoder.tools import ToolError, Tools  # noqa: E402
 
@@ -26,6 +26,16 @@ class ToolsTest(unittest.TestCase):
         for p in ("../x.txt", "/etc/passwd", "a/../../x"):
             with self.assertRaises(ToolError):
                 self.t.write_file(p, "x")
+
+    def test_links_inside_the_workspace_cannot_reach_outside(self):
+        outside = tempfile.mkdtemp()
+        try:
+            os.symlink(outside, os.path.join(self.tmp, "link"), target_is_directory=True)
+        except (OSError, NotImplementedError) as e:
+            self.skipTest(f"リンクを作れない: {e}")
+        with self.assertRaises(ToolError):
+            self.t.write_file("link/escape.txt", "x")
+        self.assertFalse(os.path.exists(os.path.join(outside, "escape.txt")))
 
     def test_write_read_edit(self):
         self.t.write_file("src/app.py", "a = 1\nb = 2\n")
@@ -212,6 +222,55 @@ class ProgressAndStopTest(AgentTest):
         r = Client(self.url)._stream(iter(lines), on_text=got["text"].append, on_think=got["think"].append)
         self.assertEqual("".join(got["think"]), "考え中")
         self.assertEqual(r["content"], "答え")
+
+
+class ForceStopTest(unittest.TestCase):
+    def long_child(self):
+        import subprocess
+        cmd = ["powershell", "-NoProfile", "-Command", "Start-Sleep -Seconds 60"] if os.name == "nt" else ["sleep", "60"]
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, **processes.popen_group_options())
+        self.addCleanup(lambda: p.poll() is None and p.kill())
+        time.sleep(0.5)
+        return p
+
+    def test_force_stop_kills_only_what_is_still_the_recorded_process(self):
+        home = tempfile.mkdtemp()
+        a, b = self.long_child(), self.long_child()
+        processes.record_process(home, "llama-server", a.pid)
+        processes.record_process(home, "LocalCoder", b.pid)
+        # b の番号が別のプログラムに使い回された、という場面を作る (起動時刻が違う)
+        state = os.path.join(home, "logs", processes.STATE)
+        with open(state, encoding="utf-8") as f:
+            data = json.load(f)
+        data["LocalCoder"]["created"] += 1
+        with open(state, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        said = []
+        self.assertEqual(processes.force_stop(home, said.append), 1)
+        a.wait(10)
+        self.assertIsNotNone(a.poll())
+        self.assertIsNone(b.poll())                    # 身元が違うので止めない
+        self.assertIn("止めました: llama-server", "\n".join(said))
+
+    def test_terminate_process_tree_and_identity(self):
+        p = self.long_child()
+        self.assertIsNotNone(processes.process_identity(p.pid))
+        processes.terminate_process_tree(p, timeout=2)
+        self.assertIsNotNone(p.poll())
+        self.assertIsNone(processes.process_identity(p.pid))
+
+    def test_cli_force_stop_uses_every_known_home(self):
+        d = tempfile.mkdtemp()
+        cfg = os.path.join(d, "c.json")
+        cli.save({"home": os.path.join(d, "a"), "homes": [os.path.join(d, "a"), os.path.join(d, "b")]}, cfg)
+        seen = []
+        orig = processes.force_stop
+        processes.force_stop = lambda home, say: seen.append(home) or 0
+        try:
+            self.assertEqual(cli.main(["--force-stop", "--config", cfg]), 0)
+        finally:
+            processes.force_stop = orig
+        self.assertEqual(seen, [os.path.join(d, "a"), os.path.join(d, "b")])
 
 
 class GuiTest(unittest.TestCase):
@@ -424,6 +483,27 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(server.pick(assets, "cpu"), ["llama-b11255-bin-win-cpu-x64.zip"])
         self.assertEqual(assets["llama-b11255-bin-win-cpu-x64.zip"],
                          "https://github.com/ggml-org/llama.cpp/releases/download/b11255/llama-b11255-bin-win-cpu-x64.zip")
+
+    def test_loading_can_be_stopped(self):
+        home = self.home_with("cuda")
+
+        class Loading:                                 # 読み込みが終わらない (health が ok にならない)
+            pid = None
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                self.dead = True
+
+            def wait(self, t=None):
+                return 0
+        s = server.Server(home, say=lambda *a, **k: None, popen=lambda *a, **k: Loading(),
+                          opener=lambda *a, **k: (_ for _ in ()).throw(OSError("not yet")), sleep=lambda t: time.sleep(0.05))
+        threading.Timer(0.3, s.cancel_event.set).start()
+        t0 = time.time()
+        self.assertIsNone(s.start_best("m.gguf", ["cuda", "cpu"]))
+        self.assertLess(time.time() - t0, 5)
 
     def test_args(self):
         a = server.server_args("cuda", "m.gguf", 8090, 32768, 4)

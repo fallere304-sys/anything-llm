@@ -103,6 +103,7 @@ class App:
         self.q = queue.Queue()
         self.cfg, self.srv, self.agent, self.tools = {}, None, None, None
         self.busy = self.closing = self.dead_shown = False
+        self.booting = False
         self.t_start = self.t_last = 0.0
         self.chars, self.phase, self.last_kind = 0, "", None
         self.auto = bool(getattr(args, "yes", False))
@@ -185,18 +186,21 @@ class App:
 
     def _buttons(self):
         ready = self.agent is not None and not self.closing
-        self.send_btn.configure(state="normal" if ready and not self.busy else "disabled")
-        self.new_btn.configure(state="normal" if ready and not self.busy else "disabled")
-        self.dir_btn.configure(state="normal" if ready and not self.busy else "disabled")
-        self.stop_btn.configure(state="normal" if ready and self.busy else "disabled")
-        if self.busy:
+        idle = "normal" if ready and not self.busy else "disabled"
+        for b in (self.send_btn, self.new_btn, self.dir_btn):
+            b.configure(state=idle)
+        # 止める: 頼みの途中と、モデルを読み込んでいる途中で使える
+        can_stop = (ready and self.busy) or (self.booting and self.srv is not None and not self.closing)
+        self.stop_btn.configure(state="normal" if can_stop else "disabled")
+        if self.busy or self.booting:
             self.bar.start(12)
         else:
             self.bar.stop()
 
     # ------------------------------------------------------------ 起動
     def start(self):
-        self.bar.start(12)
+        self.booting = True
+        self._buttons()
         threading.Thread(target=self._boot_thread, daemon=True).start()
 
     def _boot_thread(self):
@@ -296,6 +300,8 @@ class App:
             self._newline()
             self._append(f"{data}\n", "err")
         elif kind == "fatal":
+            self.booting = False
+            self._buttons()
             self._append(f"{data}\n", "err")
             self.state_var.set("動かせませんでした")
             self.bar.stop()
@@ -311,7 +317,10 @@ class App:
             box["ok"] = messagebox.askyesno("コマンドの実行", f"このコマンドを実行してよいですか？\n\n{command}",
                                             parent=self.root)
             ev.set()
+        elif kind == "server":
+            self._buttons()              # モデルの読み込みが始まった: 「止める」を使えるように
         elif kind == "ready":
+            self.booting = False
             self.cfg, self.srv, self.agent, self.tools = data
             if self.closing:
                 self.close()
@@ -387,6 +396,11 @@ class App:
             self.q.put(("done", None))
 
     def stop(self):
+        if self.booting and self.srv is not None:
+            self.srv.cancel_event.set()          # モデルの読み込みを止める
+            self.state_var.set("読み込みを止めています…")
+            self.stop_btn.configure(state="disabled")
+            return
         if self.busy and self.agent is not None:
             self.agent.cancel()
             self.phase = "止めています"
@@ -420,11 +434,15 @@ class App:
         self.state_var.set("終わっています… (モデルを止めています)")
         if self.agent is not None:
             self.agent.cancel()
+        if self.srv is not None:
+            self.srv.cancel_event.set()
         srv = self.srv
 
         def finish():
             if srv is not None:
                 srv.stop()
+            if self.cfg:
+                cli.unregister_app(self.cfg)
             self.q.put(("quit", None))
         threading.Thread(target=finish, daemon=True).start()
 
@@ -445,8 +463,14 @@ def default_boot(app):
             cli.apply_setup(cfg, res["home"], res["model_key"], res["tools"], res["gpu_memory"], args.config)
     cli.finish_setup(cfg, args)
 
+    cli.register_app(cfg)
+    app.cfg = cfg
+
     def hold(srv):
-        app.srv = srv              # 起動の途中で窓を閉じても、モデルを止められるように
+        app.srv = srv              # 起動の途中で窓を閉じたり「止める」を押したりしても、モデルを止められるように
+        app.q.put(("server", None))
+        if app.closing:
+            srv.cancel_event.set()
     srv = cli.start_model(cfg, args, on_server=hold)
     agent, tools = cli.make_agent(cfg, args, srv, app.confirm, on_event=app.on_event)
     return cfg, srv, agent, tools

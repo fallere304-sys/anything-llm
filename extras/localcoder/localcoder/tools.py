@@ -17,6 +17,8 @@ import subprocess
 import sys
 import threading
 
+from . import processes
+
 MAX_READ = 60_000          # 一度に読ませる文字数の上限 (文脈を食いつぶさないように)
 MAX_OUT = 12_000           # コマンドの出力は末尾をこれだけ返す
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "build", "dist", ".mypy_cache"}
@@ -62,7 +64,7 @@ class ToolError(Exception):
 
 class Tools:
     def __init__(self, workspace, env=None, shell=None):
-        self.root = os.path.abspath(workspace)
+        self.root = os.path.realpath(workspace)
         os.makedirs(self.root, exist_ok=True)
         self.env = env
         self.shell = shell or (["powershell", "-NoProfile", "-NonInteractive", "-Command"] if os.name == "nt"
@@ -77,12 +79,13 @@ class Tools:
         with self._lock:
             p = self._proc
         if p is not None:
-            _kill_tree(p)
+            kill_tree(p)
 
     # ------------------------------------------------------------ 場所
     def path(self, rel):
         rel = (rel or ".").strip().strip('"').replace("\\", "/")
-        full = os.path.abspath(os.path.join(self.root, rel))
+        # realpath: リンクやジャンクションをたどった先で判断する (作業フォルダの中のリンクから外へ抜けさせない)
+        full = os.path.realpath(os.path.join(self.root, rel))
         root = os.path.normcase(self.root)
         if os.path.normcase(full) != root and not os.path.normcase(full).startswith(root.rstrip("\\/") + os.sep):
             raise ToolError(f"作業フォルダの外には触れません: {rel}")
@@ -195,7 +198,7 @@ class Tools:
         try:
             stdout, stderr = p.communicate(timeout=max(5, min(int(timeout), 3600)))
         except subprocess.TimeoutExpired:
-            _kill_tree(p)
+            kill_tree(p)
             p.communicate()
             return f"(時間切れ: {timeout} 秒で止めました)"
         finally:
@@ -209,19 +212,9 @@ class Tools:
         return f"(終了コード {p.returncode})\n{out.strip()}"
 
 
-def _kill_tree(p):
-    """コマンドと、そこから起きたプログラムをまとめて止める。"""
-    if p.poll() is not None:
-        return
-    if os.name == "nt":
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], stdin=subprocess.DEVNULL,
-                       capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    else:
-        import signal
-        try:
-            os.killpg(p.pid, signal.SIGKILL)
-        except OSError:
-            p.kill()
+def kill_tree(p):
+    if p.poll() is None:
+        processes.kill_pid_tree(p.pid)
 
 
 def _decode(b):

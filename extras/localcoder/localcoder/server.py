@@ -17,9 +17,12 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 import urllib.request
 import zipfile
+
+from . import processes
 
 RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30"
 LATEST_PAGE = "https://github.com/ggml-org/llama.cpp/releases/latest"
@@ -189,6 +192,7 @@ class Server:
         self.home, self.port, self.ctx = home, port, ctx
         self.gpu_memory = gpu_memory
         self.shared = False             # いま共有 GPU メモリの置き方で動いているか
+        self.cancel_event = threading.Event()     # 読み込みの途中で「止める」が押された
         self.threads = threads or max(1, (os.cpu_count() or 4) // 2)
         self.say, self.popen, self.opener, self.sleep = say, popen, opener, sleep
         self.proc, self.kind = None, None
@@ -233,11 +237,20 @@ class Server:
         for shared, minimal in tries:
             self.stop()
             log = open(self.log_path, "w", encoding="utf-8", errors="replace")
+            if self.cancel_event.is_set():
+                log.close()
+                return False
             self.proc = self.popen([exe] + server_args(kind, model, self.port, self.ctx, self.threads, minimal, shared),
                                    cwd=os.path.dirname(exe), stdin=subprocess.DEVNULL, stdout=log,
-                                   stderr=subprocess.STDOUT, creationflags=CREATE_NO_WINDOW)
+                                   stderr=subprocess.STDOUT, **processes.popen_group_options())
+            processes.record_process(self.home, "llama-server", getattr(self.proc, "pid", 0))
             t0 = time.time()
             while time.time() - t0 < wait_s:
+                if self.cancel_event.is_set():
+                    log.close()
+                    self.stop()
+                    self.say("  読み込みを止めました")
+                    return False
                 if self._health():
                     break
                 if self.proc.poll() is not None:
@@ -269,6 +282,8 @@ class Server:
 
     def start_best(self, model, kinds=KINDS):
         for kind in kinds:
+            if self.cancel_event.is_set():
+                return None
             if not find_server(os.path.join(self.home, "llama", kind)):
                 continue
             self.say(f"モデルを読み込んでいます ({kind} 版)… 大きいモデルは数分かかります")
@@ -278,12 +293,9 @@ class Server:
         return None
 
     def stop(self):
-        if self.proc is not None and self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(20)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
+        if self.proc is not None:
+            processes.terminate_process_tree(self.proc)
+            processes.clear_process(self.home, "llama-server", getattr(self.proc, "pid", None))
         self.proc = None
 
 

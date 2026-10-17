@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 
-from . import models, server, toolchain, uninstall
+from . import models, processes, server, toolchain, uninstall
 from .agent import Agent, Client, ModelError, Status
 from .tools import Tools
 
@@ -233,7 +233,36 @@ def parser():
     ap.add_argument("--ctx", type=int, default=32768)
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--config", default=CONFIG)
+    ap.add_argument("--force-stop", action="store_true",
+                    help="非常停止: 動いている LocalCoder と llama-server を止める (画面が固まったときなど)")
     return ap
+
+
+def register_app(cfg):
+    """非常停止のために、この LocalCoder を記録する (1 ファイルの exe は、起動役の親と本体の子の 2 つで動く)。"""
+    home = cfg.get("home")
+    processes.record_process(home, "LocalCoder", os.getpid())
+    if getattr(sys, "frozen", False):
+        parent = processes.process_identity(os.getppid())
+        if parent and parent["image"] == os.path.normcase(os.path.realpath(sys.executable)):
+            processes.record_process(home, "LocalCoder (起動役)", os.getppid())
+
+
+def unregister_app(cfg):
+    for key in ("LocalCoder", "LocalCoder (起動役)"):
+        processes.clear_process(cfg.get("home"), key)
+
+
+def force_stop(args):
+    cfg = load(args.config)
+    homes = list(dict.fromkeys([h for h in [args.home, cfg.get("home"), *cfg.get("homes", [])] if h]))
+    if not homes:
+        say("LocalCoder の置き場所が分かりません (設定がありません)。--home で置き場所を指定してください")
+        return 1
+    for home in homes:
+        say(f"置き場所: {home}")
+        processes.force_stop(home, say)
+    return 0
 
 
 def load_config(args):
@@ -282,6 +311,8 @@ def start_model(cfg, args, on_server=None):
         on_server(srv)
     order = [cfg["kind"]] + [k for k in kinds if k != cfg.get("kind")] if cfg.get("kind") in kinds else kinds
     kind = srv.start_best(model, order)
+    if not kind and srv.cancel_event.is_set():
+        raise StartError(6, "モデルの読み込みを止めました")
     if not kind:
         raise StartError(3, f"モデルを動かせませんでした。記録: {srv.log_path}")
     cfg["kind"], cfg["shared_now"], cfg["_path"] = kind, srv.shared, args.config
@@ -332,15 +363,19 @@ def main(argv=None):
             sys.stdout.reconfigure(errors="replace")
         else:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if args.force_stop:
+        return force_stop(args)
     interactive = sys.stdin is not None and sys.stdin.isatty() and not args.task
     cfg = load_config(args)
     if needs_setup(cfg, args):
         cfg = setup(cfg, interactive, args.model_key, args.config)
     finish_setup(cfg, args)
+    register_app(cfg)
     try:
         srv = start_model(cfg, args)
     except StartError as e:
         say(str(e))
+        unregister_app(cfg)
         return e.code
     state = {"auto": bool(args.yes)}
     status = Status(lambda t: print(t, end="", flush=True)) if sys.stdout.isatty() else None
@@ -358,6 +393,7 @@ def main(argv=None):
         return 4
     finally:
         srv.stop()
+        unregister_app(cfg)
 
 
 if __name__ == "__main__":
