@@ -76,6 +76,34 @@ LocalCoderUninstall.exe                取り除いて、入れる前の姿に�
 - 外へ出る通信は、準備のときの取得 (llama.cpp・モデル・Python) だけ。頼みごと・コード・結果は外に出ない
 - 記録: `<置き場所>\logs\llama-server.log`
 
+## USB オールインワン (インターネットにつながらない PC へ導入する)
+
+ネットにつながる PC で 1 回だけ USB を作り、オフラインの PC ではその USB から導入する。追加のダウンロードは一切しない。
+
+```
+LocalCoderCLI.exe --make-bundle E:\LocalCoder --models standard,small     (ネットにつながる PC で)
+```
+
+USB には exe 3 つ・`非常停止.bat`・`はじめにお読みください.txt` と `bundle\` が入る:
+llama.cpp (cuda / vulkan / cpu)・選んだモデル・Python 3.12.10 の導入器・PyInstaller と依存の wheel (Windows・Python 3.12 用。
+作る PC に Python は要らない)・Visual C++ の実行部品。
+
+オフラインの PC では USB の `LocalCoder.exe` を開いて置き場所を選ぶだけ。USB から写して導入し、選べるモデルは USB に入れたものだけ。
+外へ取りに行こうとしたら、その場で止めて「USB に入っていない」と知らせる。取り除き (`LocalCoderUninstall.exe`) は USB の中身を消さない。
+
+- オフラインでは追加のライブラリ (pandas・openpyxl など) を入れられない。作れるのは Python の標準機能と tkinter の範囲
+- 要る空き: USB はモデルの大きさ + 約 3 GB。導入先の PC も同じくらい
+
+## 非常停止
+
+画面ごと固まったときは `非常停止.bat` (= `LocalCoderCLI.exe --force-stop`)。LocalCoder と llama-server を起動時に
+「実行ファイルのパス・起動した時刻」と一緒に記録しておき、記録と一致するプロセスだけを止める (番号が使い回された別のプログラムは止めない)。
+「■ 止める」は返事・コマンド・モデルの読み込みのどれでも使える。
+
+## 資料
+
+`docs/` に Word の資料 3 種 (パンフレット・仕様書・伝わる頼み方とできること)。`docs/src/` の node スクリプトで作り直せる。
+
 ## 取り除く (原状回復)
 
 `LocalCoderUninstall.exe` を実行すると、消すものを一覧で見せ、確かめてから消し、最後に「残っていないか」を確かめる。

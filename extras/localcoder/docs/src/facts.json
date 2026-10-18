@@ -1,0 +1,13 @@
+{
+  "version": "1.0 (統合版)",
+  "date": "2026年10月18日",
+  "commit": "f95771f",
+  "testEnv": "Windows Server 2025 の試験機 (CPU 2 コア・GPU なし) と軽いモデル (Qwen3 4B)",
+  "models": [
+    {"key": "standard", "label": "Qwen3-Coder 30B-A3B (標準)", "gb": 19, "use": "ふだん使い。1〜数ファイルの道具。メモリ 16GB 以上", "license": "Apache-2.0"},
+    {"key": "large", "label": "gpt-oss 120B (大)", "gb": 64, "use": "より難しい頼み。SSD から読みながら動くため、とても遅い", "license": "Apache-2.0"},
+    {"key": "huge", "label": "GLM-4.5-Air 106B (最大)", "gb": 70, "use": "道具の使い方が上手。1 回の返事に数十分のことも", "license": "MIT"},
+    {"key": "small", "label": "Qwen3 4B (軽い)", "gb": 2.6, "use": "速い。1 ファイルの簡単な道具まで。メモリ 8GB でも可", "license": "Apache-2.0"},
+    {"key": "tiny", "label": "Qwen2.5-Coder 1.5B (試用)", "gb": 1.2, "use": "動作確認用。簡単なことだけ", "license": "Apache-2.0"}
+  ]
+}
