@@ -14,7 +14,6 @@ import fnmatch
 import os
 import re
 import subprocess
-import sys
 import threading
 
 from . import processes
@@ -122,8 +121,8 @@ class Tools:
         full = self.path(path)
         if not os.path.isfile(full):
             raise ToolError(f"ファイルがありません: {path}")
-        with open(full, encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
+        with open(full, "rb") as f:
+            lines = _decode(f.read()).splitlines()          # UTF-8 でなければ Shift_JIS (日本の CSV に多い) として読む
         s = max(1, int(start or 1))
         e = min(len(lines), int(end or len(lines)))
         body = "\n".join(f"{i:5}  {lines[i - 1]}" for i in range(s, e + 1))
@@ -218,7 +217,7 @@ def kill_tree(p):
 
 
 def _decode(b):
-    for enc in ("utf-8-sig", "cp932" if sys.platform == "win32" else "latin-1"):
+    for enc in ("utf-8-sig", "cp932"):
         try:
             return b.decode(enc)
         except UnicodeDecodeError:

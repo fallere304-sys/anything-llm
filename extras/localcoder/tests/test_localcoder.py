@@ -37,6 +37,11 @@ class ToolsTest(unittest.TestCase):
             self.t.write_file("link/escape.txt", "x")
         self.assertFalse(os.path.exists(os.path.join(outside, "escape.txt")))
 
+    def test_reads_shift_jis_files(self):
+        with open(os.path.join(self.tmp, "karte.csv"), "wb") as f:
+            f.write("患者ID,実施内容\n001,身体拘束\n".encode("cp932"))
+        self.assertIn("身体拘束", self.t.read_file("karte.csv"))
+
     def test_write_read_edit(self):
         self.t.write_file("src/app.py", "a = 1\nb = 2\n")
         self.assertIn("    1  a = 1", self.t.read_file("src/app.py"))
