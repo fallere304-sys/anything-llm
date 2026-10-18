@@ -349,6 +349,71 @@ class BundleTest(unittest.TestCase):
         with self.assertRaises(OSError):
             models.siblings("someone/model")
 
+    def fake_sources(self, pypi=None):
+        """GitHub (llama.cpp)・Hugging Face (モデル)・python.org (導入器) の偽物。pypi を渡せば PyPI はそちらへ。"""
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("llama-server.exe" if os.name == "nt" else "llama-server", "server")
+            z.writestr("ggml.dll", "x")
+        llama_zip = buf.getvalue()
+        releases = [{"tag_name": "b9999", "assets": [
+            {"name": "llama-b9999-bin-win-cpu-x64.zip", "browser_download_url": "https://gh/cpu.zip"}]}]
+        tiny = models.by_key("tiny")
+
+        class Resp(io.BytesIO):
+            status = 200
+            headers = {}
+
+            def geturl(self):
+                return "https://github.com/ggml-org/llama.cpp/releases/tag/b9999"
+
+        def opener(req, timeout=None):
+            url = req if isinstance(req, str) else req.full_url
+            if url.startswith("https://pypi.org/"):
+                return pypi(req, timeout=timeout)
+            if url.startswith("https://files/"):
+                return Resp(b"wheel")
+            if "api.github.com" in url:
+                return Resp(json.dumps(releases).encode())
+            if url == "https://gh/cpu.zip":
+                return Resp(llama_zip)
+            if url.startswith(models.API):
+                return Resp(json.dumps({"siblings": [{"rfilename": "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"}]}).encode())
+            if "huggingface.co" in url:
+                return Resp(b"GGUF" + b"1" * 2000)
+            if "python.org" in url:
+                return Resp(b"MZ installer")
+            raise AssertionError(f"思わぬ取得: {url}")
+        return opener, tiny
+
+    def test_make_bundle_then_prepare_offline(self):
+        pypi = self.fake_pypi({"pyinstaller": {"6.1.0": ("py3-none-win_amd64", ["altgraph"])},
+                               "altgraph": {"0.17.5": ("py2.py3-none-any", [])}})
+        opener, tiny = self.fake_sources(pypi)
+        usb = os.path.join(tempfile.mkdtemp(), "USB")
+        exe_dir = tempfile.mkdtemp()
+        for name in bundle.EXES:
+            open(os.path.join(exe_dir, name), "w").close()
+        b = bundle.make(usb, ["tiny"], ["cpu"], say=lambda *a, **k: None, opener=opener, exe_dir=exe_dir)
+        for name in bundle.EXES + ["非常停止.bat", "はじめにお読みください.txt"]:
+            self.assertTrue(os.path.exists(os.path.join(usb, name)), name)
+        m = bundle.manifest(b)
+        self.assertEqual(m["kinds"], ["cpu"])
+        self.assertEqual(list(m["models"]), ["tiny"])
+        self.assertEqual(sorted(m["wheels"]), ["altgraph-0.17.5-py2.py3-none-any.whl", "pyinstaller-6.1.0-py3-none-win_amd64.whl"])
+        with open(os.path.join(usb, "非常停止.bat"), encoding="utf-8-sig") as f:
+            self.assertIn("--force-stop", f.read())
+        # オフラインの PC: USB から導入。外へは一度も取りに行かない
+        home = tempfile.mkdtemp()
+        args = cli.parser().parse_args(["--bundle", b, "--config", os.path.join(tempfile.mkdtemp(), "c.json")])
+        cfg = {"home": home, "toolchain": False}
+        model = cli.prepare(cfg, args, list(server.KINDS))
+        self.assertTrue(model.endswith("qwen2.5-coder-1.5b-instruct-q4_k_m.gguf") and os.path.getsize(model) == 2004)
+        self.assertTrue(server.find_server(os.path.join(home, "llama", "cpu")))
+        installer, wheels = bundle.toolchain_sources(b)
+        self.assertTrue(installer.endswith("python-3.12.10-amd64.exe") and os.path.isdir(wheels))
+
     def test_uninstall_keeps_the_usb_copy(self):
         b = self.make_bundle_dir()
         exe = os.path.join(os.path.dirname(b), "LocalCoder.exe")
