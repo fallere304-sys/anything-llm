@@ -1,0 +1,393 @@
+<meta charset="utf-8">
+<title>ケアトモ採用検討資料</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
+<style>
+/* Layout: A4横1枚。上段=判断の問いと要点3つ／中段=記録経路の構造 → 導入方針A・B（資料の中心）／下段=会議で確認する5論点／最下段=結論帯。
+   画面幅が狭いときは1列に組み替え、印刷時は常にA4横・ライト配色。 */
+:root{
+  --desk:#E6ECEE; --paper:#FFFFFF; --ink:#1A2830; --muted:#53636D; --line:#CFD9DD; --wash:#F2F5F6;
+  --brand:#1C5A69; --brand-soft:#E3EEF0;
+  --a:#16707A; --a-soft:#E5F1F1;
+  --b:#4B5B77; --b-soft:#EBEEF4;
+  --warn:#94550F; --warn-soft:#FAEFDF;
+  --ok:#23704F; --ok-soft:#E4F1EA;
+  --band:#1C5A69; --on-band:#FFFFFF; --on-band-muted:#C9E0E5;
+  --font-body:"BIZ UDPGothic","BIZ UDPゴシック","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic","Meiryo","Noto Sans JP",sans-serif;
+}
+@media screen and (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --desk:#0C1215; --paper:#141C20; --ink:#E1E9EC; --muted:#9BABB4; --line:#2D3B42; --wash:#1A2429;
+    --brand:#79B9C6; --brand-soft:#192C31;
+    --a:#6CBFC5; --a-soft:#152B2D;
+    --b:#A3B2CD; --b-soft:#1D2331;
+    --warn:#E3A862; --warn-soft:#2C2216;
+    --ok:#74C99F; --ok-soft:#16291F;
+    --band:#1F4C57; --on-band:#F1F7F8; --on-band-muted:#B9D4DA;
+    color-scheme:dark;
+  }
+}
+@media screen{
+  :root[data-theme="dark"]{
+    --desk:#0C1215; --paper:#141C20; --ink:#E1E9EC; --muted:#9BABB4; --line:#2D3B42; --wash:#1A2429;
+    --brand:#79B9C6; --brand-soft:#192C31;
+    --a:#6CBFC5; --a-soft:#152B2D;
+    --b:#A3B2CD; --b-soft:#1D2331;
+    --warn:#E3A862; --warn-soft:#2C2216;
+    --ok:#74C99F; --ok-soft:#16291F;
+    --band:#1F4C57; --on-band:#F1F7F8; --on-band-muted:#B9D4DA;
+    color-scheme:dark;
+  }
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--desk);color:var(--ink);font-family:var(--font-body);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+h1,h2,h3,p,ul,ol{margin:0}
+ul,ol{padding:0;list-style:none}
+b{font-weight:700}
+
+/* ---------- 基本（狭い画面）：1列 ---------- */
+.desk{padding-block:20px;padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px))}
+.sheet{max-width:760px;margin:0 auto;background:var(--paper);font-size:15px;line-height:1.6;padding:20px;display:flex;flex-direction:column;gap:20px;border:1px solid var(--line)}
+.sheet > *{min-width:0}
+
+.kicker{font-size:.8em;color:var(--brand);font-weight:700;letter-spacing:.04em}
+h1{font-size:1.55em;line-height:1.3;font-weight:700;text-wrap:balance;margin-top:.25em}
+.lead{color:var(--muted);margin-top:.5em;font-size:.92em}
+.head{display:grid;gap:14px}
+.keys{background:var(--brand-soft);border-left:3px solid var(--brand);padding:.7em .9em}
+.keys-h{font-size:.78em;font-weight:700;color:var(--brand);letter-spacing:.06em}
+.keys ol{counter-reset:k;display:grid;gap:.25em;margin-top:.3em}
+.keys li{counter-increment:k;display:grid;grid-template-columns:1.35em 1fr;align-items:start;font-size:.95em;line-height:1.45}
+.keys li::before{content:counter(k);display:inline-grid;place-items:center;width:1.15em;height:1.15em;margin-top:.12em;border-radius:50%;background:var(--brand);color:var(--paper);font-size:.78em;font-weight:700}
+.keys b{color:var(--brand)}
+
+h2{font-size:1.08em;font-weight:700;line-height:1.35;display:flex;align-items:baseline;gap:.5em;flex-wrap:wrap;text-wrap:balance}
+.eyebrow{font-size:.7em;font-weight:700;letter-spacing:.12em;color:var(--paper);background:var(--muted);padding:.12em .45em;border-radius:2px;flex:none}
+h2 small{font-size:.72em;font-weight:400;color:var(--muted)}
+
+.tag{display:inline-block;font-size:.72em;font-weight:700;line-height:1;padding:.22em .4em .2em;border-radius:2px;vertical-align:.08em;white-space:nowrap;margin:0 .15em}
+.t-fact{background:var(--brand);color:var(--paper);border:1px solid var(--brand)}
+.t-inf{color:var(--warn);border:1px solid var(--warn);background:var(--paper)}
+.t-unk{color:var(--muted);border:1px dashed var(--muted);background:var(--paper)}
+.t-top{background:var(--warn);color:var(--paper);border:1px solid var(--warn)}
+
+.arr{display:block;width:100%;height:auto;color:var(--muted)}
+
+/* 構造パネル */
+.story{display:grid;gap:14px}
+.panel{display:flex;flex-direction:column;gap:.7em;min-width:0}
+.lanes{display:grid;gap:.45em}
+.lane{display:grid;grid-template-columns:1fr 1.8em 1fr;align-items:center;gap:.3em}
+.route{border:1px solid var(--line);background:var(--wash);padding:.4em .6em;font-weight:700;line-height:1.3}
+.route small{display:block;font-weight:400;font-size:.82em;color:var(--muted);margin-top:.1em}
+.out{padding:.45em .6em;font-weight:700;line-height:1.3;display:flex;align-items:center;gap:.35em;flex-wrap:wrap}
+.out svg{width:1.05em;height:1.05em;flex:none}
+.out-ok{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok)}
+.out-ng{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn)}
+.out .tag{margin-left:auto}
+.lane-note{font-size:.9em;color:var(--ink);padding:.35em .6em;border-left:2px solid var(--warn);background:var(--wash);line-height:1.5}
+
+.chain{display:grid;grid-template-columns:1fr;gap:.4em}
+.chain .arr{width:1.6em;transform:rotate(90deg);margin:0 auto}
+.mini-h{font-size:.8em;font-weight:700;color:var(--muted);letter-spacing:.05em;margin-bottom:.2em}
+.bul li{position:relative;padding-left:.95em;line-height:1.4}
+.bul li + li{margin-top:.18em}
+.bul li::before{content:"";position:absolute;left:.15em;top:.62em;width:.36em;height:.36em;border-radius:50%;background:currentColor;opacity:.55}
+.facts,.risks{padding:.45em .6em}
+.facts{background:var(--wash)}
+.risks{border:1px dashed var(--warn)}
+.risks .mini-h{color:var(--warn)}
+.keyline{background:var(--brand);color:var(--paper);font-weight:700;padding:.45em .7em;line-height:1.35}
+
+.bridge{display:flex;justify-content:center;color:var(--brand)}
+.bridge svg{width:2.2em;height:2.2em;transform:rotate(90deg)}
+
+/* 判断パネル（資料の中心） */
+.decide{border:2px solid var(--brand);padding:.8em;background:var(--paper)}
+.decide h2{color:var(--brand)}
+.decide h2 .eyebrow{background:var(--brand)}
+.plans{display:grid;gap:.7em}
+.plan{border:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+.plan-cond{font-size:.78em;font-weight:700;padding:.25em .7em;color:var(--paper);letter-spacing:.04em}
+.plan-a .plan-cond{background:var(--a)}
+.plan-b .plan-cond{background:var(--b)}
+.plan h3{font-size:1.05em;font-weight:700;line-height:1.3;padding:.45em .7em .35em;display:flex;align-items:center;gap:.45em}
+.plan-a h3{color:var(--a)}
+.plan-b h3{color:var(--b)}
+.plan-id{flex:none;display:inline-grid;place-items:center;width:1.5em;height:1.5em;font-size:1.05em;border:2px solid currentColor;border-radius:3px;font-weight:700}
+.plan .bul{padding:0 .7em .45em}
+.plan-a .bul li::before{background:var(--a);opacity:1}
+.plan-b .bul li::before{background:var(--b);opacity:1}
+.gain,.need,.note{padding:.4em .7em;line-height:1.4}
+.gain{margin-top:auto}
+.plan-a .gain{background:var(--a-soft)}
+.plan-b .gain{background:var(--b-soft)}
+.gain b,.need b{display:block;font-size:.8em;letter-spacing:.04em}
+.plan-a .gain b{color:var(--a)}
+.plan-b .gain b{color:var(--b)}
+.need{border-top:1px dashed var(--line)}
+.need b{color:var(--muted)}
+.note{font-size:.88em;color:var(--muted);border-top:1px dashed var(--line)}
+
+/* 5論点 */
+.issues{display:flex;flex-direction:column;gap:.6em}
+.cards{display:grid;gap:.6em}
+.card{border:1px solid var(--line);border-top:3px solid var(--muted);padding:.5em .6em .55em;display:flex;flex-direction:column;gap:.35em;min-width:0;font-size:.93em}
+.card-h{display:flex;align-items:center;gap:.4em;font-weight:700;font-size:.92em;color:var(--muted)}
+.card-n{font-size:1.25em;line-height:1;color:var(--ink)}
+.card-h .tag{margin-left:auto}
+.q{font-weight:700;line-height:1.4;font-size:1.06em;text-wrap:pretty}
+.ev{line-height:1.4}
+.ev + .ev{margin-top:-.1em}
+.ask{border-top:1px dashed var(--line);padding-top:.3em;display:grid;gap:.12em}
+.ask li{position:relative;padding-left:.95em;line-height:1.4}
+.ask li::before{content:"";position:absolute;left:.1em;top:.42em;border-left:.42em solid var(--brand);border-top:.27em solid transparent;border-bottom:.27em solid transparent}
+.card-top{border-color:var(--warn);border-top-color:var(--warn);border-top-width:3px;background:var(--warn-soft)}
+.card-top .card-h{color:var(--warn)}
+.card-top .ask{border-top-color:var(--warn)}
+.chips{display:flex;flex-wrap:wrap;gap:.22em;margin-top:.15em}
+.chips span{font-size:.92em;border:1px solid var(--line);background:var(--wash);padding:.05em .35em;line-height:1.45}
+
+/* 結論 */
+.conclusion{background:var(--band);color:var(--on-band);padding:.8em 1em;display:grid;gap:.6em}
+.c-label{font-size:.75em;font-weight:700;letter-spacing:.2em;color:var(--on-band-muted)}
+.c-main{font-weight:700;font-size:1.12em;line-height:1.45;text-wrap:balance}
+.c-main em{font-style:normal;border-bottom:2px solid var(--on-band-muted)}
+.c-branches{display:grid;gap:.3em}
+.c-branches li{display:flex;flex-wrap:wrap;gap:.1em .4em;align-items:center;line-height:1.4;font-size:.95em}
+.c-if{font-weight:400;color:var(--on-band-muted)}
+.c-branches svg{width:1.4em;height:auto;color:var(--on-band-muted)}
+.c-then{font-weight:700}
+
+.legend{font-size:.78em;color:var(--muted);display:flex;flex-wrap:wrap;gap:.2em 1em;align-items:center;line-height:1.5}
+.legend .tag{margin-right:.3em}
+
+/* ---------- A4横シート（印刷・広い画面） ---------- */
+@media print, screen and (min-width:1180px){
+  .desk{padding-block:28px}
+  .sheet{width:297mm;max-width:none;height:210mm;overflow:hidden;font-size:8pt;line-height:1.42;padding:5mm 9mm 4.6mm;gap:2.1mm;display:grid;grid-template-rows:auto 1fr auto auto auto;border:none;box-shadow:0 2px 14px rgba(20,40,50,.18)}
+
+  .head{grid-template-columns:1fr 106mm;gap:5mm;align-items:stretch;padding-bottom:2mm;border-bottom:1px solid var(--line)}
+  .kicker{font-size:7.6pt}
+  h1{font-size:17pt;margin-top:.8mm}
+  .lead{font-size:8.2pt;margin-top:1mm;line-height:1.5}
+  .keys{padding:1.6mm 3mm;display:flex;flex-direction:column;justify-content:center}
+  .keys-h{font-size:7.2pt}
+  .keys ol{margin-top:.8mm;gap:.7mm}
+  .keys li{font-size:8.5pt;line-height:1.4;white-space:nowrap}
+
+  h2{font-size:10pt}
+
+  .story{grid-template-columns:100mm 6mm 1fr;gap:0;align-items:stretch;min-height:0}
+  .why{gap:1.8mm;padding-right:1mm}
+  .lanes{gap:1.3mm}
+  .lane{grid-template-columns:1fr 6mm 1fr;gap:1mm}
+  .route,.out{font-size:8.4pt}
+  .lane-note{font-size:7.7pt}
+  .chain{grid-template-columns:1fr 4mm 1fr;gap:1mm;align-items:stretch}
+  .chain .arr{width:4mm;transform:none;align-self:center}
+  .facts,.risks{font-size:7.8pt;padding:1.4mm 2.2mm}
+  .keyline{font-size:9pt;padding:1.6mm 2.4mm;margin-top:auto}
+  .bridge{align-items:center}
+  .bridge svg{width:6mm;height:10mm;transform:none}
+
+  .decide{padding:2.6mm 3mm 3mm;gap:2mm}
+  .plans{grid-template-columns:1fr 1fr;gap:2.6mm;flex:1}
+  .plan{font-size:7.95pt}
+  .plan h3{font-size:9.6pt}
+  .plan .bul li + li{margin-top:.5mm}
+
+  .issues{gap:1.6mm}
+  .cards{grid-template-columns:repeat(5,1fr);gap:2.2mm}
+  .card{font-size:7.35pt;line-height:1.42;padding:1.4mm 2mm 1.6mm;gap:.9mm}
+  .q{font-size:8.1pt}
+
+  .conclusion{grid-template-columns:auto minmax(0,1.05fr) minmax(0,1fr);align-items:center;gap:5mm;padding:1.8mm 4.5mm}
+  .c-label{writing-mode:vertical-rl;letter-spacing:.3em;font-size:7.5pt;padding-right:3mm;border-right:1px solid var(--on-band-muted);align-self:stretch;display:flex;align-items:center;justify-content:center}
+  .c-main{font-size:10.4pt}
+  .c-branches{font-size:8.4pt}
+  .c-branches li{display:grid;grid-template-columns:auto 1.4em 1fr;gap:.3em}
+  .legend{font-size:6.9pt}
+}
+
+@media print{
+  @page{size:A4 landscape;margin:0}
+  html,body{background:#fff}
+  .desk{padding:0}
+  .sheet{box-shadow:none;margin:0}
+}
+
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="desk">
+<main class="sheet" aria-label="ケアトモ採用検討資料">
+
+  <header class="head">
+    <div>
+      <p class="kicker">ケアトモ（音声文字起こし・記録支援システム）採用会議　検討資料｜2026年11月</p>
+      <h1>ケアトモの価値を引き出せる環境を、当院は整備できるか</h1>
+      <p class="lead">本資料は採用に反対するものではありません。ケアトモは文字起こしに加え、記録の要約機能にも価値がある製品です。製品単体の性能だけでなく、当院が実現できる導入形態との適合性で判断するための論点を整理しました。</p>
+    </div>
+    <aside class="keys" aria-label="この資料の要点">
+      <p class="keys-h">この資料の要点</p>
+      <ol>
+        <li><span>要約機能を生かす鍵は<b>「記録経路の統一」</b></span></li>
+        <li><span>統一には<b>電子カルテ連携・改修</b>と<b>業務フロー変更</b>が必要になりうる</span></li>
+        <li><span>難しければ、<b>他の音声入力製品も含めて選定し直す</b>合理性がある</span></li>
+      </ol>
+    </aside>
+  </header>
+
+  <section class="story">
+    <div class="panel why">
+      <h2><span class="eyebrow">構造</span>要約に入るかは「どの経路で記録したか」で決まる</h2>
+      <div class="lanes">
+        <div class="lane">
+          <div class="route">ケアトモ経由で記録<small>音声入力／ケアトモ上での手入力</small></div>
+          <svg class="arr" viewBox="0 0 24 12" aria-hidden="true"><path d="M1 6h19" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M15.5 1.8 21.5 6l-6 4.2" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
+          <div class="out out-ok"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4.6 8.3 7 10.6l4.4-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>要約の対象<span class="tag t-fact">確認済</span></div>
+        </div>
+        <div class="lane">
+          <div class="route">電子カルテに直接入力<small>従来どおりの記録方法</small></div>
+          <svg class="arr" viewBox="0 0 24 12" aria-hidden="true"><path d="M1 6h19" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M15.5 1.8 21.5 6l-6 4.2" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
+          <div class="out out-ng"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.4 5.4l5.2 5.2M10.6 5.4l-5.2 5.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>要約の対象外<span class="tag t-fact">確認済</span></div>
+        </div>
+        <p class="lane-note">対象外の記録も手作業で要約に追加できる<span class="tag t-fact">確認済</span>が、探して追加する手間と、多忙時・急な転院時の追加漏れが生じうる<span class="tag t-inf">推定</span></p>
+      </div>
+      <div class="chain">
+        <div class="facts">
+          <p class="mini-h">当院の現状</p>
+          <ul class="bul">
+            <li>ナースステーションに戻ってからの後追い記録が基本</li>
+            <li>ノートPC型端末は各部署1〜3台（日勤4〜7名）、他はデスクトップ型</li>
+            <li>情報システム部門がなく、IT対応力は限定的</li>
+          </ul>
+        </div>
+        <svg class="arr" viewBox="0 0 24 12" aria-hidden="true"><path d="M1 6h19" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M15.5 1.8 21.5 6l-6 4.2" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
+        <div class="risks">
+          <p class="mini-h">このまま導入すると<span class="tag t-inf">推定</span></p>
+          <ul class="bul">
+            <li>導入するだけで記録方式が変わるとは限らない</li>
+            <li>直接入力が残れば、工程の少ない従来の方法が選ばれやすい</li>
+            <li>利用が任意になり、要約の対象外となる記録が増える</li>
+          </ul>
+        </div>
+      </div>
+      <p class="keyline">要約機能を生かす鍵は「記録経路の統一」</p>
+    </div>
+
+    <div class="bridge" aria-hidden="true">
+      <svg viewBox="0 0 12 20"><path d="M2 2l8 8-8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+
+    <div class="panel decide">
+      <h2><span class="eyebrow">判断の分岐</span>電子カルテとの連携・端末整備・記録経路の一元化を、当院で実現できるか</h2>
+      <div class="plans">
+        <article class="plan plan-a">
+          <p class="plan-cond">実現できる場合</p>
+          <h3><span class="plan-id">A</span>ケアトモを中心に記録業務を再設計する</h3>
+          <ul class="bul">
+            <li>電子カルテとの連携（可否は電子カルテメーカー次第<span class="tag t-fact">確認済</span>）</li>
+            <li>端末整備：ノートPC化と台数確保、医師のPCにも導入</li>
+            <li>記録入力をケアトモに原則一元化（電子カルテ上での直接の新規作成は原則制限）</li>
+            <li>修正履歴・監査証跡の保存、緊急時・障害時の代替入力経路の確保</li>
+            <li>医師・看護師を含めた業務フローの再設計</li>
+          </ul>
+          <p class="gain"><b>期待する成果</b>文字起こしに加え、記録の蓄積・統合・要約まで含めた業務改善</p>
+          <p class="need"><b>必要な準備<span class="tag t-unk">要確認</span></b>電子カルテメーカーとの調整、改修・端末整備の費用と期間、導入後の院内運用管理の担い手</p>
+        </article>
+        <article class="plan plan-b">
+          <p class="plan-cond">難しい場合</p>
+          <h3><span class="plan-id">B</span>大規模な電子カルテ改修を行わない</h3>
+          <ul class="bul">
+            <li>現状の電子カルテ運用を基本的に維持</li>
+            <li>音声入力の利用範囲を限定</li>
+            <li>要約機能の活用範囲を限定</li>
+            <li>SpeechERなど、電子カルテとの深い連携を前提としない音声入力製品も同じ条件で比較（比較項目は論点⑤）</li>
+          </ul>
+          <p class="gain"><b>期待する成果</b>大規模なシステム改修を避け、音声入力による記録負担の部分的な軽減</p>
+          <p class="note">Bは劣った選択ではありません。投資可能額や運用体制によっては合理的な選択肢です。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="issues">
+    <h2><span class="eyebrow">確認</span>採用会議で確認したい5つの論点<small>太字＝管理層への問い　▶＝ベンダー・院内に確認したいこと</small></h2>
+    <div class="cards">
+      <article class="card">
+        <p class="card-h"><span class="card-n">①</span>精度改善の見通し</p>
+        <p class="q">今後の精度改善を、どこまで期待できるか</p>
+        <p class="ev"><span class="tag t-fact">確認済</span>文字起こしは既製モデル（独自の追加学習なし）、補正モデルは独自改良。薬剤名は課題が残る（頻出薬の一部は対応済）。改善は導入施設の情報で順次対応</p>
+        <p class="ev"><span class="tag t-inf">推定</span>導入施設が少ないと誤認識事例の収集機会も限られうる（施設数と改善力が比例するとは限らない）</p>
+        <ul class="ask">
+          <li>誤認識データの収集量と改善への反映方法</li>
+          <li>改善頻度・実装までの期間、他製品との差</li>
+        </ul>
+      </article>
+      <article class="card">
+        <p class="card-h"><span class="card-n">②</span>医療安全</p>
+        <p class="q">人による確認を前提とした設計で、多忙な現場でも安全を保てるか</p>
+        <p class="ev"><span class="tag t-fact">確認済</span>確定前に看護師が確認し「確認済」ボタンを押す運用。システムで分かるのは押した事実までで、読んだかは分からない。修正履歴は残る</p>
+        <p class="ev"><span class="tag t-inf">推定</span>多忙時ほど確認が不十分になりうる。懸念は誤りが正式な記録として確定すること</p>
+        <ul class="ask">
+          <li>多忙時の確認漏れをどう防ぐか</li>
+          <li>人の確認以外に誤りを検知する仕組みはあるか</li>
+        </ul>
+      </article>
+      <article class="card">
+        <p class="card-h"><span class="card-n">③</span>要約の網羅性</p>
+        <p class="q">要約の完全性を、人による情報探索と追加作業に依存させてよいか</p>
+        <p class="ev"><span class="tag t-fact">確認済</span>ケアトモを介さず電子カルテに直接入力した記録は要約の対象外。手作業での追加は可能</p>
+        <p class="ev"><span class="tag t-inf">推定</span>探して追加する業務が増え、多忙時や急な転院時に漏れが起こりうる。負担は定着率の低下にもつながりうる</p>
+        <ul class="ask">
+          <li>ケアトモ外の記録を要約へ自動反映できるか</li>
+          <li>手作業の補完を前提としない運用は可能か</li>
+        </ul>
+      </article>
+      <article class="card card-top">
+        <p class="card-h"><span class="card-n">④</span>電子カルテ連携<span class="tag t-top">最重要</span></p>
+        <p class="q">ケアトモを導入するだけか、ケアトモを中心に記録業務を再設計するか</p>
+        <p class="ev"><span class="tag t-fact">確認済</span>連携可否は電子カルテメーカー次第。ケアトモ側から従来どおりの手入力記録も作成できる</p>
+        <p class="ev"><span class="tag t-inf">推定</span>直接入力が残れば工程の少ない従来の方法が選ばれ、利用率が下がりうる</p>
+        <ul class="ask">
+          <li>メーカーとの連携・改修の検討状況</li>
+          <li>端末整備・改修の費用と期間の見込み</li>
+          <li>標準の入力経路にする構想と、導入後の運用管理の担い手</li>
+        </ul>
+      </article>
+      <article class="card">
+        <p class="card-h"><span class="card-n">⑤</span>他製品との比較</p>
+        <p class="q">当院が実現できる導入環境に対して、最適な製品を選んでいるか</p>
+        <p class="ev"><span class="tag t-unk">要確認</span>SpeechERなど他製品の性能・機能は未確認。現時点で優劣は判断しない</p>
+        <ul class="ask">
+          <li>同じ条件で比較したか
+            <div class="chips"><span>文字起こし精度</span><span>薬剤名への対応</span><span>確認・修正の負担</span><span>電子カルテ連携の要件</span><span>要約の有無と網羅性</span><span>操作工程数</span><span>導入・運用費用</span><span>院内の管理・保守負担</span></div>
+          </li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section class="conclusion" aria-label="結論">
+    <p class="c-label">結論</p>
+    <p class="c-main">判断すべきは「ケアトモを採用するか」だけではありません。<em>「当院はケアトモの価値を最大限に引き出せる環境を整備できるのか」</em>です。</p>
+    <ul class="c-branches">
+      <li><span class="c-if">電子カルテ連携・業務フロー変更まで実現する</span><svg viewBox="0 0 24 12" aria-hidden="true"><path d="M1 6h19" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M15.5 1.8 21.5 6l-6 4.2" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/></svg><span class="c-then">ケアトモの採用を前向きに検討する価値がある</span></li>
+      <li><span class="c-if">それらの実現が困難</span><svg viewBox="0 0 24 12" aria-hidden="true"><path d="M1 6h19" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M15.5 1.8 21.5 6l-6 4.2" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/></svg><span class="c-then">現状の業務フローに適合する他製品と比較検討する</span></li>
+    </ul>
+  </section>
+
+  <footer class="legend">
+    <span><span class="tag t-fact">確認済</span>トライアル・ベンダー説明で確認した事項</span>
+    <span><span class="tag t-inf">推定</span>当院の現状から想定される影響（未検証）</span>
+    <span><span class="tag t-unk">要確認</span>未確認で、今後の確認が必要な事項</span>
+    <span>本資料は特定製品の優劣を示すものではありません。</span>
+  </footer>
+
+</main>
+</div>
