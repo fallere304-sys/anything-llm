@@ -38,8 +38,8 @@ final class MotionDetector {
     /** Variance (luma^2) below which a pattern is "flat". */
     private static final float MIN_VAR = 4f;
     /** A cell's residual std must exceed noise * K + C to count. */
-    private static final float NOISE_K = 2.5f;
-    private static final float NOISE_C = 1.5f;
+    private static final float NOISE_K = 2.0f;
+    private static final float NOISE_C = 1.0f;
     private static final float NOISE_CAP = 14f;
     private static final float ILLUM_RATIO = 0.35f;
     private static final float ILLUM_COHERENCE = 0.90f;

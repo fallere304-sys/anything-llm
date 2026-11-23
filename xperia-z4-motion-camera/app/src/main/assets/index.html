@@ -939,7 +939,7 @@
       var txt = (STATE[s.state] || s.state) + '  電池 ' + (s.battery >= 0 ? s.battery + '%・' : '') + s.tempC.toFixed(1) + '℃'
         + (s.power ? '（' + s.power + '）' : (s.charging ? '（充電中）' : '')) + '  空き ' + (s.freeBytes / 1e9).toFixed(1) + ' GB';
       if (s.mode) {
-        txt += '  ［' + (s.mode === 'person' ? '人を認識' + (s.person && s.state !== 'paused' && s.state !== 'stopped' && s.state !== 'cooling' ? (s.person.present ? '・人あり' : '・人なし') : '') : '動体検知') + '］';
+        txt += '  ［' + (s.mode === 'person' ? '人を認識' + (s.person && s.state !== 'paused' && s.state !== 'stopped' && s.state !== 'cooling' ? (s.person.present ? '・人あり' : '・人なし') : '') + (s.person && s.person.bodyModel === 'none' ? '・体のモデルなし' : (s.person && s.person.bodyModel === 'failed' ? '・体のモデル不可' : '')) : '動体検知') + '］';
       }
       if (s.lastMotion) txt += '  最終検知 ' + new Date(s.lastMotion).toLocaleTimeString();
       if (s.error) txt += '  ⚠ ' + s.error;

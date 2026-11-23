@@ -1,0 +1,7 @@
+Z4 MotionCam body model (optional PERSON_MODEL=1 edition)
+
+* Model: COCO SSD MobileNet v1 (quantized, 300x300), "coco_ssd_mobilenet_v1_1.0_quant_2018_06_29",
+  from the TensorFlow Lite model zoo. Apache License 2.0. Trained on MS COCO (CC BY 4.0 annotations).
+* Runtime: TensorFlow Lite for Android (org.tensorflow:tensorflow-lite 2.8.0), Apache License 2.0
+  (full text: LICENSE-tensorflow-lite.txt).
+Used only on the device; nothing is sent anywhere.

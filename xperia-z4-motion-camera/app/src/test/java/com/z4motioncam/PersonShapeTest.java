@@ -8,7 +8,7 @@ import java.util.Arrays;
 import java.util.Random;
 import org.junit.Test;
 
-/** BlobAnalyzer, GrayFrame, HybridPersonDetector and the motion mask they build on. */
+/** GrayFrame, HybridPersonDetector and the motion mask they build on. */
 public class PersonShapeTest {
     private static final int GW = 32;
     private static final int GH = 24;
@@ -17,82 +17,6 @@ public class PersonShapeTest {
         boolean[] m = new boolean[GW * GH];
         for (int y = y0; y < y0 + h; y++) for (int x = x0; x < x0 + w; x++) m[y * GW + x] = true;
         return m;
-    }
-
-    // ---- BlobAnalyzer ----
-
-    @Test
-    public void emptyMaskHasNoBlob() {
-        BlobAnalyzer.Blob b = BlobAnalyzer.largest(new boolean[GW * GH], GW, GH);
-        assertEquals(0, b.cells);
-        assertFalse(b.personLike());
-    }
-
-    @Test
-    public void malformedInputIsHarmless() {
-        assertEquals(0, BlobAnalyzer.largest(null, GW, GH).cells);
-        assertEquals(0, BlobAnalyzer.largest(new boolean[3], GW, GH).cells);
-        assertEquals(0, BlobAnalyzer.largest(new boolean[10], 0, 0).cells);
-    }
-
-    @Test
-    public void aCompactBlobIsPersonLike() {
-        BlobAnalyzer.Blob b = BlobAnalyzer.largest(mask(10, 6, 6, 10), GW, GH); // 60 cells = 7.8%
-        assertEquals(60, b.cells);
-        assertEquals(6, b.width);
-        assertEquals(10, b.height);
-        assertEquals(1.0f, b.fill(), 0.001f);
-        assertTrue(b.personLike());
-    }
-
-    @Test
-    public void aTinyBlobIsNot() {
-        assertFalse(BlobAnalyzer.largest(mask(5, 5, 3, 3), GW, GH).personLike()); // 9 cells = 1.2%
-    }
-
-    @Test
-    public void aWholeFrameChangeIsNot() {
-        assertFalse(BlobAnalyzer.largest(mask(0, 0, GW, GH), GW, GH).personLike());
-        assertFalse(BlobAnalyzer.largest(mask(0, 0, GW, 20), GW, GH).personLike()); // 83%
-    }
-
-    @Test
-    public void scatteredNoiseIsNot() {
-        boolean[] m = new boolean[GW * GH];
-        Random r = new Random(5);
-        for (int i = 0; i < 90; i++) m[r.nextInt(m.length)] = true; // about 12% of cells, spread out
-        assertFalse(BlobAnalyzer.largest(m, GW, GH).personLike());
-    }
-
-    @Test
-    public void aThinStripeIsNot() {
-        assertFalse(BlobAnalyzer.largest(mask(2, 10, 30, 1), GW, GH).personLike()); // a line: aspect and area
-        assertFalse(BlobAnalyzer.largest(mask(10, 2, 2, 20), GW, GH).personLike()); // 40 cells, aspect 0.1
-    }
-
-    @Test
-    public void picksTheLargestOfSeveralGroups() {
-        boolean[] m = mask(1, 1, 3, 3);
-        boolean[] big = mask(15, 8, 7, 9);
-        for (int i = 0; i < m.length; i++) m[i] |= big[i];
-        BlobAnalyzer.Blob b = BlobAnalyzer.largest(m, GW, GH);
-        assertEquals(63, b.cells);
-        assertTrue(b.personLike());
-    }
-
-    @Test
-    public void diagonalCellsAreNotConnected() {
-        boolean[] m = new boolean[GW * GH];
-        for (int i = 0; i < 8; i++) m[(5 + i) * GW + 5 + i] = true;
-        assertEquals(1, BlobAnalyzer.largest(m, GW, GH).cells);
-    }
-
-    @Test
-    public void anLShapeIsOneGroup() {
-        boolean[] m = mask(4, 4, 8, 2);
-        boolean[] leg = mask(4, 4, 2, 8);
-        for (int i = 0; i < m.length; i++) m[i] |= leg[i];
-        assertEquals(16 + 16 - 4, BlobAnalyzer.largest(m, GW, GH).cells);
     }
 
     // ---- GrayFrame ----
@@ -332,6 +256,12 @@ public class PersonShapeTest {
 
     // ---- the mask exposed by MotionDetector ----
 
+    private static int count(boolean[] m) {
+        int n = 0;
+        for (boolean b : m) if (b) n++;
+        return n;
+    }
+
     @Test
     public void motionDetectorExposesTheChangedCells() {
         MotionDetector d = MotionDetector.forFrame(640, 480);
@@ -343,16 +273,14 @@ public class PersonShapeTest {
         d.update(moved, 640, 480, 0.015f);
         boolean[] m = d.changedMask();
         assertEquals(d.gridW() * d.gridH(), m.length);
-        BlobAnalyzer.Blob b = BlobAnalyzer.largest(m, d.gridW(), d.gridH());
-        assertTrue("changed cells found: " + b.cells, b.cells >= 10);
-        assertTrue(b.personLike());
+        assertTrue("changed cells found: " + count(m), count(m) >= 10);
         // The whole picture shifting in brightness leaves (almost) no changed cells.
         MotionDetector e = MotionDetector.forFrame(640, 480);
         e.update(bg, 640, 480, 0.015f);
         byte[] bright = new byte[bg.length];
         Arrays.fill(bright, 0, 640 * 480, (byte) 110);
         e.update(bright, 640, 480, 0.015f);
-        assertEquals(0, BlobAnalyzer.largest(e.changedMask(), e.gridW(), e.gridH()).cells);
+        assertEquals(0, count(e.changedMask()));
     }
 
     @Test

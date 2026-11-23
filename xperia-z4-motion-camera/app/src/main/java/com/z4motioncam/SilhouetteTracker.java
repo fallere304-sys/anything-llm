@@ -60,6 +60,13 @@ final class SilhouetteTracker {
         int persist;
         /** Closeness to the limits, 0..1 (comparable only within one level). */
         float score;
+        /** Bounding box of the group in cells of the upright grid (inclusive), and that grid's size; 0 = none. */
+        int minX;
+        int minY;
+        int maxX;
+        int maxY;
+        int gridW;
+        int gridH;
     }
 
     static Params params(int level) {
@@ -261,6 +268,28 @@ final class SilhouetteTracker {
         gStart = Arrays.copyOf(gStart, m);
     }
 
+    /** A break longer than this ends the run measured by {@link #sustainedMs}. */
+    static final long GAP_MS = 2_500L;
+
+    /**
+     * How long some group has been moving without a real break, up to the latest analysis; 0 when
+     * nothing moved lately. Used to demand "keeps moving for a few seconds" when the body model could
+     * not look (dark picture) and the shape alone has to decide.
+     */
+    long sustainedMs(long now) {
+        if (obsN == 0) return 0L;
+        int newest = (obsHead + obsN - 1) % RING;
+        if (now - obsT[newest] > GAP_MS) return 0L;
+        long since = obsT[newest];
+        for (int k = obsN - 2; k >= 0; k--) {
+            int i = (obsHead + k) % RING;
+            int next = (obsHead + k + 1) % RING;
+            if (obsT[next] - obsT[i] > GAP_MS) break;
+            since = obsT[i];
+        }
+        return obsT[newest] - since;
+    }
+
     /** Observations of the last {@link #PERSIST_MS}. */
     private int recentObservations(long now) {
         int c = 0;
@@ -336,6 +365,12 @@ final class SilhouetteTracker {
         s.aspect = bw / (float) bh;
         s.fill = gCells[g] / (float) (bw * bh);
         s.sway = sway;
+        s.minX = gMinX[g];
+        s.minY = gMinY[g];
+        s.maxX = gMaxX[g];
+        s.maxY = gMaxY[g];
+        s.gridW = uw;
+        s.gridH = uh;
         if (gCells[g] < p.minCells * sizeRelax) return s;
         if (s.area > p.maxArea || s.width > p.maxWidth) return s;
         // A tall group hanging from the top edge is a curtain (a swaying drape shows as its two edges,
