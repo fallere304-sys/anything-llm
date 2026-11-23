@@ -220,8 +220,8 @@ Android Studio を使わずに作る場合は、Ubuntu のパッケージ（`aap
 
 | 版 | ビルド | APK の大きさ（実測） | 内容 |
 | --- | --- | --- | --- |
-| 軽い版（標準） | `./build-apk.sh` | LIGHT_SIZE | 体のモデルなし。外部ライブラリなし。「厳しい」「標準」は顔＋形で動き、状態表示に「体のモデルなし」と出ます |
-| モデル入り版 | `PERSON_MODEL=1 ./build-apk.sh` | MODEL_SIZE | 体のモデル + TensorFlow Lite（arm64-v8a と armeabi-v7a のみ） |
+| 軽い版（標準） | `./build-apk.sh` | 約 165 KB（168,609 バイト） | 体のモデルなし。外部ライブラリなし。「厳しい」「標準」は顔＋形で動き、状態表示に「体のモデルなし」と出ます |
+| モデル入り版 | `PERSON_MODEL=1 ./build-apk.sh` | 約 6.8 MB（6,779,949 バイト） | 体のモデル + TensorFlow Lite（arm64-v8a と armeabi-v7a のみ） |
 
 モデル入り版は、初回に `tools/person-model/fetch.sh` が次の 3 つを取得して SHA-256 を確認し（`build/model-cache`、git には入れません）、`build-apk.sh` が aapt / javac / dalvik-exchange / zipalign / apksigner で APK にします（Gradle 不要）。TensorFlow Lite の Java クラス（`tensorflow-lite` と `tensorflow-lite-api`）は dex に、`libtensorflowlite_jni.so` は `lib/<abi>/` に、モデルは `assets/person_ssd.tflite` に入ります。`tools/person-model/check-apk.sh <apk> light|model` で APK の構造（lib・assets・dex・整列・署名）を確認できます。実行は `TfliteRuntime`（モデル入りのビルドだけに入るクラス）に名前で到達するので、軽い版には TensorFlow の痕跡がありません。
 
