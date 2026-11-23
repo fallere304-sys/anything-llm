@@ -41,6 +41,8 @@
   ul { list-style: none; padding: 0; margin: 0; }
   li { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid #2a2a2a; }
   li.checked { background: #1a2238; }
+  #nowList li { background: #16301c; border-left: 4px solid #4caf50; }
+  .nowtag { color: #81c784; font-size: 12px; font-weight: bold; }
   li .dur { flex: none; width: 4.6em; text-align: right; font-size: 14px; }
   li .info { flex: 1; min-width: 0; }
   li .info a { color: #8ab4ff; }
@@ -75,6 +77,8 @@
 
     <h2>録画 <button type="button" class="secondary" id="reload">更新</button></h2>
     <video id="player" class="hidden" controls playsinline></video>
+    <!-- The row of the video being played is shown here, right under the player. -->
+    <ul id="nowList"></ul>
     <div id="progress" class="meta"></div>
     <div class="toolbar">
       <label class="cb all"><input type="checkbox" id="selAll"><span class="box"></span>すべて選択</label>
@@ -170,6 +174,7 @@
     items = [];
     selected = {};
     blobs = {};
+    playing = null;
     render();
     say('');
     $('progress').textContent = '';
@@ -262,7 +267,7 @@
   document.addEventListener('visibilitychange', function () { if (document.hidden && liveOn) stopLive(); });
 
   // ---- recordings ----
-  var listEl = $('list'), selAll = $('selAll'), bulkSave = $('bulkSave'), bulkDel = $('bulkDel');
+  var listEl = $('list'), nowEl = $('nowList'), selAll = $('selAll'), bulkSave = $('bulkSave'), bulkDel = $('bulkDel');
   var player = $('player');
   var items = [], selected = {}, busy = false, blobs = {}, playing = null;
 
@@ -279,11 +284,14 @@
     selAll.checked = items.length > 0 && names.length === items.length;
     selAll.className = names.length > 0 && names.length < items.length ? 'partial' : '';
     $('selInfo').textContent = names.length ? names.length + '件選択中（' + fmtSize(size) + '）' : '';
-    Array.prototype.forEach.call(listEl.querySelectorAll('input,button'), function (b) { b.disabled = busy; });
+    [nowEl, listEl].forEach(function (root) {
+      Array.prototype.forEach.call(root.querySelectorAll('input,button'), function (b) { b.disabled = busy; });
+    });
   }
 
   function render() {
     listEl.textContent = '';
+    nowEl.textContent = '';
     if (!items.length) listEl.appendChild(el('li', camId ? 'まだ録画はありません' : '', 'meta'));
     items.forEach(function (it) {
       var li = el('li', null, selected[it.name] ? 'checked' : '');
@@ -295,6 +303,7 @@
       label.appendChild(chk);
       label.appendChild(el('span', null, 'box'));
       var info = el('div', null, 'info');
+      if (playing === it.name) info.appendChild(el('div', '▶ 再生中', 'nowtag'));
       var a = el('a', fmtName(it.name));
       a.href = '#';
       a.setAttribute('data-action', 'play');
@@ -311,7 +320,7 @@
       li.appendChild(el('div', fmtLen(it.duration), 'dur'));
       li.appendChild(info);
       li.appendChild(actions);
-      listEl.appendChild(li);
+      (playing === it.name ? nowEl : listEl).appendChild(li);
     });
     updateToolbar();
   }
@@ -335,10 +344,10 @@
   $('reload').addEventListener('click', function () { loadList(); loadStatus(); });
 
   function rowName(node) {
-    while (node && node !== listEl) { if (node.getAttribute && node.getAttribute('data-name')) return node.getAttribute('data-name'); node = node.parentNode; }
+    while (node && node !== listEl && node !== nowEl) { if (node.getAttribute && node.getAttribute('data-name')) return node.getAttribute('data-name'); node = node.parentNode; }
     return null;
   }
-  listEl.addEventListener('change', function (ev) {
+  function onRowChange(ev) {
     var t = ev.target;
     if (t.type !== 'checkbox') return;
     var name = rowName(t);
@@ -346,8 +355,8 @@
     var li = t.closest('li');
     if (li) li.className = t.checked ? 'checked' : '';
     updateToolbar();
-  });
-  listEl.addEventListener('click', function (ev) {
+  }
+  function onRowClick(ev) {
     var t = ev.target.closest('[data-action]');
     if (!t || busy) return;
     ev.preventDefault();
@@ -355,7 +364,11 @@
     if (action === 'play') play(name);
     else if (action === 'save') saveFiles([name]);
     else if (action === 'delete') deleteFiles([name]);
-  });
+  }
+  listEl.addEventListener('change', onRowChange);
+  nowEl.addEventListener('change', onRowChange);
+  listEl.addEventListener('click', onRowClick);
+  nowEl.addEventListener('click', onRowClick);
   selAll.addEventListener('change', function () {
     var all = selAll.checked;
     selected = {};
@@ -399,11 +412,13 @@
 
   function play(name) {
     if (!confirmBig([name])) return;
-    busy = true; updateToolbar();
+    busy = true;
     playing = name;
+    render(); // shows the row right under the player while it loads
     fetchRecording(name, '読み込み中', function (err, blob) {
-      busy = false; updateToolbar();
-      if (err) { $('progress').textContent = ''; say('再生できません: ' + err.message, true); return; }
+      busy = false;
+      if (err) { playing = null; render(); $('progress').textContent = ''; say('再生できません: ' + err.message, true); return; }
+      updateToolbar();
       $('progress').textContent = '再生中：' + fmtName(name);
       show(player, true);
       if (player.src) URL.revokeObjectURL(player.src);
@@ -456,7 +471,7 @@
       res.deleted.forEach(function (n) {
         delete selected[n];
         delete blobs[n];
-        if (playing === n) { player.pause(); player.removeAttribute('src'); show(player, false); $('progress').textContent = ''; }
+        if (playing === n) { playing = null; player.pause(); player.removeAttribute('src'); show(player, false); $('progress').textContent = ''; }
       });
       var text = res.deleted.length + '件削除しました' + (res.failed.length ? '（' + res.failed.length + '件は削除できませんでした）' : '');
       loadList(function () { say(text, res.failed.length > 0); });

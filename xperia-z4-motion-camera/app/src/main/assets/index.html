@@ -57,6 +57,9 @@
   li .info { flex: 1; min-width: 0; }
   li .info a { color: #8ab4ff; }
   li.playing .info a { font-weight: bold; }
+  #nowList li.playing { background: #16301c; border-left: 4px solid #4caf50; border-bottom: 1px solid #2a2a2a; }
+  #nowList { margin-bottom: 4px; }
+  .nowtag { color: #81c784; font-size: 12px; font-weight: bold; }
   li .actions { display: flex; gap: 6px; flex: none; }
   .meta { color: #999; font-size: 13px; }
   video { width: 100%; max-height: 70vh; background: #000; border-radius: 8px; margin-top: 8px; display: none; }
@@ -111,6 +114,8 @@
   <section>
   <h2>録画</h2>
   <video id="player" controls playsinline></video>
+  <!-- The row of the video being played is shown here, right under the player. -->
+  <ul id="nowList"></ul>
   <div class="toolbar">
     <label class="cb all"><input type="checkbox" id="selAll"><span class="box"></span>すべて選択</label>
     <button type="button" id="bulkSave" disabled>一括保存</button>
@@ -239,7 +244,7 @@
   });
 
   // ---- recordings: list, selection, save / delete ----
-  var listEl = $('list'), selAll = $('selAll'), bulkSave = $('bulkSave'), bulkDel = $('bulkDel');
+  var listEl = $('list'), nowEl = $('nowList'), selAll = $('selAll'), bulkSave = $('bulkSave'), bulkDel = $('bulkDel');
   var selInfo = $('selInfo'), notice = $('notice'), zipForm = $('zipForm');
   var items = [];        // [{name, size, modified}], newest first
   var selected = {};     // name -> true
@@ -268,10 +273,13 @@
     // Own "partial" state instead of .indeterminate, which some browsers do not draw.
     selAll.className = names.length > 0 && names.length < items.length ? 'partial' : '';
     selInfo.textContent = names.length ? names.length + '件選択中（' + fmtSize(size) + '）' : '';
-    var boxes = listEl.getElementsByTagName('input');
-    for (var j = 0; j < boxes.length; j++) boxes[j].disabled = busy;
-    var buttons = listEl.getElementsByTagName('button');
-    for (var k = 0; k < buttons.length; k++) buttons[k].disabled = busy;
+    var lists = [nowEl, listEl];
+    for (var q = 0; q < lists.length; q++) {
+      var boxes = lists[q].getElementsByTagName('input');
+      for (var j = 0; j < boxes.length; j++) boxes[j].disabled = busy;
+      var buttons = lists[q].getElementsByTagName('button');
+      for (var k = 0; k < buttons.length; k++) buttons[k].disabled = busy;
+    }
   }
 
   function rowClass(name) {
@@ -280,6 +288,7 @@
 
   function render() {
     listEl.textContent = '';
+    nowEl.textContent = '';
     if (!items.length) listEl.appendChild(el('li', 'まだ録画はありません', 'meta'));
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
@@ -299,6 +308,7 @@
       dur.title = '録画時間';
 
       var info = el('div', null, 'info');
+      if (playing === it.name) info.appendChild(el('div', '▶ 再生中', 'nowtag'));
       var play = el('a', fmtName(it.name));
       play.href = recUrl(it.name);
       play.setAttribute('data-action', 'play');
@@ -319,7 +329,7 @@
       li.appendChild(dur);
       li.appendChild(info);
       li.appendChild(actions);
-      listEl.appendChild(li);
+      (playing === it.name ? nowEl : listEl).appendChild(li);
     }
     updateToolbar();
   }
@@ -342,13 +352,13 @@
 
   // One listener for all rows (rows are rebuilt on every refresh).
   function rowName(node) {
-    while (node && node !== listEl) {
+    while (node && node !== listEl && node !== nowEl) {
       if (node.getAttribute && node.getAttribute('data-name')) return node.getAttribute('data-name');
       node = node.parentNode;
     }
     return null;
   }
-  listEl.addEventListener('change', function (ev) {
+  function onRowChange(ev) {
     var t = ev.target;
     if (!t || t.type !== 'checkbox') return;
     var name = t.getAttribute('data-name');
@@ -357,11 +367,11 @@
     while (node && node.tagName !== 'LI') node = node.parentNode;
     if (node) node.className = rowClass(name);
     updateToolbar();
-  });
-  listEl.addEventListener('click', function (ev) {
+  }
+  function onRowClick(ev) {
     var t = ev.target;
-    while (t && t !== listEl && !(t.getAttribute && t.getAttribute('data-action'))) t = t.parentNode;
-    if (!t || t === listEl) return;
+    while (t && t !== listEl && t !== nowEl && !(t.getAttribute && t.getAttribute('data-action'))) t = t.parentNode;
+    if (!t || t === listEl || t === nowEl) return;
     var name = rowName(t);
     if (!name) return;
     var action = t.getAttribute('data-action');
@@ -377,7 +387,11 @@
       ev.preventDefault();
       deleteFiles([name]);
     }
-  });
+  }
+  listEl.addEventListener('change', onRowChange);
+  nowEl.addEventListener('change', onRowChange);
+  listEl.addEventListener('click', onRowClick);
+  nowEl.addEventListener('click', onRowClick);
 
   selAll.addEventListener('change', function () {
     // From "partial" or "none" -> select all; from "all" -> clear.
