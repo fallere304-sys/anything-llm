@@ -41,10 +41,20 @@
   ul { list-style: none; padding: 0; margin: 0; }
   li { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid #2a2a2a; }
   li.checked { background: #1a2238; }
-  #nowList li { background: #16301c; border-left: 4px solid #4caf50; }
+  li.playing { background: #16301c; border-left: 4px solid #4caf50; }
+  /* The list scrolls by itself, so the video being played can sit right under the player. */
+  #list { position: relative; max-height: 58vh; min-height: 120px; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; border-bottom: 1px solid #2a2a2a; }
   .nowtag { color: #81c784; font-size: 12px; font-weight: bold; }
   li .thumb { flex: none; display: block; width: 80px; height: 60px; background: #222; border-radius: 4px; overflow: hidden; }
   li .thumb img { width: 80px; height: 60px; object-fit: cover; display: block; }
+  @media (max-width: 480px) {
+    li { gap: 6px; padding: 8px 2px; }
+    li .thumb, li .thumb img { width: 56px; height: 42px; }
+    li .dur { width: 3.6em; font-size: 12px; }
+    li .info a { font-size: 13px; word-break: break-all; }
+    li .actions { gap: 4px; flex-direction: column; }
+    li .actions .btn, li .actions button, li .actions a { padding: 5px 8px; font-size: 12px; }
+  }
   li .dur { flex: none; width: 4.6em; text-align: right; font-size: 14px; }
   li .info { flex: 1; min-width: 0; }
   li .info a { color: #8ab4ff; }
@@ -77,11 +87,7 @@
     </div>
     <p class="meta">ライブ映像は Google 経由で約1秒ごとに更新される静止画です。通信回数を節約するため、3分で自動停止します。</p>
 
-    <h2>録画 <button type="button" class="secondary" id="reload">更新</button></h2>
-    <video id="player" class="hidden" controls playsinline></video>
-    <!-- The row of the video being played is shown here, right under the player. -->
-    <ul id="nowList"></ul>
-    <div id="progress" class="meta"></div>
+    <h2 id="recHead">録画 <button type="button" class="secondary" id="reload">更新</button></h2>
     <div class="toolbar">
       <label class="cb all"><input type="checkbox" id="selAll"><span class="box"></span>すべて選択</label>
       <button type="button" id="bulkSave" disabled>一括保存</button>
@@ -89,6 +95,8 @@
       <div id="selInfo" class="meta"></div>
     </div>
     <div id="notice" class="meta"></div>
+    <div id="progress" class="meta"></div>
+    <video id="player" class="hidden" controls playsinline></video>
     <ul id="list"></ul>
   </section>
 
@@ -269,7 +277,7 @@
   document.addEventListener('visibilitychange', function () { if (document.hidden && liveOn) stopLive(); });
 
   // ---- recordings ----
-  var listEl = $('list'), nowEl = $('nowList'), selAll = $('selAll'), bulkSave = $('bulkSave'), bulkDel = $('bulkDel');
+  var listEl = $('list'), selAll = $('selAll'), bulkSave = $('bulkSave'), bulkDel = $('bulkDel');
   var player = $('player');
   var items = [], selected = {}, busy = false, blobs = {}, playing = null;
   var thumbs = {};      // 「カメラID/録画名」→ data URL（録画は変わらないので使い回す）
@@ -288,17 +296,19 @@
     selAll.checked = items.length > 0 && names.length === items.length;
     selAll.className = names.length > 0 && names.length < items.length ? 'partial' : '';
     $('selInfo').textContent = names.length ? names.length + '件選択中（' + fmtSize(size) + '）' : '';
-    [nowEl, listEl].forEach(function (root) {
-      Array.prototype.forEach.call(root.querySelectorAll('input,button'), function (b) { b.disabled = busy; });
-    });
+    Array.prototype.forEach.call(listEl.querySelectorAll('input,button'), function (b) { b.disabled = busy; });
+  }
+
+  function rowClass(name) {
+    return (selected[name] ? 'checked' : '') + (playing === name ? ' playing' : '');
   }
 
   function render() {
+    var keepScroll = listEl.scrollTop; // rebuilding the rows must not throw the list back to the top
     listEl.textContent = '';
-    nowEl.textContent = '';
     if (!items.length) listEl.appendChild(el('li', camId ? 'まだ録画はありません' : '', 'meta'));
     items.forEach(function (it) {
-      var li = el('li', null, selected[it.name] ? 'checked' : '');
+      var li = el('li', null, rowClass(it.name));
       li.setAttribute('data-name', it.name);
       var label = el('label', null, 'cb');
       var chk = el('input');
@@ -333,10 +343,19 @@
       li.appendChild(el('div', fmtLen(it.duration), 'dur'));
       li.appendChild(info);
       li.appendChild(actions);
-      (playing === it.name ? nowEl : listEl).appendChild(li);
+      listEl.appendChild(li);
     });
     updateToolbar();
+    listEl.scrollTop = keepScroll;
     loadThumbs();
+  }
+
+  /** Scrolls the list so the video being played is the first row, right under the player. */
+  function scrollToPlaying() {
+    var rows = listEl.getElementsByTagName('li');
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getAttribute('data-name') === playing) { listEl.scrollTop = rows[i].offsetTop; return; }
+    }
   }
 
   /** まだ無いサムネイルを 12 件ずつ Google 経由で取得して表示する（表示中のカメラの分だけ）。 */
@@ -354,7 +373,7 @@
       // 失敗した分は空の印を付けて、同じ要求を繰り返さない（「更新」で再取得）。
       need.forEach(function (n) { thumbs[id + '/' + n] = (!err && map && map[n]) || ''; });
       if (id !== camId) { loadThumbs(); return; }
-      Array.prototype.forEach.call(document.querySelectorAll('#nowList img, #list img'), function (im) {
+      Array.prototype.forEach.call(document.querySelectorAll('#list img'), function (im) {
         var n = im.getAttribute('data-thumb') || '';
         var v = thumbs[id + '/' + n];
         if (v && !im.getAttribute('src')) im.src = v;
@@ -386,7 +405,7 @@
   });
 
   function rowName(node) {
-    while (node && node !== listEl && node !== nowEl) { if (node.getAttribute && node.getAttribute('data-name')) return node.getAttribute('data-name'); node = node.parentNode; }
+    while (node && node !== listEl) { if (node.getAttribute && node.getAttribute('data-name')) return node.getAttribute('data-name'); node = node.parentNode; }
     return null;
   }
   function onRowChange(ev) {
@@ -395,7 +414,7 @@
     var name = rowName(t);
     if (t.checked) selected[name] = true; else delete selected[name];
     var li = t.closest('li');
-    if (li) li.className = t.checked ? 'checked' : '';
+    if (li) li.className = rowClass(name);
     updateToolbar();
   }
   function onRowClick(ev) {
@@ -408,9 +427,7 @@
     else if (action === 'delete') deleteFiles([name]);
   }
   listEl.addEventListener('change', onRowChange);
-  nowEl.addEventListener('change', onRowChange);
   listEl.addEventListener('click', onRowClick);
-  nowEl.addEventListener('click', onRowClick);
   selAll.addEventListener('change', function () {
     var all = selAll.checked;
     selected = {};
@@ -456,7 +473,8 @@
     if (!confirmBig([name])) return;
     busy = true;
     playing = name;
-    render(); // shows the row right under the player while it loads
+    render();
+    scrollToPlaying(); // the row goes right under the player while the recording is fetched
     fetchRecording(name, '読み込み中', function (err, blob) {
       busy = false;
       if (err) { playing = null; render(); $('progress').textContent = ''; say('再生できません: ' + err.message, true); return; }
@@ -466,7 +484,8 @@
       if (player.src) URL.revokeObjectURL(player.src);
       player.src = URL.createObjectURL(blob);
       player.play().catch(function () {});
-      player.scrollIntoView({ behavior: 'smooth' });
+      var head = $('recHead');
+      if (head) head.scrollIntoView({ behavior: 'smooth' });
     });
   }
 
