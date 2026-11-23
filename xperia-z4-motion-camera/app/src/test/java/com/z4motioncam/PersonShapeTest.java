@@ -221,6 +221,7 @@ public class PersonShapeTest {
     private static PersonDetector.Input input(boolean[] mask) {
         PersonDetector.Input in = new PersonDetector.Input();
         in.nv21 = new byte[640 * 480 * 3 / 2];
+        java.util.Arrays.fill(in.nv21, 0, 640 * 480, (byte) 100);
         in.width = 640;
         in.height = 480;
         in.rotation = 90;
@@ -254,21 +255,58 @@ public class PersonShapeTest {
         assertFalse(new HybridPersonDetector(f, 3).detect(input(null)).person);
     }
 
+    /** Feeds the same mask as 'n' analyses 400 ms apart, then asks; rotation 0. */
+    private static PersonDetector.Result moving(HybridPersonDetector d, boolean[] m, int n) {
+        PersonDetector.Input in = input(m);
+        in.rotation = 0;
+        long t = 1000;
+        for (int i = 0; i < n; i++) {
+            t += 400;
+            d.observeMotion(m, GW, GH, 0, t);
+        }
+        in.nowMs = t;
+        return d.detect(in);
+    }
+
     @Test
-    public void shapeEvidenceOnlyAtTheLooseSetting() {
+    public void aBodyShapedMovingGroupIsAPersonAtEveryLevelButNeedsMoreTimeWhenStrict() {
         FakeFaces f = new FakeFaces(); // no face at all
-        boolean[] m = mask(10, 6, 6, 10);
-        assertFalse(new HybridPersonDetector(f, 1).detect(input(m)).person);
-        assertFalse(new HybridPersonDetector(f, 2).detect(input(m)).person);
-        PersonDetector.Result r = new HybridPersonDetector(f, 3).detect(input(m));
-        assertTrue(r.person);
-        assertEquals("動く塊", r.basis);
+        boolean[] m = mask(10, 6, 7, 14); // 7x14 of 32x24: 58% high, aspect 0.5
+        for (int level = 1; level <= 3; level++) {
+            PersonDetector.Result r = moving(new HybridPersonDetector(f, level), m, 6);
+            assertTrue("level " + level, r.person);
+            assertEquals("形", r.basis);
+        }
+        // Too short a movement is not enough for the strict level.
+        assertFalse(moving(new HybridPersonDetector(f, 1), m, 2).person);
+        assertTrue(moving(new HybridPersonDetector(f, 3), m, 2).person);
+    }
+
+    @Test
+    public void aSmallLowShapeIsOnlyAcceptedWhenLoose() {
+        FakeFaces f = new FakeFaces();
+        boolean[] m = mask(10, 16, 4, 5); // small, low: a cat-sized thing
+        assertFalse(moving(new HybridPersonDetector(f, 1), m, 8).person);
+        assertFalse(moving(new HybridPersonDetector(f, 2), m, 8).person);
+        assertTrue(moving(new HybridPersonDetector(f, 3), m, 8).person);
     }
 
     @Test
     public void looseSettingStillRejectsALightSwitch() {
         FakeFaces f = new FakeFaces();
-        assertFalse(new HybridPersonDetector(f, 3).detect(input(mask(0, 0, GW, GH))).person);
+        assertFalse(moving(new HybridPersonDetector(f, 3), mask(0, 0, GW, GH), 6).person);
+    }
+
+    @Test
+    public void aDarkPictureSkipsTheFaceSearch() {
+        FakeFaces f = new FakeFaces();
+        PersonDetector.Input in = input(null);
+        java.util.Arrays.fill(in.nv21, 0, 640 * 480, (byte) 0); // black picture
+        new HybridPersonDetector(f, 2).detect(in);
+        assertEquals(0, f.calls);
+        java.util.Arrays.fill(in.nv21, 0, 640 * 480, (byte) 120);
+        new HybridPersonDetector(f, 2).detect(in);
+        assertEquals(1, f.calls);
     }
 
     @Test

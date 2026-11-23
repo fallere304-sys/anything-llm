@@ -59,6 +59,8 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     private PreviewSink sink;
     private int width;
     private int height;
+    /** Person mode: motion area (share of the grid) that opens the gate; the shape check does the rest. */
+    static final float PERSON_GATE_AREA = 0.006f;
     private MotionDetector detector;
     private VideoRecorder recorder;
     private final ByteArrayOutputStream jpegBuf = new ByteArrayOutputStream(64 * 1024);
@@ -317,8 +319,14 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
 
         if (now - lastAnalyzeMs >= ThermalPolicy.analyzeIntervalMs(l)) {
             lastAnalyzeMs = now;
-            boolean motion = detector.update(frame, width, height, settings.motionAreaThreshold());
+            // Person mode looks at the shape afterwards, so its gate may be as sensitive as it gets.
+            float area = settings.motionAreaThreshold();
+            if (person != null) area = Math.min(area, PERSON_GATE_AREA);
+            boolean motion = detector.update(frame, width, height, area);
             motionRatio = detector.lastRatio();
+            if (person != null) {
+                person.observeMotion(detector.changedMask(), detector.gridW(), detector.gridH(), settings.rotation, now);
+            }
             if (motion) {
                 lastMotionMs = now;
                 lastMotionWallMs = System.currentTimeMillis();
@@ -382,6 +390,7 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     private void checkPerson(byte[] frame, long now, ThermalPolicy.Level l) {
         if (!gate.wantCheck(now, recorder.isRecording(), l)) return;
         PersonDetector.Input in = personInput;
+        in.nowMs = now;
         in.nv21 = frame;
         in.width = width;
         in.height = height;

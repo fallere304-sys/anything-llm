@@ -18,6 +18,8 @@ interface PersonDetector {
         boolean[] motionMask;
         int gridW;
         int gridH;
+        /** Monotonic time of this frame in ms (the detector's clock for the shape history). */
+        long nowMs;
     }
 
     final class Result {
@@ -34,6 +36,12 @@ interface PersonDetector {
             this.basis = basis;
         }
     }
+
+    /**
+     * Called after every motion analysis (also when nothing moved) so that the detector can follow
+     * a shape over a few seconds. Cheap; the mask is only read.
+     */
+    void observeMotion(boolean[] mask, int gridW, int gridH, int rotation, long nowMs);
 
     Result detect(Input in);
 
