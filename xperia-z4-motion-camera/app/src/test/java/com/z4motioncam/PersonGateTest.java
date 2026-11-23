@@ -161,4 +161,148 @@ public class PersonGateTest {
             assertFalse("at " + t, g.shouldStop(t, 10_000));
         }
     }
+
+    // ---- back-off: nobody found, again and again ----
+
+    @Test
+    public void emptyChecksBackOffDoublingUpToTwelveSeconds() {
+        PersonGate g = new PersonGate();
+        long[] expected = {500, 500, 500, 1000, 2000, 4000, 8000, 12000, 12000, 12000};
+        for (int i = 0; i < expected.length; i++) {
+            assertEquals("after " + i + " empty checks", expected[i], g.intervalMs(N, false));
+            g.onResult(i * 1000L, false);
+        }
+    }
+
+    @Test
+    public void theBackOffDoesNotApplyWhileRecording() {
+        PersonGate g = new PersonGate();
+        for (int i = 0; i < 10; i++) g.onResult(i * 1000L, false);
+        assertEquals(12_000, g.intervalMs(N, false));
+        assertEquals(PersonGate.RECORD_CHECK_MS, g.intervalMs(N, true));
+    }
+
+    @Test
+    public void aPersonFoundResetsTheBackOff() {
+        PersonGate g = new PersonGate();
+        for (int i = 0; i < 10; i++) g.onResult(i * 1000L, false);
+        g.onResult(20_000, true);
+        assertEquals(PersonGate.IDLE_CHECK_MS, g.intervalMs(N, false));
+        assertEquals(0, g.emptyChecks());
+    }
+
+    @Test
+    public void startingARecordingAndCheckingWhileRecordingResetTheBackOff() {
+        PersonGate g = new PersonGate();
+        for (int i = 0; i < 10; i++) g.onResult(i * 1000L, false);
+        g.onRecordingStarted(20_000);
+        assertEquals(0, g.emptyChecks());
+        g.onResult(22_000, false, true); // an empty check during a recording is not "idle"
+        g.onResult(24_000, false, true);
+        g.onResult(26_000, false, true);
+        g.onResult(28_000, false, true);
+        assertEquals(0, g.emptyChecks());
+    }
+
+    @Test
+    public void aNewBurstOfMotionAfterAPauseGoesBackToTheFastRate() {
+        PersonGate g = new PersonGate();
+        g.onMotion(0);
+        for (int i = 0; i < 10; i++) g.onResult(i * 500L, false);
+        g.onMotion(4_500);                       // still the same burst
+        assertEquals(12_000, g.intervalMs(N, false));
+        g.onMotion(4_500 + PersonGate.EPISODE_GAP_MS);   // exactly the gap: still the same
+        assertEquals(12_000, g.intervalMs(N, false));
+        g.onMotion(4_500 + 2 * PersonGate.EPISODE_GAP_MS + 1); // after a long pause
+        assertEquals(PersonGate.IDLE_CHECK_MS, g.intervalMs(N, false));
+    }
+
+    @Test
+    public void thermalSlowdownAndBackOffCombineButNeverExceedTheCap() {
+        PersonGate g = new PersonGate();
+        for (int i = 0; i < 10; i++) g.onResult(i * 1000L, false);
+        assertEquals(12_000, g.intervalMs(ThermalPolicy.Level.WARM, false));
+        assertEquals(12_000, g.intervalMs(ThermalPolicy.Level.HOT, false));
+        // the heat slowdown alone may exceed the cap: the back-off never shortens it
+        assertEquals(PersonGate.checkIntervalMs(ThermalPolicy.Level.CRITICAL, false),
+                new PersonGate().intervalMs(ThermalPolicy.Level.CRITICAL, false));
+    }
+
+    @Test
+    public void wantCheckFollowsTheBackedOffInterval() {
+        PersonGate g = new PersonGate();
+        g.onMotion(100_000L);
+        for (int i = 0; i < 10; i++) g.onResult(100_000L + i, false);
+        long at = 100_009L; // the last (empty) check
+        g.onMotion(at + 9_000);
+        g.onMotion(at + 11_999);
+        assertFalse(g.wantCheck(at + 11_999, false, N));
+        g.onMotion(at + 12_000);
+        assertTrue(g.wantCheck(at + 12_000, false, N));
+    }
+
+    /** Frames every 100 ms with motion all the time (a curtain in the wind) and never a person. */
+    @Test
+    public void aCurtainSwayingForTenMinutesCostsAtMostSixtyChecks() {
+        PersonGate g = new PersonGate();
+        int checks = 0;
+        for (long t = 0; t < 600_000; t += 100) {
+            g.onMotion(t);
+            if (g.wantCheck(t, false, N)) {
+                g.onResult(t, false, false);
+                checks++;
+            }
+        }
+        assertTrue("checks: " + checks, checks <= 60);
+        assertTrue("it still looks regularly: " + checks, checks >= 40);
+    }
+
+    @Test
+    public void theCurtainOnAWarmPhoneCostsEvenLess() {
+        PersonGate g = new PersonGate();
+        int checks = 0;
+        for (long t = 0; t < 600_000; t += 100) {
+            g.onMotion(t);
+            if (g.wantCheck(t, false, ThermalPolicy.Level.HOT)) {
+                g.onResult(t, false, false);
+                checks++;
+            }
+        }
+        assertTrue("checks: " + checks, checks <= 60);
+    }
+
+    @Test
+    public void aPersonWalkingInAfterALongCurtainEpisodeIsStillRecordedPromptly() {
+        PersonGate g = new PersonGate();
+        long t = 0;
+        for (; t < 120_000; t += 100) { // two minutes of curtain: fully backed off
+            g.onMotion(t);
+            if (g.wantCheck(t, false, N)) g.onResult(t, false, false);
+        }
+        assertEquals(12_000, g.intervalMs(N, false));
+        // the person appears; the next check (at most 12 s away) finds them ...
+        long firstHit = -1;
+        long start = -1;
+        for (; t < 120_000 + 40_000 && start < 0; t += 100) {
+            g.onMotion(t);
+            if (g.wantCheck(t, false, N)) {
+                g.onResult(t, true, false);
+                if (firstHit < 0) firstHit = t;
+                if (g.shouldStart(t)) start = t;
+            }
+        }
+        assertTrue(firstHit >= 0 && firstHit - 120_000 <= 12_000);
+        // ... and the fast rate is back, so the second hit follows within half a second
+        assertTrue("start at " + start, start >= 0 && start - firstHit <= PersonGate.IDLE_CHECK_MS);
+    }
+
+    @Test
+    public void recordingChecksKeepTheirTwoSecondRhythmAfterALongBackOff() {
+        PersonGate g = new PersonGate();
+        for (int i = 0; i < 12; i++) g.onResult(i * 1000L, false);
+        g.onRecordingStarted(20_000);
+        g.onResult(20_000, true, true);
+        assertFalse(g.wantCheck(21_999, true, N));
+        assertTrue(g.wantCheck(22_000, true, N));
+    }
 }

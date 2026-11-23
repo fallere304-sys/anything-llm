@@ -391,7 +391,7 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
         in.gridH = detector.gridH();
         PersonDetector.Result r = person.detect(in);
         in.nv21 = null;
-        gate.onResult(now, r.person);
+        gate.onResult(now, r.person, recorder.isRecording());
         if (r.person) {
             lastPersonSeenMs = now;
             lastPersonWallMs = System.currentTimeMillis();
