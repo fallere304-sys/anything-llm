@@ -53,6 +53,9 @@
   .cb input:disabled + .box { opacity: .4; }
   li { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid #2a2a2a; }
   li.checked { background: #1a2238; }
+  li .thumb { flex: none; display: block; width: 80px; height: 60px; background: #222; border-radius: 4px; overflow: hidden; }
+  li .thumb img { width: 80px; height: 60px; object-fit: cover; display: block; }
+  li .thumb img.none { visibility: hidden; }
   li .dur { flex: none; width: 4.6em; text-align: right; font-size: 14px; font-variant-numeric: tabular-nums; color: #ddd; }
   li .info { flex: 1; min-width: 0; }
   li .info a { color: #8ab4ff; }
@@ -304,6 +307,15 @@
       label.appendChild(chk);
       label.appendChild(el('span', null, 'box'));
 
+      var thumb = el('a', null, 'thumb');
+      thumb.href = recUrl(it.name);
+      thumb.setAttribute('data-action', 'play');
+      thumb.setAttribute('aria-label', fmtName(it.name) + ' を再生');
+      var timg = el('img');
+      timg.alt = '';
+      timg.setAttribute('data-src', '/thumb/' + it.name);
+      thumb.appendChild(timg);
+
       var dur = el('div', fmtLen(it.duration), 'dur');
       dur.title = '録画時間';
 
@@ -326,12 +338,34 @@
       actions.appendChild(del);
 
       li.appendChild(label);
+      li.appendChild(thumb);
       li.appendChild(dur);
       li.appendChild(info);
       li.appendChild(actions);
       (playing === it.name ? nowEl : listEl).appendChild(li);
     }
     updateToolbar();
+    loadThumbs();
+  }
+
+  // Thumbnails are fetched one after another (the phone makes missing ones on first request, so a
+  // long list must not ask for all of them at once). The browser keeps them for a day.
+  var thumbRun = 0;
+  function loadThumbs() {
+    var run = ++thumbRun;
+    var imgs = [], roots = [nowEl, listEl];
+    for (var r = 0; r < roots.length; r++) {
+      var found = roots[r].getElementsByTagName('img');
+      for (var f = 0; f < found.length; f++) imgs.push(found[f]);
+    }
+    var i = 0;
+    (function next() {
+      if (run !== thumbRun || i >= imgs.length) return;
+      var im = imgs[i++];
+      im.onload = function () { im.onload = im.onerror = null; next(); };
+      im.onerror = function () { im.className = 'none'; im.onload = im.onerror = null; next(); };
+      im.src = im.getAttribute('data-src');
+    })();
   }
 
   function loadList(done) {

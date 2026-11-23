@@ -165,6 +165,38 @@ function call_(cam, path, opt) {
   throw new Error('カメラからエラーが返りました（HTTP ' + code + '）');
 }
 
+/**
+ * 録画のサムネイル（小さな JPEG）をまとめて取得する。一覧の表示用で、1 回に最大 12 件。
+ * fetchAll で同時に取得するので、Google の呼び出し回数は 1 件ごとに数えられるが待ち時間は短い。
+ * @return {Object<string, ?string>} 録画名 → data URL（取得できなければ null）
+ */
+function getThumbnails(id, names) {
+  checkAccess_();
+  var cam = findCamera_(id);
+  names = [].concat(names || []).slice(0, 12);
+  for (var i = 0; i < names.length; i++) {
+    if (!NAME_RE.test(String(names[i]))) throw new Error('録画名が不正です: ' + names[i]);
+  }
+  var out = {};
+  if (!names.length) return out;
+  var headers = { Authorization: 'Basic ' + Utilities.base64Encode(Utilities.newBlob('z4:' + cam.password).getBytes()) };
+  var reqs = names.map(function (n) {
+    return { url: 'https://' + cam.host + ':' + cam.port + '/thumb/' + encodeURIComponent(n),
+             method: 'get', headers: headers, muteHttpExceptions: true, followRedirects: false };
+  });
+  var resps;
+  try {
+    resps = UrlFetchApp.fetchAll(reqs);
+  } catch (e) {
+    throw new Error('サムネイルを取得できません: ' + e.message);
+  }
+  for (var k = 0; k < names.length; k++) {
+    out[names[k]] = resps[k].getResponseCode() === 200
+        ? 'data:image/jpeg;base64,' + Utilities.base64Encode(resps[k].getContent()) : null;
+  }
+  return out;
+}
+
 /** 状態（録画中か、電池、温度、監視オン・オフなど）。 */
 function getStatus(id) {
   checkAccess_();

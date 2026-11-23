@@ -259,6 +259,17 @@ final class HttpServer {
             serveSnapshot(out, head);
         } else if (path.equals("/stream.mjpg")) {
             serveMjpeg(out, head);
+        } else if (path.startsWith("/thumb/")) {
+            File t = backend.store().thumb(path.substring("/thumb/".length()));
+            if (t == null) {
+                writeSimple(out, 404, "text/plain", "not found\n".getBytes(UTF8), head);
+            } else {
+                byte[] jpg = readFile(t);
+                String h = "HTTP/1.0 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: " + jpg.length
+                        + "\r\nCache-Control: max-age=86400\r\nConnection: close\r\n\r\n";
+                out.write(h.getBytes(UTF8));
+                if (!head) out.write(jpg);
+            }
         } else if (path.startsWith("/rec/")) {
             File f = backend.store().find(path.substring("/rec/".length()));
             if (f == null) {
@@ -346,7 +357,7 @@ final class HttpServer {
         StringBuilder failed = new StringBuilder();
         for (String name : names) {
             File f = backend.store().find(name);
-            StringBuilder target = f != null && f.delete() ? deleted : failed;
+            StringBuilder target = f != null && backend.store().deleteRecording(f) ? deleted : failed;
             if (target.length() > 0) target.append(',');
             target.append(jsonString(name));
         }
@@ -762,6 +773,15 @@ final class HttpServer {
             if (c == '+' || c == '-') return 62;
             if (c == '/' || c == '_') return 63;
             return -1;
+        }
+    }
+
+    private static byte[] readFile(File f) throws IOException {
+        java.io.FileInputStream in = new java.io.FileInputStream(f);
+        try {
+            return readAll(in);
+        } finally {
+            in.close();
         }
     }
 

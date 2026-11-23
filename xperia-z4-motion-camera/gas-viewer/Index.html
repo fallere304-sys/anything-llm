@@ -43,6 +43,8 @@
   li.checked { background: #1a2238; }
   #nowList li { background: #16301c; border-left: 4px solid #4caf50; }
   .nowtag { color: #81c784; font-size: 12px; font-weight: bold; }
+  li .thumb { flex: none; display: block; width: 80px; height: 60px; background: #222; border-radius: 4px; overflow: hidden; }
+  li .thumb img { width: 80px; height: 60px; object-fit: cover; display: block; }
   li .dur { flex: none; width: 4.6em; text-align: right; font-size: 14px; }
   li .info { flex: 1; min-width: 0; }
   li .info a { color: #8ab4ff; }
@@ -270,6 +272,8 @@
   var listEl = $('list'), nowEl = $('nowList'), selAll = $('selAll'), bulkSave = $('bulkSave'), bulkDel = $('bulkDel');
   var player = $('player');
   var items = [], selected = {}, busy = false, blobs = {}, playing = null;
+  var thumbs = {};      // 「カメラID/録画名」→ data URL（録画は変わらないので使い回す）
+  var thumbFetching = false;
 
   function say(text, isError) { var n = $('notice'); n.textContent = text || ''; n.className = 'meta' + (isError ? ' err' : ''); }
   function selectedNames() { return items.filter(function (it) { return selected[it.name]; }).map(function (it) { return it.name; }); }
@@ -316,13 +320,47 @@
       del.setAttribute('data-action', 'delete');
       actions.appendChild(save);
       actions.appendChild(del);
+      var thumb = el('a', null, 'thumb');
+      thumb.href = '#';
+      thumb.setAttribute('data-action', 'play');
+      var timg = el('img');
+      timg.alt = '';
+      timg.setAttribute('data-thumb', it.name); // data-name は行の特定に使うので別の名前にする
+      if (thumbs[camId + '/' + it.name]) timg.src = thumbs[camId + '/' + it.name];
+      thumb.appendChild(timg);
       li.appendChild(label);
+      li.appendChild(thumb);
       li.appendChild(el('div', fmtLen(it.duration), 'dur'));
       li.appendChild(info);
       li.appendChild(actions);
       (playing === it.name ? nowEl : listEl).appendChild(li);
     });
     updateToolbar();
+    loadThumbs();
+  }
+
+  /** まだ無いサムネイルを 12 件ずつ Google 経由で取得して表示する（表示中のカメラの分だけ）。 */
+  function loadThumbs() {
+    if (thumbFetching || !camId) return;
+    var id = camId, need = [];
+    for (var i = 0; i < items.length && need.length < 12; i++) {
+      var key = id + '/' + items[i].name;
+      if (!(key in thumbs)) need.push(items[i].name);
+    }
+    if (!need.length) return;
+    thumbFetching = true;
+    gs('getThumbnails', id, need, function (err, map) {
+      thumbFetching = false;
+      // 失敗した分は空の印を付けて、同じ要求を繰り返さない（「更新」で再取得）。
+      need.forEach(function (n) { thumbs[id + '/' + n] = (!err && map && map[n]) || ''; });
+      if (id !== camId) { loadThumbs(); return; }
+      Array.prototype.forEach.call(document.querySelectorAll('#nowList img, #list img'), function (im) {
+        var n = im.getAttribute('data-thumb') || '';
+        var v = thumbs[id + '/' + n];
+        if (v && !im.getAttribute('src')) im.src = v;
+      });
+      loadThumbs();
+    });
   }
 
   function loadList(done) {
@@ -341,7 +379,11 @@
       if (done) done();
     });
   }
-  $('reload').addEventListener('click', function () { loadList(); loadStatus(); });
+  $('reload').addEventListener('click', function () {
+    // 「更新」で、取得できなかったサムネイルをもう一度試す。
+    Object.keys(thumbs).forEach(function (k) { if (!thumbs[k]) delete thumbs[k]; });
+    loadList(); loadStatus();
+  });
 
   function rowName(node) {
     while (node && node !== listEl && node !== nowEl) { if (node.getAttribute && node.getAttribute('data-name')) return node.getAttribute('data-name'); node = node.parentNode; }
