@@ -61,3 +61,4 @@ fi
 apksigner sign --v4-signing-enabled false --ks "$KEYSTORE" --ks-pass "pass:$KS_PASS" --ks-key-alias z4motioncam --out "$APK" "$OUT/aligned.apk"
 apksigner verify --min-sdk-version 21 "$APK"
 echo "Built $APK"
+sha256sum "$APK"
