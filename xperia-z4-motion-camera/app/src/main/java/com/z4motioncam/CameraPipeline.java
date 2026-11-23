@@ -1,5 +1,6 @@
 package com.z4motioncam;
 
+import android.content.Context;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
@@ -48,6 +49,7 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
         void event(String text);
     }
 
+    private final Context context;
     private final AppSettings settings;
     private final RecordingStore store;
     private final FrameHub hub;
@@ -73,6 +75,10 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
 
     /** Person mode only (null in motion mode): see PersonGate for the rules. */
     private PersonDetector person;
+    private HybridPersonDetector hybrid;
+    private final ShapeTracker shapes = new ShapeTracker();
+    /** Body model of this build: "ok", "none" (light build) or "failed"; "" outside person mode. */
+    private volatile String bodyModelState = "";
     private final PersonGate gate = new PersonGate();
     private final PersonDetector.Input personInput = new PersonDetector.Input();
     private volatile long lastPersonSeenMs;
@@ -97,7 +103,8 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     private volatile String error;
     private volatile boolean storageFull;
 
-    CameraPipeline(AppSettings settings, RecordingStore store, FrameHub hub, Events events) {
+    CameraPipeline(Context context, AppSettings settings, RecordingStore store, FrameHub hub, Events events) {
+        this.context = context.getApplicationContext();
         this.settings = settings;
         this.store = store;
         this.hub = hub;
@@ -186,6 +193,13 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
         return personBasis;
     }
 
+    /** "ok" / "none" / "failed" for the body model, "" outside person mode; "failed" also once it kept failing while running. */
+    String bodyModelState() {
+        HybridPersonDetector h = hybrid;
+        if (h != null && "ok".equals(bodyModelState) && !h.bodyUsable()) return "failed";
+        return bodyModelState;
+    }
+
     boolean storageFull() {
         return storageFull;
     }
@@ -227,7 +241,18 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
             liveRect = new Rect(0, 0, width / liveScale, height / liveScale);
             detector = MotionDetector.forFrame(width, height);
             gate.reset();
-            person = settings.personMode() ? new HybridPersonDetector(new AndroidFaceFinder(), settings.personSens) : null;
+            shapes.reset();
+            if (settings.personMode()) {
+                AndroidBodyModel model = AndroidBodyModel.open(context);
+                hybrid = new HybridPersonDetector(new AndroidFaceFinder(), model.finder(), settings.personSens);
+                person = hybrid;
+                bodyModelState = model.state();
+                if ("failed".equals(model.state())) events.event("体のモデルを読み込めませんでした（顔と形だけで人を判定します）");
+            } else {
+                person = null;
+                hybrid = null;
+                bodyModelState = "";
+            }
             recorder = new VideoRecorder(width, height, settings.bitrate(), settings.fps, settings.rotation,
                     settings.timestamp);
 
@@ -259,6 +284,7 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
         if (person != null) {
             person.close();
             person = null;
+            hybrid = null;
         }
         if (camera != null) {
             try {
@@ -319,6 +345,7 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
             lastAnalyzeMs = now;
             boolean motion = detector.update(frame, width, height, settings.motionAreaThreshold());
             motionRatio = detector.lastRatio();
+            if (person != null) shapes.update(now, detector.changedMask(), detector.gridW(), detector.gridH());
             if (motion) {
                 lastMotionMs = now;
                 lastMotionWallMs = System.currentTimeMillis();
@@ -389,8 +416,13 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
         in.motionMask = detector.changedMask();
         in.gridW = detector.gridW();
         in.gridH = detector.gridH();
+        in.nowMs = now;
+        in.shapeSustainedMs = shapes.sustainedMs(now);
+        in.recording = recorder.isRecording();
+        in.thermal = l;
         PersonDetector.Result r = person.detect(in);
         in.nv21 = null;
+        if (r == PersonDetector.Result.SKIPPED) return; // the body model is rate-limited: not a check
         gate.onResult(now, r.person, recorder.isRecording());
         if (r.person) {
             lastPersonSeenMs = now;

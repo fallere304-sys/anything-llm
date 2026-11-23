@@ -87,9 +87,9 @@
         <item>person</item>
     </string-array>
     <string-array name="person_sens_entries">
-        <item>厳しい（顔がはっきり見えるときだけ）</item>
-        <item>標準</item>
-        <item>ゆるい（後ろ向き・寝姿など、人の大きさの動きも人とみなす。ペットで誤検知あり）</item>
+        <item>厳しい（体のモデルが人と確認したとき、または顔がはっきり見えるときだけ。モデルなし版は顔だけ）</item>
+        <item>標準（動く形＋体のモデルで確認。暗くて確認できないときは、人の大きさの形が数秒動き続けたら人とみなす）</item>
+        <item>ゆるい（顔か、人の大きさの動く形だけで判断。後ろ向き・寝姿も拾うが、ペットで誤検知あり）</item>
     </string-array>
     <string-array name="person_sens_values">
         <item>1</item>

@@ -401,7 +401,7 @@ public class CameraService extends Service implements HttpServer.Backend {
 
     private void startPipeline() {
         if (pipeline != null) return;
-        pipeline = new CameraPipeline(settings, store, hub, pipelineEvents);
+        pipeline = new CameraPipeline(this, settings, store, hub, pipelineEvents);
         pipeline.setThermalLevel(thermal);
         pipeline.start();
     }
@@ -584,7 +584,11 @@ public class CameraService extends Service implements HttpServer.Backend {
         }
         sb.append('\n');
         sb.append("検知モード: ").append(settings.personMode()
-                ? "人を認識（動きを見て、顔などで人を判定。厳しさ " + settings.personSens + "）" : "動体検知（動きがあれば録画）");
+                ? "人を認識（動きを見て、顔・形・体のモデルで人を判定。厳しさ " + settings.personSens + "）" : "動体検知（動きがあれば録画）");
+        if (settings.personMode() && p != null) {
+            String bm = bodyModelText(p.bodyModelState());
+            if (!bm.isEmpty()) sb.append('\n').append(bm);
+        }
         sb.append('\n');
         sb.append(String.format(Locale.US, "電池 %.1f℃ %s %s  負荷制御:%s", batteryTempC,
                 batteryPct < 0 ? "" : batteryPct + "%", powerState, thermal));
@@ -634,12 +638,20 @@ public class CameraService extends Service implements HttpServer.Backend {
         return base.substring(0, base.length() - 1) + extraStatusJson(p) + "}";
     }
 
+    /** Status line about the body model (person mode). */
+    static String bodyModelText(String state) {
+        if ("ok".equals(state)) return "体のモデル: あり（明るいときだけ確認）";
+        if ("none".equals(state)) return "体のモデルなし（顔と形だけで判定）";
+        if ("failed".equals(state)) return "体のモデル: 使えません（顔と形だけで判定）";
+        return "";
+    }
+
     private String extraStatusJson(CameraPipeline p) {
         MonitorPolicy.Decision d = decision;
         MonitorPolicy.Config c = policy.config();
         StringBuilder sb = new StringBuilder();
         sb.append(",\"mode\":\"").append(settings.detectMode).append('"');
-        sb.append(",\"person\":{\"present\":").append(p != null && p.personPresent())
+        sb.append(",\"person\":{\"bodyModel\":\"").append(p == null ? "" : p.bodyModelState()).append("\",\"present\":").append(p != null && p.personPresent())
                 .append(",\"lastSeen\":").append(p == null ? 0L : p.lastPersonWallMs())
                 .append(",\"basis\":").append(HttpServer.jsonString(p == null ? "" : p.personBasis())).append('}');
         sb.append(",\"policy\":{\"active\":").append(d == null || d.active())
