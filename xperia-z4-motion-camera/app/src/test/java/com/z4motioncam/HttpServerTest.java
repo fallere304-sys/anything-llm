@@ -36,6 +36,7 @@ public class HttpServerTest {
     private volatile boolean monitoringOn = true;
     private byte[] video;
     private volatile String lastUpdateAction;
+    private final java.util.concurrent.atomic.AtomicInteger thumbMade = new java.util.concurrent.atomic.AtomicInteger();
 
     @Before
     public void setUp() throws IOException {
@@ -46,6 +47,19 @@ public class HttpServerTest {
         out.write(video);
         out.close();
         final RecordingStore store = new RecordingStore(dir, 0);
+        store.setThumbMaker(new RecordingStore.ThumbMaker() {
+            @Override public boolean make(File v, File out) {
+                thumbMade.incrementAndGet();
+                try {
+                    FileOutputStream o = new FileOutputStream(out);
+                    o.write(new byte[] {(byte) 0xFF, (byte) 0xD8, 7, 7, 7, (byte) 0xFF, (byte) 0xD9});
+                    o.close();
+                    return true;
+                } catch (IOException e) {
+                    return false;
+                }
+            }
+        });
         hub = new FrameHub();
         HttpServer.Backend backend = new HttpServer.Backend() {
             @Override public byte[] indexHtml() { return "<html>hi</html>".getBytes(StandardCharsets.UTF_8); }
@@ -242,6 +256,49 @@ public class HttpServerTest {
         producer.join();
         assertTrue(r.head.startsWith("HTTP/1.0 200"));
         assertArrayEquals(new byte[] {9, 9}, r.body);
+    }
+
+    @Test
+    public void servesThumbnailMadeOnceAndCached() throws IOException {
+        Resp r = get("/thumb/20260101_120000.mp4");
+        assertTrue(r.head, r.head.startsWith("HTTP/1.0 200"));
+        assertTrue(r.head, r.head.contains("Content-Type: image/jpeg"));
+        assertTrue(r.head, r.head.contains("Cache-Control: max-age=86400"));
+        assertArrayEquals(new byte[] {(byte) 0xFF, (byte) 0xD8, 7, 7, 7, (byte) 0xFF, (byte) 0xD9}, r.body);
+        get("/thumb/20260101_120000.mp4");
+        assertEquals("made only once", 1, thumbMade.get());
+        assertTrue(new File(dir, ".thumbs/20260101_120000.mp4.jpg").isFile());
+        // The thumbnail folder never shows up in the list of recordings.
+        String list = new String(get("/api/recordings").body, StandardCharsets.UTF_8);
+        assertTrue(list, list.startsWith("[{\"name\":\"20260101_120000.mp4\"") && list.indexOf("name", 20) < 0);
+    }
+
+    @Test
+    public void thumbnailForUnknownOrUnsafeNamesIs404() throws IOException {
+        assertTrue(get("/thumb/20990101_000000.mp4").head.startsWith("HTTP/1.0 404"));
+        assertTrue(get("/thumb/..%2F..%2Fetc%2Fpasswd").head.startsWith("HTTP/1.0 404"));
+        assertTrue(get("/thumb/../rec/20260101_120000.mp4").head.startsWith("HTTP/1.0 404"));
+        assertTrue(get("/thumb/").head.startsWith("HTTP/1.0 404"));
+        assertEquals(0, thumbMade.get());
+    }
+
+    @Test
+    public void deletingARecordingRemovesItsThumbnail() throws IOException {
+        get("/thumb/20260101_120000.mp4");
+        File t = new File(dir, ".thumbs/20260101_120000.mp4.jpg");
+        assertTrue(t.isFile());
+        Resp r = post("/api/delete", "20260101_120000.mp4", "X-Z4-Action: delete");
+        assertTrue(new String(r.body, StandardCharsets.UTF_8), new String(r.body, StandardCharsets.UTF_8).contains("\"deleted\":[\"20260101_120000.mp4\"]"));
+        assertFalse(t.exists());
+    }
+
+    @Test
+    public void thumbnailNeedsThePasswordOnTheOutsideServer() throws IOException {
+        password = "secret-pass1";
+        useRemote();
+        assertTrue(get("/thumb/20260101_120000.mp4").head.startsWith("HTTP/1.0 401"));
+        String basic = "Authorization: Basic " + java.util.Base64.getEncoder().encodeToString("z4:secret-pass1".getBytes(StandardCharsets.UTF_8));
+        assertTrue(get("/thumb/20260101_120000.mp4", basic).head.startsWith("HTTP/1.0 200"));
     }
 
     private void addRecording(String name, int size) throws IOException {

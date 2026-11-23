@@ -53,10 +53,25 @@
   .cb input:disabled + .box { opacity: .4; }
   li { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid #2a2a2a; }
   li.checked { background: #1a2238; }
+  li .thumb { flex: none; display: block; width: 80px; height: 60px; background: #222; border-radius: 4px; overflow: hidden; }
+  li .thumb img { width: 80px; height: 60px; object-fit: cover; display: block; }
+  li .thumb img.none { visibility: hidden; }
+  @media (max-width: 480px) {
+    li { gap: 6px; padding: 8px 2px; }
+    li .thumb, li .thumb img { width: 56px; height: 42px; }
+    li .dur { width: 3.6em; font-size: 12px; }
+    li .info a { font-size: 13px; word-break: break-all; }
+    li .actions { gap: 4px; flex-direction: column; }
+    li .actions .btn, li .actions button, li .actions a { padding: 5px 8px; font-size: 12px; }
+  }
   li .dur { flex: none; width: 4.6em; text-align: right; font-size: 14px; font-variant-numeric: tabular-nums; color: #ddd; }
   li .info { flex: 1; min-width: 0; }
   li .info a { color: #8ab4ff; }
   li.playing .info a { font-weight: bold; }
+  li.playing { background: #16301c; border-left: 4px solid #4caf50; }
+  /* The list scrolls by itself, so the video being played can sit right under the player. */
+  #list { position: relative; max-height: 58vh; min-height: 120px; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; border-bottom: 1px solid #2a2a2a; }
+  .nowtag { color: #81c784; font-size: 12px; font-weight: bold; }
   li .actions { display: flex; gap: 6px; flex: none; }
   .meta { color: #999; font-size: 13px; }
   video { width: 100%; max-height: 70vh; background: #000; border-radius: 8px; margin-top: 8px; display: none; }
@@ -112,8 +127,7 @@
 
   <!-- The sticky toolbar stays pinned only while this section is on screen. -->
   <section>
-  <h2>録画</h2>
-  <video id="player" controls playsinline></video>
+  <h2 id="recHead">録画</h2>
   <div class="toolbar">
     <label class="cb all"><input type="checkbox" id="selAll"><span class="box"></span>すべて選択</label>
     <button type="button" id="bulkSave" disabled>一括保存</button>
@@ -121,6 +135,7 @@
     <div id="selInfo" class="meta"></div>
   </div>
   <div id="notice" class="meta" role="status"></div>
+  <video id="player" controls playsinline></video>
   <ul id="list"><li class="meta">読み込み中…</li></ul>
   </section>
   <h2>稼働記録</h2>
@@ -294,6 +309,7 @@
   }
 
   function render() {
+    var keepScroll = listEl.scrollTop; // rebuilding the rows must not throw the list back to the top
     listEl.textContent = '';
     if (!items.length) listEl.appendChild(el('li', 'まだ録画はありません', 'meta'));
     for (var i = 0; i < items.length; i++) {
@@ -310,10 +326,20 @@
       label.appendChild(chk);
       label.appendChild(el('span', null, 'box'));
 
+      var thumb = el('a', null, 'thumb');
+      thumb.href = recUrl(it.name);
+      thumb.setAttribute('data-action', 'play');
+      thumb.setAttribute('aria-label', fmtName(it.name) + ' を再生');
+      var timg = el('img');
+      timg.alt = '';
+      timg.setAttribute('data-src', '/thumb/' + it.name);
+      thumb.appendChild(timg);
+
       var dur = el('div', fmtLen(it.duration), 'dur');
       dur.title = '録画時間';
 
       var info = el('div', null, 'info');
+      if (playing === it.name) info.appendChild(el('div', '▶ 再生中', 'nowtag'));
       var play = el('a', fmtName(it.name));
       play.href = recUrl(it.name);
       play.setAttribute('data-action', 'play');
@@ -331,12 +357,40 @@
       actions.appendChild(del);
 
       li.appendChild(label);
+      li.appendChild(thumb);
       li.appendChild(dur);
       li.appendChild(info);
       li.appendChild(actions);
       listEl.appendChild(li);
     }
     updateToolbar();
+    listEl.scrollTop = keepScroll;
+    loadThumbs();
+  }
+
+  /** Scrolls the list so the video being played is the first row, right under the player. */
+  function scrollToPlaying() {
+    var rows = listEl.getElementsByTagName('li');
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getAttribute('data-name') === playing) { listEl.scrollTop = rows[i].offsetTop; return; }
+    }
+  }
+
+  // Thumbnails are fetched one after another (the phone makes missing ones on first request, so a
+  // long list must not ask for all of them at once). The browser keeps them for a day.
+  var thumbRun = 0;
+  function loadThumbs() {
+    var run = ++thumbRun;
+    var imgs = [], found = listEl.getElementsByTagName('img');
+    for (var f = 0; f < found.length; f++) imgs.push(found[f]);
+    var i = 0;
+    (function next() {
+      if (run !== thumbRun || i >= imgs.length) return;
+      var im = imgs[i++];
+      im.onload = function () { im.onload = im.onerror = null; next(); };
+      im.onerror = function () { im.className = 'none'; im.onload = im.onerror = null; next(); };
+      im.src = im.getAttribute('data-src');
+    })();
   }
 
   function loadList(done) {
@@ -363,7 +417,7 @@
     }
     return null;
   }
-  listEl.addEventListener('change', function (ev) {
+  function onRowChange(ev) {
     var t = ev.target;
     if (!t || t.type !== 'checkbox') return;
     var name = t.getAttribute('data-name');
@@ -372,8 +426,8 @@
     while (node && node.tagName !== 'LI') node = node.parentNode;
     if (node) node.className = rowClass(name);
     updateToolbar();
-  });
-  listEl.addEventListener('click', function (ev) {
+  }
+  function onRowClick(ev) {
     var t = ev.target;
     while (t && t !== listEl && !(t.getAttribute && t.getAttribute('data-action'))) t = t.parentNode;
     if (!t || t === listEl) return;
@@ -386,13 +440,17 @@
       player.style.display = 'block';
       player.src = recUrl(name);
       try { player.play(); } catch (e) { /* autoplay may be refused; controls remain */ }
-      if (player.scrollIntoView) player.scrollIntoView();
       render();
+      scrollToPlaying();
+      var head = $('recHead');
+      if (head && head.scrollIntoView) head.scrollIntoView(); // shows toolbar, player and the list's first row
     } else if (action === 'delete') {
       ev.preventDefault();
       deleteFiles([name]);
     }
-  });
+  }
+  listEl.addEventListener('change', onRowChange);
+  listEl.addEventListener('click', onRowClick);
 
   selAll.addEventListener('change', function () {
     // From "partial" or "none" -> select all; from "all" -> clear.

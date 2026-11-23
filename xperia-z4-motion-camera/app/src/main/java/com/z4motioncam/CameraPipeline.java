@@ -473,6 +473,7 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
         if (recorder != null && recorder.isRecording()) {
             File f = recorder.stop();
             Log.i(TAG, "recording finished " + (f == null ? "(empty)" : f.getName()));
+            store.requestThumb(f); // thumbnail for the recordings list, made in the background
         }
         recording = false;
     }

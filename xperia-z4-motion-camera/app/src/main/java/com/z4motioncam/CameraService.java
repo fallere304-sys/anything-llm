@@ -378,6 +378,8 @@ public class CameraService extends Service implements HttpServer.Backend {
         }
         store = new RecordingStore(recordingsDir(s.useSdCard), s.minFreeBytes);
         store.deleteStaleParts();
+        store.setThumbMaker(new AndroidThumbMaker());
+        store.pruneThumbs();
         if (http == null || old == null || old.port != s.port) {
             if (http != null) http.stop();
             // LAN server: plain HTTP, refuses connections from outside the home network.
