@@ -36,14 +36,15 @@ final class MotionDetector {
     /** Correlation (squared) below which a textured cell counts as changed. */
     private static final float RHO2_MAX = 0.70f;
     /** Variance (luma^2) below which a pattern is "flat". */
-    private static final float MIN_VAR = 16f;
+    private static final float MIN_VAR = 4f;
     /** A cell's residual std must exceed noise * K + C to count. */
     private static final float NOISE_K = 2.5f;
-    private static final float NOISE_C = 2.0f;
+    private static final float NOISE_C = 1.5f;
     private static final float NOISE_CAP = 14f;
     private static final float ILLUM_RATIO = 0.35f;
     private static final float ILLUM_COHERENCE = 0.90f;
     private static final float ILLUM_ALWAYS = 0.85f;
+    private static final float GLOBAL_SHIFT_RATIO = 0.6f;
     private static final int ILLUM_SUPPRESS = 2;
     /** Consecutive analyses over the threshold required to trigger (filters sensor noise). */
     private static final int REQUIRED_HITS = 2;
@@ -206,28 +207,54 @@ final class MotionDetector {
 
         // 2. Per-cell statistics: correlation of the pattern with the background pattern.
         Arrays.fill(noiseHist, 0);
+        int gUp = 0;
+        int gDown = 0;
         for (int i = 0; i < cells; i++) {
             int o = i * N;
             float sc = 0;
             float sb = 0;
-            int clipC = 0;
-            int clipB = 0;
+            int hiC = 0;
+            int hiB = 0;
+            int loC = 0;
+            int loB = 0;
             for (int k = 0; k < N; k++) {
                 float c = cur[o + k];
                 float b = bg[o + k];
                 sc += c;
                 sb += b;
-                if (c >= 250f || c <= 2f) clipC++;
-                if (b >= 250f || b <= 2f) clipB++;
+                if (c >= 250f) hiC++;
+                else if (c <= 2f) loC++;
+                if (b >= 250f) hiB++;
+                else if (b <= 2f) loB++;
             }
             float mc = sc / N;
             float mb = sb / N;
+            // Remove the best-fit plane of each patch (a soft light gradient, a vignette, the edge of a
+            // sun patch); what is left is the structure that is compared.
+            float cu = 0;
+            float cv = 0;
+            float bu = 0;
+            float bv = 0;
+            for (int k = 0; k < N; k++) {
+                float u = (k & 3) - 1.5f;
+                float v = (k >> 2) - 1.5f;
+                cu += cur[o + k] * u;
+                cv += cur[o + k] * v;
+                bu += bg[o + k] * u;
+                bv += bg[o + k] * v;
+            }
+            cu /= 20f;
+            cv /= 20f;
+            bu /= 20f;
+            bv /= 20f;
             float ssc = 0;
             float ssb = 0;
             float sp = 0;
             for (int k = 0; k < N; k++) {
-                float dc = cur[o + k] - mc;
-                float db = bg[o + k] - mb;
+                float u = (k & 3) - 1.5f;
+                float v = (k >> 2) - 1.5f;
+                float dc = cur[o + k] - mc - cu * u - cv * v;
+                float db = bg[o + k] - mb - bu * u - bv * v;
                 ssc += dc * dc;
                 ssb += db * db;
                 sp += dc * db;
@@ -237,9 +264,14 @@ final class MotionDetector {
             if (rc < 0) rc = 0;
             if (rb < 0) rb = 0;
             meanShift[i] = mc - mb;
+            // Global-exposure vote: the cell's mean moved by more than ~25 % (or 6 levels in the dark).
+            float dm = mc - mb;
+            float lim = Math.max(6f, 0.25f * Math.max(mc, mb));
+            if (dm > lim) gUp++;
+            else if (dm < -lim) gDown++;
             resid[i] = Math.max(rc, rb) / N;
             rho2[i] = (ssc > 1e-3f && ssb > 1e-3f) ? (sp * sp) / (ssc * ssb) : 0f;
-            valid[i] = clipC < N / 2 && clipB < N / 2;
+            valid[i] = hiC < 2 && hiB < 2 && loC < N / 2 && loB < N / 2;
             varMax[i] = Math.max(ssc, ssb) / N;
             int bin = (int) (Math.sqrt(Math.max(rc, rb) / N) * 4f);
             noiseHist[Math.min(63, bin)]++;
@@ -261,6 +293,7 @@ final class MotionDetector {
 
         // 3. Decide per cell.
         int rawCount = 0;
+        int textured = 0;
         int pos = 0;
         int neg = 0;
         for (int i = 0; i < cells; i++) {
@@ -268,16 +301,21 @@ final class MotionDetector {
             flat[i] = isFlat;
             boolean c = !isFlat && valid[i] && rho2[i] < RHO2_MAX && resid[i] > thr;
             raw[i] = c;
+            if (!isFlat && valid[i]) textured++;
             if (c) {
                 rawCount++;
-                if (meanShift[i] > 6f) pos++;
-                else if (meanShift[i] < -6f) neg++;
+                if (meanShift[i] > 3f) pos++;
+                else if (meanShift[i] < -3f) neg++;
             }
         }
         float rawRatio = rawCount / (float) cells;
+        // A shift of the mean level of most of the picture, in one direction, is an exposure or
+        // lighting event whatever the pattern correlation says (a person never covers 60 % of the view).
+        boolean globalShift = Math.max(gUp, gDown) >= GLOBAL_SHIFT_RATIO * cells
+                && Math.min(gUp, gDown) <= 0.1f * Math.max(gUp, gDown);
         int signed = pos + neg;
         boolean coherent = signed >= rawCount / 2 && Math.max(pos, neg) >= ILLUM_COHERENCE * signed;
-        if (rawRatio >= ILLUM_ALWAYS || (rawRatio >= ILLUM_RATIO && coherent)) {
+        if (globalShift || rawRatio >= ILLUM_ALWAYS || (coherent && (rawRatio >= ILLUM_RATIO || (rawRatio >= 0.06f && rawCount >= 0.6f * textured)))) {
             System.arraycopy(cur, 0, bg, 0, cur.length);
             suppress = ILLUM_SUPPRESS;
             lastRatio = 0f;
