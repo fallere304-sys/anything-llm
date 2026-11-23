@@ -16,6 +16,8 @@ import android.provider.Settings;
 import android.util.Log;
 
 import java.io.File;
+import java.io.InputStream;
+import java.security.SecureRandom;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
@@ -26,12 +28,14 @@ import java.util.concurrent.ThreadFactory;
 import javax.net.ssl.SSLSocketFactory;
 
 /**
- * Owns the update state on the phone: the daily check, the download, and the hand-over to the
- * system installer. All network and file work runs on one background thread; the camera is never
+ * Owns the update state on the phone: the daily check, the download, an APK pushed from a browser on
+ * the home network, and the hand-over to the system installer. Both entrances (the phone fetches
+ * from the Internet / the browser sends it, with a code shown only on the phone) end in the same
+ * verified file in the same folder and share the installer step. All network and file work runs on one background thread; the camera is never
  * touched. Nothing is installed without the person confirming on Android's own installer screen.
  */
 final class UpdateManager {
-    enum Phase { IDLE, CHECKING, UP_TO_DATE, AVAILABLE, DOWNLOADING, READY, ERROR }
+    enum Phase { IDLE, CHECKING, UP_TO_DATE, AVAILABLE, DOWNLOADING, RECEIVING, READY, ERROR }
 
     /** What the service provides. */
     interface Host {
@@ -58,6 +62,7 @@ final class UpdateManager {
     private final SSLSocketFactory tls;
     private final UpdateStore store;
     private final UpdateEngine engine;
+    private final UpdatePush push;
     private final ExecutorService executor;
     private final long startedMs = System.currentTimeMillis();
 
@@ -75,6 +80,7 @@ final class UpdateManager {
         this.tls = tls;
         this.store = new UpdateStore(updatesDir(context));
         this.engine = new UpdateEngine(store, new DeviceEnv(context), new UpdateHttp(tls, false));
+        this.push = new UpdatePush(engine, new UpdateWindow(new SecureRandom()), pushGate);
         this.executor = Executors.newSingleThreadExecutor(new ThreadFactory() {
             @Override
             public Thread newThread(Runnable r) {
@@ -109,7 +115,7 @@ final class UpdateManager {
             host.event("アプリを更新しました（版 " + seen + " → " + cur + "）。録画と設定は引き継がれています");
         }
         p.edit().putInt(PREF_SEEN_VC, cur).putBoolean(PREF_RESTART, false).apply();
-        UpdateManifest m = loadManifest(p, cur);
+        UpdateManifest m = newer(loadManifest(p, cur), pushedReady(cur));
         available = m;
         store.cleanup(cur, m == null ? -1 : m.versionCode, System.currentTimeMillis());
         if (m != null) phase = isReady(m) ? Phase.READY : Phase.AVAILABLE;
@@ -130,6 +136,20 @@ final class UpdateManager {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** An APK that was pushed from a browser and is still waiting, rebuilt from the saved meta file. */
+    private UpdateManifest pushedReady(int cur) {
+        int vc = store.newestReady(cur);
+        UpdateStore.Meta meta = vc < 0 ? null : store.readMeta(vc);
+        if (meta == null || !UpdateManifest.PUSH_URL.equals(meta.url)) return null;
+        return UpdateManifest.pushed(vc, meta.name, meta.sha256, meta.size);
+    }
+
+    /** The one to offer: the higher version; the pushed one when both are the same version. */
+    private static UpdateManifest newer(UpdateManifest fetched, UpdateManifest pushed) {
+        if (pushed != null && (fetched == null || pushed.versionCode >= fetched.versionCode)) return pushed;
+        return fetched;
     }
 
     private boolean isReady(UpdateManifest m) {
@@ -158,7 +178,7 @@ final class UpdateManager {
 
     /** Called about every 15 s: starts the daily check when it is due. */
     void tick() {
-        if (!autoEnabled() || phase == Phase.CHECKING || phase == Phase.DOWNLOADING) return;
+        if (!autoEnabled() || busy()) return;
         long now = System.currentTimeMillis();
         if (now - startedMs < UpdateSchedule.STARTUP_DELAY_MS && now >= startedMs) return;
         SharedPreferences p = prefs();
@@ -169,7 +189,7 @@ final class UpdateManager {
 
     /** @return null when started, otherwise a message for the person */
     synchronized String check(final boolean manual) {
-        if (phase == Phase.CHECKING || phase == Phase.DOWNLOADING) return "処理中です。しばらくお待ちください";
+        if (busy()) return "処理中です。しばらくお待ちください";
         long now = System.currentTimeMillis();
         if (manual && Math.abs(now - lastManualMs) < MANUAL_GAP_MS) return "少し待ってからもう一度押してください";
         if (!online()) {
@@ -188,6 +208,10 @@ final class UpdateManager {
         return null;
     }
 
+    private boolean busy() {
+        return phase == Phase.CHECKING || phase == Phase.DOWNLOADING || phase == Phase.RECEIVING;
+    }
+
     private void runCheck(boolean manual) {
         SharedPreferences p = prefs();
         long now = System.currentTimeMillis();
@@ -199,7 +223,13 @@ final class UpdateManager {
             UpdateManifest m = engine.check(url, p.getString("update_sha256", ""));
             p.edit().putLong(PREF_LAST_OK, now).putLong(PREF_LAST_TRY, now).putInt(PREF_FAILS, 0).apply();
             int cur = installedVc();
-            if (m == null) {
+            UpdateManifest pushed = pushedReady(cur);
+            if (pushed != null && (m == null || pushed.versionCode >= m.versionCode)) {
+                // An APK sent from a browser is already waiting and is not older: keep offering that one.
+                available = pushed;
+                store.cleanup(cur, pushed.versionCode, now);
+                phase = Phase.READY;
+            } else if (m == null) {
                 available = null;
                 p.edit().remove(PREF_MANIFEST).apply();
                 store.cleanup(cur, -1, now);
@@ -235,7 +265,7 @@ final class UpdateManager {
     synchronized String download() {
         final UpdateManifest m = available;
         if (m == null) return "先に「更新を確認」を押してください";
-        if (phase == Phase.CHECKING || phase == Phase.DOWNLOADING) return "処理中です。しばらくお待ちください";
+        if (busy()) return "処理中です。しばらくお待ちください";
         if (phase == Phase.READY) return null;
         if (!online()) return "ネットワークに接続されていません";
         phase = Phase.DOWNLOADING;
@@ -344,8 +374,82 @@ final class UpdateManager {
         return i.setDataAndType(uri, "application/vnd.android.package-archive");
     }
 
+    // ---- the browser entrance ----
+
+    private Phase phaseBeforePush = Phase.IDLE;
+
+    private final UpdatePush.Gate pushGate = new UpdatePush.Gate() {
+        @Override
+        public String enter() {
+            synchronized (UpdateManager.this) {
+                if (busy()) return "いま別の更新作業中です。終わってからやり直してください";
+                phaseBeforePush = phase;
+                phase = Phase.RECEIVING;
+                error = null;
+                return null;
+            }
+        }
+
+        @Override
+        public void leave(UpdateManifest received) {
+            synchronized (UpdateManager.this) {
+                if (received != null) {
+                    available = received;
+                    phase = Phase.READY;
+                    host.event("ブラウザから更新 " + received.versionName + " を受信し、確認しました（SHA-256 "
+                            + received.sha256.substring(0, 12) + "…）。更新ボタンから導入できます");
+                } else {
+                    phase = phaseBeforePush == Phase.RECEIVING ? Phase.IDLE : phaseBeforePush;
+                }
+            }
+        }
+    };
+
+    /** Opens the window (a new code) unless it is open already; the code is for the phone's screen only. */
+    synchronized String openPushWindow() {
+        long now = System.currentTimeMillis();
+        UpdateWindow w = push.window();
+        if (!w.isOpen(now)) {
+            w.open(now);
+            host.event("ブラウザからの更新の受け付けを始めました（" + UpdateWindow.OPEN_MS / 60_000 + "分間・コードは Z4 の画面だけに表示）");
+        }
+        return w.code(now);
+    }
+
+    /** The code now valid, or null when the window is closed. Never leaves the phone's own screen. */
+    String pushCode() {
+        return push.window().code(System.currentTimeMillis());
+    }
+
+    long pushRemainingMs() {
+        return push.window().remainingMs(System.currentTimeMillis());
+    }
+
+    /** An APK sent from a browser; called on the HTTP thread. */
+    UpdatePush.Result acceptPush(String code, InputStream body, long length) {
+        return push.receive(code, body, length, System.currentTimeMillis());
+    }
+
     Phase phase() {
         return phase;
+    }
+
+    /** The text of the phone's update dialog: where things stand, and what each entrance does. */
+    String dialogText() {
+        UpdateManifest m = available;
+        StringBuilder sb = new StringBuilder("いまの版: ").append(installedName()).append('（').append(installedVc()).append('）');
+        String line = statusLine();
+        sb.append('\n').append(line == null ? "更新: 新しい版はまだ見つかっていません" : line);
+        String guide = phase == Phase.READY ? unknownSourcesAdvice() : null;
+        if (guide != null) sb.append("\n\n※ ").append(guide);
+        if (phase == Phase.READY && m != null) {
+            sb.append("\nSHA-256 ").append(m.sha256.substring(0, 16)).append("…（")
+                    .append(m.isPushed() ? "ブラウザから受信" : "インターネットから取得").append('）');
+        }
+        sb.append("\n\n更新の入口は2つあります。どちらも同じ検証（SHA-256・署名・版）を通り、最後は Android の確認画面で決めます。")
+                .append("\n・インターネットから: Z4 が更新先（https）から取得します（自動確認は1日1回）")
+                .append("\n・ブラウザから送る: 同じ Wi-Fi のパソコンから APK を送ります（USB 不要・コードをこの画面に表示）");
+        return sb.toString();
     }
 
     /** What the single button on the phone does now: check, download or install. */
@@ -364,8 +468,11 @@ final class UpdateManager {
                 return String.format(Locale.US, "更新: ダウンロード中 %d%%", total <= 0 ? 0 : (int) (done * 100 / total));
             case READY: return "更新: " + (m == null ? "" : m.versionName + " を導入できます（「更新」ボタン）");
             case AVAILABLE: return "更新: 新しい版 " + (m == null ? "" : m.versionName) + " があります（「更新」ボタン）";
+            case RECEIVING: return "更新: ブラウザから受信中…";
             case ERROR: return "更新: " + error;
-            default: return null;
+            default:
+                return push.window().isOpen(System.currentTimeMillis())
+                        ? "更新: ブラウザからの受け付け中（あと" + (pushRemainingMs() / 60_000 + 1) + "分）" : null;
         }
     }
 
@@ -373,9 +480,10 @@ final class UpdateManager {
         switch (phase) {
             case CHECKING: return "確認中…";
             case DOWNLOADING: return total <= 0 ? "取得中…" : "取得 " + (int) (done * 100 / total) + "%";
+            case RECEIVING: return "受信中…";
             case READY: return "更新を導入";
-            case AVAILABLE: return "更新を取得";
-            default: return "更新を確認";
+            case AVAILABLE: return "更新あり";
+            default: return "更新";
         }
     }
 
@@ -396,7 +504,8 @@ final class UpdateManager {
         } else {
             sb.append("{\"code\":").append(m.versionCode).append(",\"name\":").append(HttpServer.jsonString(m.versionName))
                     .append(",\"size\":").append(m.size).append(",\"notes\":").append(HttpServer.jsonString(m.notes))
-                    .append(",\"sha256\":").append(HttpServer.jsonString(m.sha256)).append('}');
+                    .append(",\"sha256\":").append(HttpServer.jsonString(m.sha256))
+                    .append(",\"source\":\"").append(m.isPushed() ? "push" : "internet").append("\"}");
         }
         sb.append(",\"progress\":").append(String.format(Locale.US, "%.3f", total <= 0 ? 0f : done / (float) total));
         sb.append(",\"error\":").append(error == null || phase != Phase.ERROR ? "null" : HttpServer.jsonString(error));
@@ -405,6 +514,10 @@ final class UpdateManager {
         sb.append(",\"auto\":").append(autoEnabled());
         sb.append(",\"pinned\":").append(!p.getString("update_sha256", "").isEmpty());
         sb.append(",\"action\":\"").append(primaryAction()).append('"');
+        long nowMs = System.currentTimeMillis();
+        sb.append(",\"push\":{\"open\":").append(push.window().isOpen(nowMs))
+                .append(",\"remainingSec\":").append(pushRemainingMs() / 1000)
+                .append(",\"maxMb\":").append(UpdateEngine.PUSH_MAX_BYTES / 1024 / 1024).append('}');
         sb.append(",\"guide\":").append(guide == null ? "null" : HttpServer.jsonString(guide));
         return sb.append('}').toString();
     }
@@ -460,7 +573,7 @@ final class UpdateManager {
         public UpdateEngine.ApkInfo readApk(File apk) {
             PackageInfo pi = context.getPackageManager().getPackageArchiveInfo(apk.getPath(), PackageManager.GET_SIGNATURES);
             if (pi == null) return null;
-            return new UpdateEngine.ApkInfo(pi.packageName, pi.versionCode, hexes(pi.signatures));
+            return new UpdateEngine.ApkInfo(pi.packageName, pi.versionCode, hexes(pi.signatures), pi.versionName);
         }
 
         private static Set<String> hexes(Signature[] sigs) {

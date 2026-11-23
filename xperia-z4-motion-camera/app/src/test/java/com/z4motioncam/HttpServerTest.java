@@ -72,6 +72,7 @@ public class HttpServerTest {
             @Override public void setMonitoring(boolean on) { monitoringOn = on; }
             @Override public String settingsJson() { return "{\"groups\":[]}"; }
             @Override public String updateJson() { return "{\"phase\":\"idle\"}"; }
+            @Override public UpdatePush.Result acceptUpdate(String code, InputStream body, long length) { return UpdatePush.Result.fail(403, "no"); }
             @Override public String updateAction(String action) { lastUpdateAction = action; return action.equals("install") ? "導入できません" : null; }
             @Override public String updateSettings(java.util.Map<String, String> changes) {
                 lastChanges = changes;

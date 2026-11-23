@@ -69,6 +69,9 @@ final class HttpServer {
 
         /** "check" / "download" / "install": returns null when started, otherwise a message for the person. */
         String updateAction(String action);
+
+        /** Receives an APK pushed from the LAN; {@code code} is the one shown only on the phone's screen. */
+        UpdatePush.Result acceptUpdate(String code, InputStream body, long length);
     }
 
     private static final Charset UTF8 = Charset.forName("UTF-8");
@@ -76,6 +79,10 @@ final class HttpServer {
     private static final int MAX_STREAMS = 3;
     private static final int READ_TIMEOUT_MS = 15_000;
     private static final int MAX_BODY_BYTES = 256 * 1024;
+    /** After refusing an upload, a body up to this size is read and dropped so the client sees the answer. */
+    private static final long DRAIN_LIMIT = 2L * 1024 * 1024;
+    /** The one POST whose body is streamed to the handler instead of being buffered (an APK). */
+    static final String PUSH_PATH = "/api/update/push";
     private static final long MAX_ZIP_BYTES = 3_900_000_000L;
 
     private static final int MAX_AUTH_FAILURES = 5;
@@ -290,8 +297,61 @@ final class HttpServer {
         }
     }
 
+    private void handleUpdatePush(final Request req, OutputStream out) throws IOException {
+        // Same cross-origin protection as the other actions (see /api/delete below).
+        if (!"update".equals(req.headers.get("x-z4-action"))) {
+            writeSimple(out, 403, "text/plain", "forbidden\n".getBytes(UTF8), false);
+            return;
+        }
+        if (requirePassword) {
+            // Over the Internet nobody can read the code on the phone's screen, and the installer needs
+            // someone at the phone anyway: pushing an update is LAN-only (even with the password).
+            writeJson(out, 403, UpdatePush.Result.fail(403,
+                    "外出先（HTTPS）からは更新を送れません。家の Wi-Fi につないだブラウザから行ってください").json());
+            return;
+        }
+        final long len = req.contentLength;
+        final long[] used = {0};
+        InputStream counted = new InputStream() {
+            @Override
+            public int read() throws IOException {
+                int b = req.in.read();
+                if (b >= 0) used[0]++;
+                return b;
+            }
+
+            @Override
+            public int read(byte[] buf, int off, int n) throws IOException {
+                int r = req.in.read(buf, off, n);
+                if (r > 0) used[0] += r;
+                return r;
+            }
+        };
+        UpdatePush.Result r = backend.acceptUpdate(req.headers.get("x-z4-code"), counted, len);
+        long left = len - used[0];
+        if (!r.ok && left > 0 && left <= DRAIN_LIMIT) {
+            byte[] sink = new byte[8192];
+            try {
+                while (left > 0) {
+                    int n = req.in.read(sink, 0, (int) Math.min(sink.length, left));
+                    if (n < 0) break;
+                    left -= n;
+                }
+            } catch (IOException ignored) {
+                // the client gave up
+            }
+        }
+        writeJson(out, r.http, r.json());
+    }
+
+    private static void writeJson(OutputStream out, int code, String json) throws IOException {
+        writeSimple(out, code, "application/json; charset=utf-8", json.getBytes(UTF8), false);
+    }
+
     private void handlePost(Request req, OutputStream out) throws IOException {
-        if (req.body == null) {
+        if (req.path.equals(PUSH_PATH)) {
+            handleUpdatePush(req, out);
+        } else if (req.body == null) {
             writeSimple(out, 413, "text/plain", "request too large\n".getBytes(UTF8), false);
         } else if (req.path.equals("/api/delete")) {
             // A custom header cannot be sent cross-origin without a CORS preflight, which this server
@@ -662,6 +722,8 @@ final class HttpServer {
             case 403: return "Forbidden";
             case 404: return "Not Found";
             case 405: return "Method Not Allowed";
+            case 409: return "Conflict";
+            case 500: return "Internal Server Error";
             case 413: return "Payload Too Large";
             case 429: return "Too Many Requests";
             case 503: return "Service Unavailable";
@@ -686,14 +748,19 @@ final class HttpServer {
         final Map<String, String> headers;
         /** Request body; empty when absent, null when larger than the limit. */
         final byte[] body;
+        /** For POST {@link #PUSH_PATH} only: the body is not buffered but streamed from here. */
+        final InputStream in;
+        final long contentLength;
 
         private Request(String method, String path, Map<String, String> query,
-                        Map<String, String> headers, byte[] body) {
+                        Map<String, String> headers, byte[] body, InputStream in, long contentLength) {
             this.method = method;
             this.path = path;
             this.query = query;
             this.headers = headers;
             this.body = body;
+            this.in = in;
+            this.contentLength = contentLength;
         }
 
         static Request read(InputStream in) throws IOException {
@@ -719,8 +786,21 @@ final class HttpServer {
                     else if (!kv.isEmpty()) query.put(decode(kv), "");
                 }
             }
-            return new Request(parts[0].toUpperCase(Locale.US), decode(rawPath), query, headers,
-                    readBody(in, headers.get("content-length")));
+            String method = parts[0].toUpperCase(Locale.US);
+            String path = decode(rawPath);
+            if (method.equals("POST") && path.equals(PUSH_PATH)) {
+                // An APK is bigger than the buffered-body limit: leave the body for the handler to stream.
+                return new Request(method, path, query, headers, new byte[0], in, parseLength(headers.get("content-length")));
+            }
+            return new Request(method, path, query, headers, readBody(in, headers.get("content-length")), in, 0);
+        }
+
+        private static long parseLength(String contentLength) {
+            try {
+                return contentLength == null ? -1 : Long.parseLong(contentLength.trim());
+            } catch (NumberFormatException e) {
+                return -1;
+            }
         }
 
         private static byte[] readBody(InputStream in, String contentLength) throws IOException {

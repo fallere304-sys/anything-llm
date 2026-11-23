@@ -169,12 +169,30 @@
   <div class="panel">
     <dl class="kv" id="updateKv"></dl>
     <p>
-      <button type="button" id="updCheck">更新を確認</button>
+      <button type="button" id="updCheck">インターネットから確認</button>
       <button type="button" id="updDownload" class="hidden">ダウンロード</button>
       <button type="button" id="updInstall" class="hidden">導入画面をZ4に表示</button>
     </p>
     <div id="updateMsg" class="meta" role="status"></div>
-    <p class="meta">Z4が自分で更新先（https）から新しい版を探します（1日1回）。ダウンロードした APK は、SHA-256 と署名（今のアプリと同じ鍵か）を確かめてから、Android 標準の導入画面を出します。導入の最終確認は Z4 の画面で行います。録画と設定は消えません。</p>
+    <p class="meta">更新の入口は2つあります。どちらで受け取った APK も同じ検証（SHA-256・署名が今のアプリと同じ鍵か・版が新しいか）を通し、最後は Z4 の Android 標準の導入画面で確認します。録画と設定は消えません。</p>
+    <details id="pushBox">
+      <summary>ブラウザから送る（USB ケーブル不要・家の Wi-Fi 内だけ）</summary>
+      <p class="meta" id="pushInfo">読み込み中…</p>
+      <ol class="meta">
+        <li>Z4 の画面の「更新」ボタン →「ブラウザから送る」を押すと、6桁のコードが Z4 の画面にだけ出ます（10分有効・1回だけ）。</li>
+        <li>下で新しい APK を選び、そのコードを入力して「更新を送る」を押します。</li>
+        <li>検証に通ると、Z4 の「更新」ボタンから導入できます（上の「導入画面をZ4に表示」でも可）。</li>
+      </ol>
+      <div class="settings">
+        <div class="row"><label class="name" for="upFile">APK ファイル</label><input type="file" id="upFile" accept=".apk,application/vnd.android.package-archive"></div>
+        <div class="row"><label class="name" for="upCode">Z4 に表示されたコード</label>
+          <input type="text" id="upCode" maxlength="6" inputmode="numeric" autocomplete="off" placeholder="6桁"></div>
+      </div>
+      <p><button type="button" id="upSend">更新を送る</button></p>
+      <div id="upMsg" class="meta" role="status"></div>
+      <div id="upSha" class="meta fp"></div>
+      <p class="meta">同じ署名（同じ鍵）の、いまより新しい版の APK だけ受け付けます（上限 30MB）。外出先の HTTPS からは使えません。</p>
+    </details>
   </div>
 
   <h2>外出先からの視聴</h2>
@@ -820,7 +838,7 @@
   var updateKv = $('updateKv'), updateMsg = $('updateMsg'), updCheck = $('updCheck'),
       updDownload = $('updDownload'), updInstall = $('updInstall');
   var UPD_PHASE = { idle: '未確認', checking: '確認中…', up_to_date: '最新です', available: '新しい版があります',
-                    downloading: 'ダウンロード中', ready: '導入できます', error: 'うまくいきませんでした' };
+                    downloading: 'ダウンロード中', receiving: 'ブラウザから受信中', ready: '導入できます', error: 'うまくいきませんでした' };
   function updSay(text, isError) {
     updateMsg.textContent = text || '';
     updateMsg.className = 'meta' + (isError ? ' err' : '');
@@ -830,7 +848,8 @@
     var rows = [['状態', (UPD_PHASE[u.phase] || u.phase) + (u.phase === 'downloading' ? '（' + Math.round(u.progress * 100) + '%）' : '')],
                 ['今の版', u.installed.name + '（' + u.installed.code + '）']];
     if (u.latest) {
-      rows.push(['新しい版', u.latest.name + '（' + u.latest.code + '）  ' + fmtSize(u.latest.size)]);
+      rows.push([u.latest.source === 'push' ? '受信した版' : '新しい版', u.latest.name + '（' + u.latest.code + '）  ' + fmtSize(u.latest.size)
+        + (u.latest.source === 'push' ? '  ブラウザから受信' : '')]);
       if (u.latest.notes) rows.push(['内容', u.latest.notes]);
       rows.push(['APKのSHA-256', u.latest.sha256, 'fp']);
     }
@@ -840,10 +859,61 @@
     fillKv(updateKv, rows);
     show(updDownload, u.phase === 'available' || (u.phase === 'error' && !!u.latest && u.action === 'download'));
     show(updInstall, u.phase === 'ready');
-    updCheck.disabled = u.phase === 'checking' || u.phase === 'downloading';
+    updCheck.disabled = u.phase === 'checking' || u.phase === 'downloading' || u.phase === 'receiving';
+    showPush(u);
     if (u.phase === 'error' && u.error) updSay(u.error, true);
     else if (u.phase === 'ready' && u.guide) updSay(u.guide, true);
   }
+  // ---- app update, entrance 2: send an APK from this browser (LAN only) ----
+  var upFile = $('upFile'), upCode = $('upCode'), upSend = $('upSend'), upMsg = $('upMsg'), upSha = $('upSha');
+  function upSay(text, isError) {
+    upMsg.textContent = text || '';
+    upMsg.className = 'meta' + (isError ? ' err' : '');
+    upMsg.style.color = isError ? '#ff8a80' : '';
+  }
+  function showPush(u) {
+    var p = u.push;
+    if (!p) return;
+    var t = 'いまの版: ' + u.installed.name + '　';
+    if (u.phase === 'receiving') t += 'Z4 が APK を受信中です。';
+    else if (u.phase === 'ready' && u.latest && u.latest.source === 'push') t += '検証済みの更新（版 ' + u.latest.name + '）が Z4 で導入待ちです。Z4 の「更新」ボタンを押してください。';
+    else if (p.open) t += 'Z4 が更新を受け付け中です（あと約' + Math.ceil(p.remainingSec / 60) + '分）。';
+    else t += 'Z4 は受け付けていません。Z4 の画面の「更新」→「ブラウザから送る」を押してください。';
+    $('pushInfo').textContent = t;
+  }
+  upSend.addEventListener('click', function () {
+    var f = upFile.files && upFile.files[0], code = upCode.value.replace(/\s/g, '');
+    upSha.textContent = '';
+    if (!f) { upSay('APK ファイルを選んでください', true); return; }
+    if (!/^[0-9]{6}$/.test(code)) { upSay('Z4 の画面に表示された6桁のコードを入力してください', true); return; }
+    upSend.disabled = true;
+    upSay('送信しています… 0%');
+    var x = new XMLHttpRequest();
+    x.open('POST', '/api/update/push');
+    x.setRequestHeader('X-Z4-Action', 'update');
+    x.setRequestHeader('X-Z4-Code', code);
+    x.setRequestHeader('Content-Type', 'application/vnd.android.package-archive');
+    if (x.upload) x.upload.onprogress = function (e) {
+      if (e.lengthComputable) upSay('送信しています… ' + Math.floor(e.loaded * 100 / e.total) + '%');
+    };
+    x.onreadystatechange = function () {
+      if (x.readyState !== 4) return;
+      upSend.disabled = false;
+      var r = null;
+      try { r = JSON.parse(x.responseText || '{}'); } catch (e) { r = null; }
+      if (!x.status) { upSay('通信エラーです。Z4 に届いていない可能性があります。もう一度お試しください', true); return; }
+      if (r && r.sha256) upSha.textContent = 'SHA-256: ' + r.sha256 + '（PC の sha256sum の値と見比べられます）';
+      if (r && r.ok) {
+        upCode.value = '';
+        upSay('✔ ' + r.message + '。Z4 の「更新」ボタンから導入できます（ここの「導入画面をZ4に表示」でも可）。');
+      } else {
+        upSay('✖ ' + ((r && r.message) || ('HTTP ' + x.status)), true);
+      }
+      loadStatus();
+    };
+    x.send(f);
+  });
+
   function updAct(action) {
     updSay('実行しています…');
     request('POST', '/api/update', 'action=' + action, { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Z4-Action': 'update' },

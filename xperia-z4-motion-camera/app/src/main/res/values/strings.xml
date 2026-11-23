@@ -38,7 +38,14 @@
     <string name="pref_update_sha256">期待する APK の SHA-256（任意・別経路で確認した値）</string>
     <!-- Overridden at build time (build-apk.sh UPDATE_URL=...). Must be https. -->
     <string name="default_update_url" translatable="false">https://github.com/fallere304-sys/anything-llm/raw/claude/xperia-z4-motion-camera-7x4wet/xperia-z4-motion-camera/release/update.json</string>
-    <string name="update_check">更新を確認</string>
+    <string name="update_check">更新</string>
+    <string name="update_title">アプリの更新</string>
+    <string name="update_do_check">インターネットから確認</string>
+    <string name="update_do_download">インターネットから取得</string>
+    <string name="update_do_install">更新を導入</string>
+    <string name="update_from_browser">ブラウザから送る</string>
+    <string name="update_code_title">ブラウザからの更新を受け付けています</string>
+    <string name="close">閉じる</string>
     <string name="pref_cat_storage">ストレージ</string>
     <string name="pref_use_sd">SDカードを優先して保存</string>
     <string name="pref_min_free">確保する空き容量（MB）</string>

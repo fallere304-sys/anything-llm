@@ -1,7 +1,10 @@
 package com.z4motioncam;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Locale;
 import java.util.Set;
 
@@ -22,6 +25,9 @@ import java.util.Set;
  *       update anyway; this explains why, before the installer screen);
  *   <li>after all that Android's own installer asks the person for the final confirmation.
  * </ol>
+ * An APK pushed from a browser ({@link #receive}) goes through the same checks (the manifest's
+ * part is replaced by what the file itself says) and ends up in the same store, so everything
+ * after "ready" is shared by both entrances.
  */
 final class UpdateEngine {
     /** What the engine needs to know about the device. */
@@ -43,13 +49,23 @@ final class UpdateEngine {
         final String pkg;
         final int versionCode;
         final Set<String> signers;
+        /** May be empty. */
+        final String versionName;
 
         ApkInfo(String pkg, int versionCode, Set<String> signers) {
+            this(pkg, versionCode, signers, "");
+        }
+
+        ApkInfo(String pkg, int versionCode, Set<String> signers, String versionName) {
             this.pkg = pkg;
             this.versionCode = versionCode;
             this.signers = signers;
+            this.versionName = versionName == null ? "" : versionName;
         }
     }
+
+    /** The most a browser may push (the real APK is a few MB; this only bounds a wrong file). */
+    static final long PUSH_MAX_BYTES = 30L * 1024 * 1024;
 
     /** Extra room kept free beyond the APK itself (the installer needs working space too). */
     static final long STORAGE_MARGIN = 20L * 1024 * 1024;
@@ -154,6 +170,84 @@ final class UpdateEngine {
         return target;
     }
 
+    /**
+     * Takes an APK streamed from a browser: writes exactly {@code length} bytes to a part file, then
+     * applies the format, JAR-signature, package, version and signer checks, and stores it as the
+     * ready update (replacing any other version waiting). A rejected file is deleted at once.
+     *
+     * @return what is now ready, described like a manifest (sha256 and size are those of the file)
+     */
+    UpdateManifest receive(InputStream body, long length) throws UpdateException {
+        if (length <= 0) throw new UpdateException(UpdateException.Kind.BAD_FORMAT, "ファイルが空です");
+        if (length > PUSH_MAX_BYTES) {
+            throw new UpdateException(UpdateException.Kind.TOO_LARGE, "ファイルが大きすぎます（上限 " + PUSH_MAX_BYTES / 1024 / 1024 + "MB）");
+        }
+        if (store.usableBytes() < length + STORAGE_MARGIN) {
+            throw new UpdateException(UpdateException.Kind.STORAGE, "空き容量が足りません（約 " + ((length + STORAGE_MARGIN) / (1024 * 1024))
+                    + " MB 必要、空き " + (store.usableBytes() / (1024 * 1024)) + " MB）。録画を整理してください");
+        }
+        store.cleanup(env.installedVersionCode(), -1, env.wallMs()); // leftovers, before the part file exists
+        File part = store.pushPart();
+        try {
+            copyExactly(body, part, length);
+            ApkCheck.checkFormat(part, length);
+            ApkInfo info = inspect(part);
+            checkInfo(info, info == null ? 0 : info.versionCode);
+            String sha;
+            try {
+                sha = ApkCheck.sha256Hex(part);
+            } catch (IOException e) {
+                throw new UpdateException(UpdateException.Kind.BAD_FORMAT, "受信したファイルを読めません", e);
+            }
+            UpdateManifest m = UpdateManifest.pushed(info.versionCode, info.versionName, sha, length);
+            store.deleteVersion(m.versionCode); // a different file for the same version
+            try {
+                store.writeMeta(m.versionCode, m);
+            } catch (IOException e) {
+                throw new UpdateException(UpdateException.Kind.STORAGE, "更新用の保存先に書き込めません", e);
+            }
+            if (!part.renameTo(store.ready(m.versionCode))) {
+                store.deleteVersion(m.versionCode);
+                throw new UpdateException(UpdateException.Kind.STORAGE, "受信したファイルを保存できません");
+            }
+            // Only one update waits at a time: the one just received.
+            store.cleanup(env.installedVersionCode(), m.versionCode, env.wallMs());
+            return m;
+        } finally {
+            //noinspection ResultOfMethodCallIgnored
+            part.delete(); // no-op after a successful rename
+        }
+    }
+
+    private static void copyExactly(InputStream in, File to, long length) throws UpdateException {
+        OutputStream out = null;
+        try {
+            out = new FileOutputStream(to);
+            byte[] buf = new byte[32 * 1024];
+            long left = length;
+            while (left > 0) {
+                int n = in.read(buf, 0, (int) Math.min(buf.length, left));
+                if (n < 0) {
+                    throw new UpdateException(UpdateException.Kind.NETWORK, "転送が途中で切れました（受信できたのは一部だけです）。もう一度お試しください");
+                }
+                out.write(buf, 0, n);
+                left -= n;
+            }
+        } catch (UpdateException e) {
+            throw e;
+        } catch (IOException e) {
+            throw new UpdateException(UpdateException.Kind.NETWORK, "受信できませんでした（" + e.getMessage() + "）", e);
+        } finally {
+            if (out != null) {
+                try {
+                    out.close();
+                } catch (IOException ignored) {
+                    // the write error, if any, was reported
+                }
+            }
+        }
+    }
+
     private boolean matchesMeta(UpdateManifest m) {
         UpdateStore.Meta meta = store.readMeta(m.versionCode);
         return meta != null && meta.matches(m);
@@ -205,7 +299,26 @@ final class UpdateEngine {
     }
 
     private void verifyIdentity(File apk, int expectedVersionCode) throws UpdateException {
-        ApkInfo info = env.readApk(apk);
+        checkInfo(inspect(apk), expectedVersionCode);
+    }
+
+    /**
+     * What the file says about itself: first every file is read through the JAR verifier (a changed
+     * or added file is caught here even where the package manager only looks at the signature
+     * block), then the package manager's reading of package, version and signers.
+     */
+    private ApkInfo inspect(File apk) throws UpdateException {
+        try {
+            ApkCheck.jarSigners(apk);
+        } catch (SecurityException e) {
+            throw new UpdateException(UpdateException.Kind.TAMPERED, "署名が壊れているか、中身が書き換えられています。導入しません");
+        } catch (IOException e) {
+            throw new UpdateException(UpdateException.Kind.BAD_FORMAT, "APK を読めません（壊れています）", e);
+        }
+        return env.readApk(apk);
+    }
+
+    private void checkInfo(ApkInfo info, int expectedVersionCode) throws UpdateException {
         if (info == null) {
             throw new UpdateException(UpdateException.Kind.BAD_FORMAT, "APK の情報を読み取れません（壊れているか、この端末では読めない形式です）");
         }
@@ -217,7 +330,9 @@ final class UpdateEngine {
                     "APK の版（" + info.versionCode + "）が更新情報（" + expectedVersionCode + "）と違います。導入しません");
         }
         if (info.versionCode <= env.installedVersionCode()) {
-            throw new UpdateException(UpdateException.Kind.VERSION_MISMATCH, "今入っている版以下の APK です。導入しません");
+            throw new UpdateException(UpdateException.Kind.VERSION_MISMATCH, info.versionCode < env.installedVersionCode()
+                    ? "いま入っているものより古い版です（版 " + info.versionCode + "）。古い版への更新（ダウングレード）はできません"
+                    : "いま入っているのと同じ版です（版 " + info.versionCode + "）。新しい版の APK を選んでください");
         }
         if (info.signers == null || info.signers.isEmpty()) {
             throw new UpdateException(UpdateException.Kind.SIGNATURE_UNREADABLE, "APK の署名を確認できません。導入しません");

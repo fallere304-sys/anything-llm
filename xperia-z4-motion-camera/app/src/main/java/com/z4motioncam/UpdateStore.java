@@ -13,8 +13,10 @@ import java.util.regex.Pattern;
 
 /**
  * The folder where updates are downloaded: {@code update-N.apk.part} while downloading,
- * {@code update-N.apk} once verified, and {@code update-N.meta} (url, sha256, size) so a download
- * can be resumed only when it is the same file. Anything else in the folder, and anything stale,
+ * {@code update-N.apk} once verified, and {@code update-N.meta} (url, sha256, size, name) so a download
+ * can be resumed only when it is the same file. An APK pushed from a browser ends up in the same
+ * place ({@code update-N.apk} + meta with the url {@link UpdateManifest#PUSH_URL}), so installing,
+ * re-verifying and cleaning up are one code path. Anything else in the folder, and anything stale,
  * is removed by {@link #cleanup}.
  */
 class UpdateStore {
@@ -26,11 +28,14 @@ class UpdateStore {
         final String url;
         final String sha256;
         final long size;
+        /** versionName, kept so a pushed update can be shown again after a restart (may be empty). */
+        final String name;
 
-        Meta(String url, String sha256, long size) {
+        Meta(String url, String sha256, long size, String name) {
             this.url = url;
             this.sha256 = sha256;
             this.size = size;
+            this.name = name == null ? "" : name;
         }
 
         boolean matches(UpdateManifest m) {
@@ -58,6 +63,11 @@ class UpdateStore {
         return new File(dir, "update-" + vc + ".apk");
     }
 
+    /** Where a pushed APK is written until it has been checked. */
+    File pushPart() {
+        return new File(dir, "update-push.part");
+    }
+
     private File meta(int vc) {
         return new File(dir, "update-" + vc + ".meta");
     }
@@ -70,7 +80,8 @@ class UpdateStore {
         File tmp = new File(dir, "update-" + vc + ".meta.tmp");
         OutputStream out = new FileOutputStream(tmp);
         try {
-            out.write((m.apkUrl + "\n" + m.sha256 + "\n" + m.size + "\n").getBytes(UTF8));
+            out.write((m.apkUrl + "\n" + m.sha256 + "\n" + m.size + "\n"
+                    + m.versionName.replace('\n', ' ') + "\n").getBytes(UTF8));
         } finally {
             out.close();
         }
@@ -91,7 +102,8 @@ class UpdateStore {
                 String sha = r.readLine();
                 String size = r.readLine();
                 if (url == null || sha == null || size == null) return null;
-                return new Meta(url, sha, Long.parseLong(size.trim()));
+                String name = r.readLine(); // absent in files written by older versions
+                return new Meta(url, sha, Long.parseLong(size.trim()), name);
             } finally {
                 r.close();
             }

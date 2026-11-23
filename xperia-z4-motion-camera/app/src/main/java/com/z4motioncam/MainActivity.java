@@ -138,12 +138,7 @@ public class MainActivity extends Activity {
         updateButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (service == null || service.updates() == null) return;
-                String action = service.updates().primaryAction();
-                String msg = service.updateAction(action);
-                // null = started; the status text and the button show the progress.
-                if (msg != null) Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
-                updateUpdateButton();
+                showUpdateDialog();
             }
         });
         findViewById(R.id.btn_stop).setOnClickListener(new View.OnClickListener() {
@@ -303,6 +298,52 @@ public class MainActivity extends Activity {
             tick = 0;
             refresh.run();
         }
+    }
+
+    /** One place for both ways of updating: from the Internet, or sent from a browser on the home network. */
+    private void showUpdateDialog() {
+        if (service == null || service.updates() == null) return;
+        final UpdateManager u = service.updates();
+        final String action = u.primaryAction();
+        String actionLabel = "install".equals(action) ? getString(R.string.update_do_install)
+                : "download".equals(action) ? getString(R.string.update_do_download) : getString(R.string.update_do_check);
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.update_title)
+                .setMessage(u.dialogText())
+                .setPositiveButton(actionLabel, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        String msg = service == null ? null : service.updateAction(action);
+                        // null = started; the status text and the button show the progress.
+                        if (msg != null) Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
+                        updateUpdateButton();
+                    }
+                })
+                .setNeutralButton(R.string.update_from_browser, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        showPushCode();
+                    }
+                })
+                .setNegativeButton(R.string.close, null)
+                .show();
+    }
+
+    /** Opens the browser entrance and shows its one-time code (on this screen only). */
+    private void showPushCode() {
+        if (service == null || service.updates() == null) return;
+        UpdateManager u = service.updates();
+        String code = u.openPushWindow();
+        long min = u.pushRemainingMs() / 60_000 + 1;
+        String msg = "同じ Wi-Fi のパソコンやスマホのブラウザで " + service.url() + " を開き、「アプリの更新」欄で新しい APK を選んで、次のコードを入力して送ってください。\n\n"
+                + "コード: " + (code == null ? "—" : code) + "\n\nあと約" + min + "分・1回だけ使えます（5回間違えると終了）。"
+                + "同じ署名の APK だけ受け付けます。送信が終わると、この画面の「更新」ボタンから導入できます。";
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.update_code_title)
+                .setMessage(msg)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+        updateUpdateButton();
     }
 
     private void updateMonitorButton() {

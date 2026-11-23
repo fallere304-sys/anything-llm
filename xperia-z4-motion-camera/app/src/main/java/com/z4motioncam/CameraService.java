@@ -693,6 +693,12 @@ public class CameraService extends Service implements HttpServer.Backend {
     }
 
     @Override
+    public UpdatePush.Result acceptUpdate(String code, InputStream body, long length) {
+        if (updates == null) return UpdatePush.Result.fail(503, "更新機能を利用できません");
+        return updates.acceptPush(code, body, length);
+    }
+
+    @Override
     public String settingsJson() {
         return settingsApi.json();
     }

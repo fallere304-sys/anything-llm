@@ -6,7 +6,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.cert.Certificate;
 import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.Locale;
 import java.util.Set;
 import java.util.zip.ZipEntry;
@@ -99,5 +103,55 @@ final class ApkCheck {
     /** Same, non-empty set of signing certificates (as lowercase SHA-256 hex) in both. */
     static boolean sameSigners(Set<String> installed, Set<String> candidate) {
         return installed != null && candidate != null && !installed.isEmpty() && installed.equals(candidate);
+    }
+
+    /**
+     * Reads every file of the APK through the JAR verifier (so each entry is checked against the
+     * signed digests, to the last byte) and returns the signer's certificates as lowercase SHA-256
+     * hex. Empty when the APK carries no v1 (JAR) signature at all, for example a v2-only one; the
+     * package manager and the installer judge those.
+     *
+     * @throws SecurityException the signature is broken, a file was changed or added after signing,
+     *                           or the files are not all signed by the same certificates
+     */
+    static Set<String> jarSigners(File apk) throws IOException {
+        JarFile jar = new JarFile(apk, true);
+        try {
+            Set<String> expected = null;
+            boolean anySigned = false;
+            boolean anyUnsigned = false;
+            byte[] buf = new byte[16 * 1024];
+            Enumeration<JarEntry> entries = jar.entries();
+            while (entries.hasMoreElements()) {
+                JarEntry e = entries.nextElement();
+                if (e.isDirectory() || e.getName().startsWith("META-INF/")) continue; // signature files themselves
+                InputStream in = jar.getInputStream(e);
+                try {
+                    while (in.read(buf) >= 0) {
+                        // reading to the end triggers the digest check
+                    }
+                } finally {
+                    in.close();
+                }
+                Certificate[] certs = e.getCertificates();
+                if (certs == null || certs.length == 0) {
+                    anyUnsigned = true;
+                    continue;
+                }
+                Set<String> id = new HashSet<>();
+                try {
+                    for (Certificate c : certs) id.add(sha256Hex(c.getEncoded()));
+                } catch (java.security.cert.CertificateEncodingException ex) {
+                    throw new SecurityException("certificate unreadable");
+                }
+                if (expected == null) expected = id;
+                else if (!expected.equals(id)) throw new SecurityException("mixed signers");
+                anySigned = true;
+            }
+            if (anySigned && anyUnsigned) throw new SecurityException("unsigned file inside a signed APK");
+            return anySigned ? expected : new HashSet<String>();
+        } finally {
+            jar.close();
+        }
     }
 }

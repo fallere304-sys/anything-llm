@@ -190,6 +190,7 @@ public class AcmeTest {
             @Override public String updateSettings(Map<String, String> changes) { return null; }
             @Override public String updateJson() { return "null"; }
             @Override public String updateAction(String a) { return null; }
+            @Override public UpdatePush.Result acceptUpdate(String c, java.io.InputStream b, long n) { return null; }
         };
         com.z4motioncam.HttpServer server = new com.z4motioncam.HttpServer(0, backend, id.serverSocketFactory(), false, true);
         server.start();

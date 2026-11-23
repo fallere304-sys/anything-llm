@@ -41,6 +41,18 @@ final class UpdateManifest {
         this.notes = notes;
     }
 
+    /** Stands in for the manifest of an APK that was pushed from a browser (there is no URL to fetch). */
+    static final String PUSH_URL = "push://browser";
+
+    static UpdateManifest pushed(int versionCode, String versionName, String sha256, long size) {
+        return new UpdateManifest(PACKAGE, versionCode, printable(versionName == null ? "" : versionName, 32).isEmpty()
+                ? String.valueOf(versionCode) : printable(versionName, 32), PUSH_URL, sha256, size, "");
+    }
+
+    boolean isPushed() {
+        return PUSH_URL.equals(apkUrl);
+    }
+
     static UpdateManifest parse(byte[] json, String manifestUrl) throws UpdateException {
         if (json == null || json.length == 0 || json.length > MAX_JSON_BYTES) throw bad("更新情報の大きさが正しくありません");
         JSONObject o;

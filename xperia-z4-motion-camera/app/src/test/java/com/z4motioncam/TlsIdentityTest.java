@@ -81,6 +81,8 @@ public class TlsIdentityTest {
             public String updateSettings(java.util.Map<String, String> c) { return null; }
             public String updateJson() { return "null"; }
             public String updateAction(String a) { return null; }
+            @Override
+            public UpdatePush.Result acceptUpdate(String c, java.io.InputStream b, long n) { return null; }
         }, id.serverSocketFactory(), false, true);
         server.start();
         try {
@@ -169,6 +171,8 @@ public class TlsIdentityTest {
             public String updateSettings(java.util.Map<String, String> c) { return null; }
             public String updateJson() { return "null"; }
             public String updateAction(String a) { return null; }
+            @Override
+            public UpdatePush.Result acceptUpdate(String c, java.io.InputStream b, long n) { return null; }
         }, id.serverSocketFactory(), false, true);
         server.start();
         try {
