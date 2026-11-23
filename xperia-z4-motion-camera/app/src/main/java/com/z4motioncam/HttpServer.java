@@ -63,6 +63,12 @@ final class HttpServer {
 
         /** Validates and saves changed settings; returns an error message or null. */
         String updateSettings(Map<String, String> changes);
+
+        /** App update state (phase, versions, progress, last check) as a JSON object. */
+        String updateJson();
+
+        /** "check" / "download" / "install": returns null when started, otherwise a message for the person. */
+        String updateAction(String action);
     }
 
     private static final Charset UTF8 = Charset.forName("UTF-8");
@@ -250,6 +256,8 @@ final class HttpServer {
                     backend.statusJson().getBytes(UTF8), head);
         } else if (path.equals("/api/settings")) {
             writeSimple(out, 200, "application/json; charset=utf-8", backend.settingsJson().getBytes(UTF8), head);
+        } else if (path.equals("/api/update")) {
+            writeSimple(out, 200, "application/json; charset=utf-8", backend.updateJson().getBytes(UTF8), head);
         } else if (path.equals("/api/uptime")) {
             writeSimple(out, 200, "application/json; charset=utf-8", backend.uptimeJson().getBytes(UTF8), head);
         } else if (path.equals("/api/recordings")) {
@@ -305,6 +313,21 @@ final class HttpServer {
             String error = backend.updateSettings(parseForm(new String(req.body, UTF8)));
             String json = error == null ? "{\"ok\":true}" : "{\"ok\":false,\"error\":" + jsonString(error) + "}";
             writeSimple(out, error == null ? 200 : 400, "application/json; charset=utf-8", json.getBytes(UTF8), false);
+        } else if (req.path.equals("/api/update")) {
+            // Same cross-origin protection as the other actions. Installing still needs a tap on the
+            // phone's own installer screen, so this can only start the check / download / that screen.
+            if (!"update".equals(req.headers.get("x-z4-action"))) {
+                writeSimple(out, 403, "text/plain", "forbidden\n".getBytes(UTF8), false);
+                return;
+            }
+            String action = parseForm(new String(req.body, UTF8)).get("action");
+            if (!"check".equals(action) && !"download".equals(action) && !"install".equals(action)) {
+                writeSimple(out, 400, "text/plain", "action=check|download|install\n".getBytes(UTF8), false);
+                return;
+            }
+            String msg = backend.updateAction(action);
+            String json = "{\"ok\":" + (msg == null) + ",\"message\":" + (msg == null ? "null" : jsonString(msg)) + "}";
+            writeSimple(out, 200, "application/json; charset=utf-8", json.getBytes(UTF8), false);
         } else if (req.path.equals("/api/zip")) {
             List<String> names = new ArrayList<>();
             for (String v : parseForm(new String(req.body, UTF8)).values()) names.addAll(splitNames(v));

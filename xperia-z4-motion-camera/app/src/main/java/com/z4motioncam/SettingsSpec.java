@@ -41,6 +41,8 @@ final class SettingsSpec {
             list("fps", "10", "1", "2", "3", "5", "7", "10", "15", "20", "24", "30"),
             list("rotation", "0", "0", "90", "180", "270"),
             list("sensitivity", "2", "1", "2", "3"),
+            list("detect_mode", "motion", "motion", "person"),
+            list("person_sens", "2", "1", "2", "3"),
             list("post_record_sec", "10", "5", "10", "20", "30", "60", "90", "120", "180"),
             list("segment_min", "0", "1", "5", "10", "15", "30", "60", "0"),
             new Field("timestamp", Type.BOOL, "true", null, 0, 0, false),
@@ -57,6 +59,15 @@ final class SettingsSpec {
             new Field("acme", Type.BOOL, "false", null, 0, 0, true),
             new Field("autostart", Type.BOOL, "true", null, 0, 0, false),
             new Field("keep_front", Type.BOOL, "true", null, 0, 0, false),
+            new Field("low_batt_pause", Type.INT, "18", null, 0, 50, false),
+            new Field("low_batt_resume", Type.INT, "50", null, 10, 100, false),
+            new Field("quiet_enabled", Type.BOOL, "true", null, 0, 0, false),
+            new Field("quiet_start", Type.TEXT, "03:00", null, 0, 0, false),
+            new Field("quiet_end", Type.TEXT, "04:00", null, 0, 0, false),
+            new Field("quiet_keep_pct", Type.INT, "80", null, 20, 100, false),
+            new Field("update_auto", Type.BOOL, "true", null, 0, 0, false),
+            new Field("update_url", Type.TEXT, "", null, 0, 0, false),
+            new Field("update_sha256", Type.TEXT, "", null, 0, 0, false),
     };
 
     private SettingsSpec() {}
@@ -117,6 +128,20 @@ final class SettingsSpec {
                     if (f.key.equals("external_host") && !v.isEmpty() && !v.matches("[A-Za-z0-9.:-]{1,253}")) {
                         return "外部アドレスはIPアドレスかドメイン名で入力してください";
                     }
+                    if (f.key.equals("quiet_start") || f.key.equals("quiet_end")) {
+                        int m = QuietHours.parseHm(v, -1);
+                        if (m < 0) return "時刻は 03:00 のように「時:分」で入力してください（0:00〜23:59）";
+                        v = QuietHours.format(m);
+                    }
+                    if (f.key.equals("update_url") && !v.isEmpty()
+                            && (!UpdateHttp.isHttpsUrl(v) || v.length() > 512 || v.matches(".*\\s.*"))) {
+                        return "更新用URLは https:// で始まるアドレスにしてください（http:// は使えません）";
+                    }
+                    if (f.key.equals("update_sha256")) {
+                        String h = v.toLowerCase(java.util.Locale.US).replace(":", "").replace(" ", "");
+                        if (!h.isEmpty() && !h.matches("[0-9a-f]{64}")) return "SHA-256 は 64 桁の16進数で入力してください";
+                        v = h;
+                    }
                     if (f.key.equals("ddns_domain")) {
                         String d = v.toLowerCase(java.util.Locale.US);
                         if (d.endsWith(".duckdns.org")) d = d.substring(0, d.length() - ".duckdns.org".length());
@@ -130,10 +155,23 @@ final class SettingsSpec {
             out.put(f.key, v);
             merged.put(f.key, v);
         }
+        int pause = parseIntOr(merged.get("low_batt_pause"), 18);
+        int resume = parseIntOr(merged.get("low_batt_resume"), 50);
+        if (pause > 0 && resume < pause + 5) {
+            return "電池の再開レベル（" + resume + "%）は、停止レベル（" + pause + "%）より 5% 以上高くしてください";
+        }
         String port = merged.get("port");
         if (port != null && port.equals(merged.get("remote_port"))) {
             return "LAN用ポートと外出先用ポートは別の番号にしてください";
         }
         return null;
+    }
+
+    private static int parseIntOr(String s, int def) {
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (RuntimeException e) {
+            return def;
+        }
     }
 }

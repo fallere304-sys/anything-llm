@@ -79,6 +79,8 @@ public class TlsIdentityTest {
             public void setMonitoring(boolean on) { }
             public String settingsJson() { return "{}"; }
             public String updateSettings(java.util.Map<String, String> c) { return null; }
+            public String updateJson() { return "null"; }
+            public String updateAction(String a) { return null; }
         }, id.serverSocketFactory(), false, true);
         server.start();
         try {
@@ -165,6 +167,8 @@ public class TlsIdentityTest {
             public void setMonitoring(boolean on) { }
             public String settingsJson() { return "{}"; }
             public String updateSettings(java.util.Map<String, String> c) { return null; }
+            public String updateJson() { return "null"; }
+            public String updateAction(String a) { return null; }
         }, id.serverSocketFactory(), false, true);
         server.start();
         try {

@@ -22,6 +22,8 @@ final class MotionDetector {
     private final int[] cur;
     private final int[] diff;
     private final int[] hist = new int[511];
+    /** Cells that changed in the last analysis (for the shape check of the person mode). */
+    private final boolean[] changedMask;
     /** Background in fixed point (x16). */
     private final int[] bg;
     private boolean initialized;
@@ -35,6 +37,7 @@ final class MotionDetector {
         this.cur = new int[gridW * gridH];
         this.diff = new int[gridW * gridH];
         this.bg = new int[gridW * gridH];
+        this.changedMask = new boolean[gridW * gridH];
     }
 
     /** Grid of roughly 32 columns with the frame's aspect ratio. */
@@ -48,10 +51,24 @@ final class MotionDetector {
         return lastRatio;
     }
 
+    int gridW() {
+        return gridW;
+    }
+
+    int gridH() {
+        return gridH;
+    }
+
+    /** Changed cells of the last analysis; reused between calls, read it right away. */
+    boolean[] changedMask() {
+        return changedMask;
+    }
+
     void reset() {
         initialized = false;
         hits = 0;
         lastRatio = 0f;
+        Arrays.fill(changedMask, false);
     }
 
     /**
@@ -96,6 +113,7 @@ final class MotionDetector {
             for (int i = 0; i < n; i++) bg[i] = cur[i] << 4;
             initialized = true;
             lastRatio = 0f;
+            Arrays.fill(changedMask, false);
             return 0f;
         }
 
@@ -117,7 +135,9 @@ final class MotionDetector {
         int changed = 0;
         for (int i = 0; i < n; i++) {
             int d = diff[i] - shift;
-            if (d > CELL_THRESHOLD || d < -CELL_THRESHOLD) changed++;
+            boolean c = d > CELL_THRESHOLD || d < -CELL_THRESHOLD;
+            changedMask[i] = c;
+            if (c) changed++;
             // Exponential moving average, alpha = 1/8.
             bg[i] += ((cur[i] << 4) - bg[i]) >> 3;
         }

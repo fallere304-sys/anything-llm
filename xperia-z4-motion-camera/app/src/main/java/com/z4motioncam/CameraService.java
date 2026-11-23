@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.wifi.WifiManager;
 import android.os.BatteryManager;
@@ -28,6 +29,7 @@ import java.io.InputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.TimeZone;
 
 import javax.net.ssl.SSLSocketFactory;
 
@@ -82,6 +84,17 @@ public class CameraService extends Service implements HttpServer.Backend {
     private volatile boolean monitoring = true;
     static final String PREF_MONITORING = "monitoring";
     private SettingsApi settingsApi;
+    /** Decides whether the camera may run (user switch, heat, battery, sleep time, update); see MonitorPolicy. */
+    private MonitorPolicy policy;
+    private volatile MonitorPolicy.Decision decision;
+    private String savedPolicyState = "";
+    static final String PREF_POLICY = "policy_state";
+    /** While the installer screen is up the camera is stopped (a recording in progress is closed properly). */
+    private long updatingUntilMs;
+    private static final long UPDATE_HOLD_MS = 3 * 60_000L;
+    private static final long POLICY_TICK_MS = 15_000L;
+    private final ClockWatch clockWatch = new ClockWatch();
+    private UpdateManager updates;
     private final Handler main = new Handler(Looper.getMainLooper());
 
     private final CameraPipeline.Events pipelineEvents = new CameraPipeline.Events() {
@@ -140,6 +153,65 @@ public class CameraService extends Service implements HttpServer.Backend {
     boolean overlayPermissionMissing() {
         return Build.VERSION.SDK_INT >= 29 && !Settings.canDrawOverlays(this);
     }
+
+    /** Re-evaluates the policy regularly: the sleep window opens and closes with the clock, not with an event. */
+    private final Runnable policyTick = new Runnable() {
+        @Override
+        public void run() {
+            main.postDelayed(this, POLICY_TICK_MS);
+            long jump = clockWatch.observe(System.currentTimeMillis(), SystemClock.elapsedRealtime());
+            if (jump != 0) uptime.event(ClockWatch.describe(jump));
+            applyPolicy();
+            if (updates != null) updates.tick();
+        }
+    };
+
+    private final BroadcastReceiver clockReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String a = intent.getAction();
+            if (Intent.ACTION_TIMEZONE_CHANGED.equals(a)) {
+                uptime.event("タイムゾーンが " + TimeZone.getDefault().getID() + " に変わりました");
+            } else {
+                long jump = clockWatch.observe(System.currentTimeMillis(), SystemClock.elapsedRealtime());
+                if (jump != 0) uptime.event(ClockWatch.describe(jump));
+            }
+            applyPolicy();
+        }
+    };
+
+    private final UpdateManager.Host updateHost = new UpdateManager.Host() {
+        @Override
+        public void event(String text) {
+            UptimeLog u = uptime;
+            if (u != null) u.event(text);
+        }
+
+        @Override
+        public void launchInstaller(final Intent intent) {
+            main.post(new Runnable() {
+                @Override
+                public void run() {
+                    updatingUntilMs = SystemClock.elapsedRealtime() + UPDATE_HOLD_MS;
+                    applyPolicy(); // stops the camera and closes the recording before the installer takes over
+                    if (!power.isInteractive()) screenOn.acquire(10_000L);
+                    try {
+                        startActivity(intent);
+                    } catch (RuntimeException e) {
+                        Log.w(TAG, "cannot open the installer", e);
+                        uptime.event("導入画面を開けませんでした: " + e.getClass().getSimpleName());
+                        updatingUntilMs = 0;
+                        applyPolicy();
+                    }
+                }
+            });
+        }
+
+        @Override
+        public boolean tooWarm() {
+            return thermal.ordinal() >= ThermalPolicy.Level.HOT.ordinal();
+        }
+    };
 
     private final Runnable heartbeat = new Runnable() {
         @Override
@@ -203,14 +275,10 @@ public class CameraService extends Service implements HttpServer.Backend {
             indexHtml = "<h1>index.html missing</h1>".getBytes();
         }
 
-        applySettings(AppSettings.load(this));
-        registerReceiver(networkReceiver, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
-        // Sticky broadcast: returns the current state now, then delivers every change.
-        Intent battery = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-        if (battery != null) onBattery(battery);
-
+        // The state the decision depends on must exist before the first settings / battery callback.
         settingsApi = new SettingsApi(this);
-        monitoring = PreferenceManager.getDefaultSharedPreferences(this).getBoolean(PREF_MONITORING, true);
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+        monitoring = prefs.getBoolean(PREF_MONITORING, true);
         uptime = new UptimeLog(new File(getFilesDir(), "uptime"), new UptimeLog.Clock() {
             @Override
             public long wallMs() {
@@ -222,10 +290,31 @@ public class CameraService extends Service implements HttpServer.Backend {
                 return SystemClock.elapsedRealtime();
             }
         });
+        policy = new MonitorPolicy(loadPolicyConfig());
+        savedPolicyState = prefs.getString(PREF_POLICY, "");
+        policy.restore(savedPolicyState); // low-battery pause and sleep-time state survive a restart
+        ddnsTls = loadDdnsTls(); // extra roots: Android 5-7 lack some current CAs (DDNS, update server)
+        updates = new UpdateManager(this, updateHost, ddnsTls);
+        updates.start();
+
+        // Sticky broadcast: returns the current state now, then delivers every change. Registered
+        // first so the very first decision already knows the battery level.
+        Intent battery = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        if (battery != null) onBattery(battery);
+        applySettings(AppSettings.load(this));
+        registerReceiver(networkReceiver, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
+        IntentFilter clock = new IntentFilter(Intent.ACTION_TIME_CHANGED);
+        clock.addAction(Intent.ACTION_TIMEZONE_CHANGED);
+        clock.addAction(Intent.ACTION_DATE_CHANGED);
+        registerReceiver(clockReceiver, clock);
+        clockWatch.observe(System.currentTimeMillis(), SystemClock.elapsedRealtime());
+
         uptime.begin(snapshot());
         registerReceiver(shutdownReceiver, new IntentFilter(Intent.ACTION_SHUTDOWN));
+        applyPolicy();
         main.postDelayed(heartbeat, UptimeLog.BEAT_MS);
         main.postDelayed(frontCheck, FRONT_CHECK_MS);
+        main.postDelayed(policyTick, POLICY_TICK_MS);
     }
 
     @Override
@@ -238,6 +327,7 @@ public class CameraService extends Service implements HttpServer.Backend {
     private void reloadSettings() {
         AppSettings s = AppSettings.load(this);
         if (!s.equals(settings)) applySettings(s);
+        else applyPolicy(); // sleep time / battery levels live outside AppSettings
     }
 
     private final Runnable reload = new Runnable() {
@@ -256,6 +346,13 @@ public class CameraService extends Service implements HttpServer.Backend {
     public void onDestroy() {
         main.removeCallbacks(heartbeat);
         main.removeCallbacks(frontCheck);
+        main.removeCallbacks(policyTick);
+        if (updates != null) updates.shutdown();
+        try {
+            unregisterReceiver(clockReceiver);
+        } catch (IllegalArgumentException ignored) {
+            // never registered
+        }
         if (screenOn != null && screenOn.isHeld()) screenOn.release();
         uptime.end(UptimeLog.END_STOP, snapshot()); // no-op after a shutdown notice
         unregisterReceiver(shutdownReceiver);
@@ -294,7 +391,7 @@ public class CameraService extends Service implements HttpServer.Backend {
                 http = null;
             }
         }
-        if (thermal != ThermalPolicy.Level.CRITICAL && monitoring) startPipeline();
+        applyPolicy(); // starts the camera unless something says it must stay off
         if (s.ddnsConfigured() && ddnsTls == null) ddnsTls = loadDdnsTls();
         remote = new RemoteAccess(this, s, this, ddnsTls);
         remote.start();
@@ -317,7 +414,7 @@ public class CameraService extends Service implements HttpServer.Backend {
         int t = i.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Integer.MIN_VALUE);
         int level = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
         int scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
-        batteryPct = level < 0 || scale <= 0 ? -1 : level * 100 / scale;
+        batteryPct = level < 0 || scale <= 0 || level > scale ? -1 : level * 100 / scale; // -1 = could not be read
         charging = i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0;
         batteryVoltageMv = i.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1);
         int status = i.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN);
@@ -326,21 +423,56 @@ public class CameraService extends Service implements HttpServer.Backend {
         else if (status == BatteryManager.BATTERY_STATUS_CHARGING) powerState = "充電中";
         else powerState = "接続中・充電停止"; // plugged in but the charger stopped (e.g. battery too hot)
         batteryHealth = healthText(i.getIntExtra(BatteryManager.EXTRA_HEALTH, BatteryManager.BATTERY_HEALTH_UNKNOWN));
-        if (t == Integer.MIN_VALUE) return;
-        batteryTempC = t / 10f;
+        if (t != Integer.MIN_VALUE) {
+            batteryTempC = t / 10f;
+            ThermalPolicy.Level prev = thermal;
+            ThermalPolicy.Level next = ThermalPolicy.next(prev, batteryTempC);
+            if (next != prev) {
+                thermal = next;
+                Log.w(TAG, "thermal " + prev + " -> " + next + " (" + batteryTempC + "C)");
+                CameraPipeline p = pipeline;
+                if (p != null) p.setThermalLevel(next);
+            }
+        }
+        // Heat (CRITICAL: release the camera until it cools), low battery and sleep time are all
+        // decided together in applyPolicy.
+        applyPolicy();
+    }
 
-        ThermalPolicy.Level prev = thermal;
-        ThermalPolicy.Level next = ThermalPolicy.next(prev, batteryTempC);
-        if (next == prev) return;
-        thermal = next;
-        Log.w(TAG, "thermal " + prev + " -> " + next + " (" + batteryTempC + "C)");
-        if (next == ThermalPolicy.Level.CRITICAL) {
-            // Last resort: release the camera entirely until the phone cools down.
-            stopPipeline();
+    private MonitorPolicy.Config loadPolicyConfig() {
+        SharedPreferences p = PreferenceManager.getDefaultSharedPreferences(this);
+        return MonitorPolicy.Config.parse(p.getString("low_batt_pause", "18"), p.getString("low_batt_resume", "50"),
+                p.getBoolean("quiet_enabled", true), p.getString("quiet_start", "03:00"), p.getString("quiet_end", "04:00"),
+                p.getString("quiet_keep_pct", "80"));
+    }
+
+    /**
+     * The one place that starts or stops the camera: asks {@link MonitorPolicy} and acts on its
+     * answer, journals every transition and keeps the latches for the next start. Main thread.
+     */
+    private void applyPolicy() {
+        if (policy == null || uptime == null || settings == null) return; // not set up yet
+        MonitorPolicy.Input in = new MonitorPolicy.Input();
+        in.monoMs = SystemClock.elapsedRealtime();
+        in.wallMs = System.currentTimeMillis();
+        in.zone = TimeZone.getDefault();
+        in.userOn = monitoring;
+        in.thermalCritical = thermal == ThermalPolicy.Level.CRITICAL;
+        in.updating = in.monoMs < updatingUntilMs;
+        in.batteryPct = batteryPct;
+        policy.setConfig(loadPolicyConfig());
+        MonitorPolicy.Decision d = policy.evaluate(in);
+        decision = d;
+        for (String e : d.events) uptime.event(e);
+        String state = policy.serialize();
+        if (!state.equals(savedPolicyState)) {
+            savedPolicyState = state;
+            PreferenceManager.getDefaultSharedPreferences(this).edit().putString(PREF_POLICY, state).apply();
+        }
+        if (d.active()) {
+            if (pipeline == null) startPipeline();
         } else {
-            if (pipeline == null && monitoring) startPipeline();
-            CameraPipeline p = pipeline;
-            if (p != null) p.setThermalLevel(next);
+            stopPipeline(); // closes the recording in progress properly
         }
     }
 
@@ -434,16 +566,23 @@ public class CameraService extends Service implements HttpServer.Backend {
         StringBuilder sb = new StringBuilder();
         sb.append(url()).append('\n');
         if (httpError != null) sb.append(httpError).append('\n');
-        if (!monitoring) {
+        MonitorPolicy.Decision d = decision;
+        if (!monitoring && d != null && d.reasons.size() == 1) {
             sb.append("■ 監視オフ（カメラ停止中。ブラウザまたはこの画面から再開できます）");
+        } else if (d != null && !d.active()) {
+            sb.append("■ 監視停止中: ").append(d.text);
         } else if (p == null) {
-            sb.append(thermal == ThermalPolicy.Level.CRITICAL ? "高温のため一時停止中（冷却待ち）" : "停止中");
+            sb.append("停止中");
         } else if (!p.isRunning()) {
             sb.append("カメラ準備中");
         } else {
             sb.append(p.isRecording() ? "● 録画中" : "監視中");
             sb.append(String.format(Locale.US, "  動き %.1f%%", p.motionRatio() * 100));
+            if (settings.personMode()) sb.append(p.personPresent() ? "  人: あり" : "  人: なし");
         }
+        sb.append('\n');
+        sb.append("検知モード: ").append(settings.personMode()
+                ? "人を認識（動きを見て、顔などで人を判定。厳しさ " + settings.personSens + "）" : "動体検知（動きがあれば録画）");
         sb.append('\n');
         sb.append(String.format(Locale.US, "電池 %.1f℃ %s %s  負荷制御:%s", batteryTempC,
                 batteryPct < 0 ? "" : batteryPct + "%", powerState, thermal));
@@ -458,6 +597,8 @@ public class CameraService extends Service implements HttpServer.Backend {
         RemoteAccess r = remote;
         String rl = r == null ? null : r.statusLine();
         if (rl != null) sb.append('\n').append(rl);
+        String ul = updates == null ? null : updates.statusLine();
+        if (ul != null) sb.append('\n').append(ul);
         if (settings.keepFront && overlayPermissionMissing()) {
             sb.append("\n自動で前面に戻すには「他のアプリの上に重ねて表示」を許可してください");
         }
@@ -478,7 +619,7 @@ public class CameraService extends Service implements HttpServer.Backend {
         else if (!p.isRunning()) state = "starting";
         else state = p.isRecording() ? "recording" : "watching";
         String err = p == null ? null : p.error();
-        return String.format(Locale.US,
+        String base = String.format(Locale.US,
                 "{\"state\":\"%s\",\"motion\":%.4f,\"lastMotion\":%d,\"tempC\":%.1f,\"battery\":%d,\"power\":%s,"
                         + "\"charging\":%b,\"thermal\":\"%s\",\"freeBytes\":%d,\"storageFull\":%b,"
                         + "\"rotation\":%d,\"viewers\":%d,\"error\":%s,\"monitoring\":%b,\"remote\":%s}",
@@ -487,6 +628,30 @@ public class CameraService extends Service implements HttpServer.Backend {
                 store.usableBytes(), p != null && p.storageFull(), settings.rotation, hub.clients(),
                 err == null ? "null" : HttpServer.jsonString(err), monitoring,
                 remote == null ? "null" : remote.statusJson());
+        // New items are appended only: gas-viewer and older pages read the ones above.
+        return base.substring(0, base.length() - 1) + extraStatusJson(p) + "}";
+    }
+
+    private String extraStatusJson(CameraPipeline p) {
+        MonitorPolicy.Decision d = decision;
+        MonitorPolicy.Config c = policy.config();
+        StringBuilder sb = new StringBuilder();
+        sb.append(",\"mode\":\"").append(settings.detectMode).append('"');
+        sb.append(",\"person\":{\"present\":").append(p != null && p.personPresent())
+                .append(",\"lastSeen\":").append(p == null ? 0L : p.lastPersonWallMs())
+                .append(",\"basis\":").append(HttpServer.jsonString(p == null ? "" : p.personBasis())).append('}');
+        sb.append(",\"policy\":{\"active\":").append(d == null || d.active())
+                .append(",\"primary\":").append(d == null || d.primary == null ? "null" : "\"" + d.primary.key + "\"")
+                .append(",\"reasons\":").append(d == null ? "[]" : d.reasonsJson())
+                .append(",\"text\":").append(d == null || d.text == null ? "null" : HttpServer.jsonString(d.text))
+                .append(",\"lowBattery\":{\"pauseBelow\":").append(c.lowPausePct).append(",\"resumeAt\":").append(c.lowResumePct)
+                .append(",\"latched\":").append(policy.lowLatched()).append('}')
+                .append(",\"quiet\":{\"enabled\":").append(c.quietEnabled)
+                .append(",\"start\":\"").append(QuietHours.format(c.quietStartMin)).append("\",\"end\":\"")
+                .append(QuietHours.format(c.quietEndMin)).append("\",\"keepPct\":").append(c.quietKeepPct)
+                .append(",\"paused\":").append(policy.quietPaused()).append("}}");
+        sb.append(",\"update\":").append(updates == null ? "null" : updates.json());
+        return sb.toString();
     }
 
     @Override
@@ -497,18 +662,32 @@ public class CameraService extends Service implements HttpServer.Backend {
     /** Switches monitoring; callable from any thread (the camera is started/stopped on the main thread). */
     @Override
     public void setMonitoring(final boolean on) {
-        monitoring = on;
+        monitoring = on; // only the user's own switch; heat, battery and sleep time are separate reasons
         PreferenceManager.getDefaultSharedPreferences(this).edit().putBoolean(PREF_MONITORING, on).apply();
         main.post(new Runnable() {
             @Override
             public void run() {
-                if (!monitoring) {
-                    stopPipeline(); // closes the recording in progress properly
-                } else if (pipeline == null && thermal != ThermalPolicy.Level.CRITICAL) {
-                    startPipeline();
-                }
+                applyPolicy();
             }
         });
+    }
+
+    UpdateManager updates() {
+        return updates;
+    }
+
+    @Override
+    public String updateJson() {
+        return updates == null ? "null" : updates.json();
+    }
+
+    @Override
+    public String updateAction(String action) {
+        if (updates == null) return "更新機能を利用できません";
+        if ("check".equals(action)) return updates.check(true);
+        if ("download".equals(action)) return updates.download();
+        if ("install".equals(action)) return updates.install();
+        return "不明な操作です";
     }
 
     @Override

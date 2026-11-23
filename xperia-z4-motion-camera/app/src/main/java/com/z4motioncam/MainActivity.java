@@ -52,6 +52,7 @@ public class MainActivity extends Activity {
     private long shownSeq = -1;
     private int tick;
     private Button monitorButton;
+    private Button updateButton;
 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
@@ -83,6 +84,7 @@ public class MainActivity extends Activity {
             if (tick++ % 4 == 0) {
                 status.setText(service.statusText());
                 updateMonitorButton(); // may have been switched from a browser
+                updateUpdateButton();
             }
             if (!service.monitoring()) {
                 // Camera is off: show no stale picture.
@@ -130,6 +132,18 @@ public class MainActivity extends Activity {
                 if (service == null) return;
                 service.setMonitoring(!service.monitoring());
                 updateMonitorButton();
+            }
+        });
+        updateButton = (Button) findViewById(R.id.btn_update);
+        updateButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (service == null || service.updates() == null) return;
+                String action = service.updates().primaryAction();
+                String msg = service.updateAction(action);
+                // null = started; the status text and the button show the progress.
+                if (msg != null) Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
+                updateUpdateButton();
             }
         });
         findViewById(R.id.btn_stop).setOnClickListener(new View.OnClickListener() {
@@ -293,6 +307,10 @@ public class MainActivity extends Activity {
 
     private void updateMonitorButton() {
         if (service != null) monitorButton.setText(service.monitoring() ? R.string.monitor_off : R.string.monitor_on);
+    }
+
+    private void updateUpdateButton() {
+        if (service != null && service.updates() != null) updateButton.setText(service.updates().buttonLabel());
     }
 
     private void hideSystemBars() {

@@ -23,6 +23,22 @@
     <string name="pref_timestamp">動画に日時を入れる</string>
     <string name="pref_timestamp_summary">録画の左下に撮影日時（端末の時計）を表示します。負荷はごくわずかです</string>
     <string name="pref_segment_summary">%s（突然の電源断では録画中のファイルが失われるため、長いほど失う時間も長くなります）</string>
+    <string name="pref_detect_mode">検知モード</string>
+    <string name="pref_person_sens">人認識の厳しさ</string>
+    <string name="pref_cat_power">電池・おやすみ時間</string>
+    <string name="pref_low_batt_pause">電池がこの%を切ったら監視を一時停止（0で無効）</string>
+    <string name="pref_low_batt_resume">この%まで充電したら監視を再開</string>
+    <string name="pref_quiet_enabled">おやすみ時間は監視を止めて充電に専念する</string>
+    <string name="pref_quiet_start">おやすみ時間の開始（例 03:00）</string>
+    <string name="pref_quiet_end">おやすみ時間の終了（例 04:00。開始より小さければ日をまたぐ）</string>
+    <string name="pref_quiet_keep_pct">おやすみ時間でも、電池がこの%以上なら監視を続ける</string>
+    <string name="pref_cat_update">アプリの更新</string>
+    <string name="pref_update_auto">1日1回、新しい版を自動で確認する</string>
+    <string name="pref_update_url">更新情報のURL（https のみ）</string>
+    <string name="pref_update_sha256">期待する APK の SHA-256（任意・別経路で確認した値）</string>
+    <!-- Overridden at build time (build-apk.sh UPDATE_URL=...). Must be https. -->
+    <string name="default_update_url" translatable="false">https://github.com/fallere304-sys/anything-llm/raw/claude/xperia-z4-motion-camera-7x4wet/xperia-z4-motion-camera/release/update.json</string>
+    <string name="update_check">更新を確認</string>
     <string name="pref_cat_storage">ストレージ</string>
     <string name="pref_use_sd">SDカードを優先して保存</string>
     <string name="pref_min_free">確保する空き容量（MB）</string>
@@ -55,6 +71,24 @@
     <string name="overlay_open">許可の画面を開く</string>
     <string name="pref_note">設定は画面に戻ると反映されます</string>
 
+    <string-array name="detect_mode_entries">
+        <item>動体検知（動きがあれば録画・標準）</item>
+        <item>人を認識（人が写っているときだけ録画）</item>
+    </string-array>
+    <string-array name="detect_mode_values">
+        <item>motion</item>
+        <item>person</item>
+    </string-array>
+    <string-array name="person_sens_entries">
+        <item>厳しい（顔がはっきり見えるときだけ）</item>
+        <item>標準</item>
+        <item>ゆるい（後ろ向き・寝姿など、人の大きさの動きも人とみなす。ペットで誤検知あり）</item>
+    </string-array>
+    <string-array name="person_sens_values">
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
     <string-array name="resolution_entries">
         <item>320×240（最も低発熱・画質は粗い）</item>
         <item>640×480（推奨・低発熱）</item>

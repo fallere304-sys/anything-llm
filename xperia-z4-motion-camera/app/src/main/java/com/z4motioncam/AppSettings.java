@@ -14,6 +14,10 @@ final class AppSettings {
     final int fps;
     final int rotation;
     final int sensitivity;
+    /** "motion" = record on any motion (default); "person" = record only while a person is judged to be in view. */
+    final String detectMode;
+    /** Person mode strictness 1 (strict) .. 3 (loose). */
+    final int personSens;
     final int postRecordSec;
     final int segmentMin;
     /** Burn the date and time into recordings. */
@@ -43,6 +47,8 @@ final class AppSettings {
         fps = clamp(parseInt(p.getString("fps", "10"), 10), 1, 30);
         rotation = (parseInt(p.getString("rotation", "0"), 0) / 90 % 4) * 90;
         sensitivity = clamp(parseInt(p.getString("sensitivity", "2"), 2), 1, 3);
+        detectMode = "person".equals(p.getString("detect_mode", "motion")) ? "person" : "motion";
+        personSens = clamp(parseInt(p.getString("person_sens", "2"), 2), 1, 3);
         postRecordSec = clamp(parseInt(p.getString("post_record_sec", "10"), 10), 1, 600);
         // 0 = no split: one file per motion event (see CameraPipeline for the size safety limit).
         segmentMin = clamp(parseInt(p.getString("segment_min", "0"), 0), 0, 60);
@@ -68,6 +74,10 @@ final class AppSettings {
     static AppSettings load(Context context) {
         return new AppSettings(PreferenceManager.getDefaultSharedPreferences(context),
                 context.getString(R.string.default_external_host));
+    }
+
+    boolean personMode() {
+        return "person".equals(detectMode);
     }
 
     boolean ddnsConfigured() {
@@ -123,7 +133,8 @@ final class AppSettings {
         if (!(o instanceof AppSettings)) return false;
         AppSettings s = (AppSettings) o;
         return width == s.width && height == s.height && fps == s.fps && rotation == s.rotation
-                && sensitivity == s.sensitivity && postRecordSec == s.postRecordSec
+                && sensitivity == s.sensitivity && detectMode.equals(s.detectMode) && personSens == s.personSens
+                && postRecordSec == s.postRecordSec
                 && segmentMin == s.segmentMin && timestamp == s.timestamp && useSdCard == s.useSdCard
                 && minFreeBytes == s.minFreeBytes && port == s.port
                 && password.equals(s.password) && autostart == s.autostart && keepFront == s.keepFront

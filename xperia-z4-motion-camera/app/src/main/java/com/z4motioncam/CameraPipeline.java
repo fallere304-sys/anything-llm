@@ -71,6 +71,15 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
     private int[] currentRange;
     private long lastActiveMs;
 
+    /** Person mode only (null in motion mode): see PersonGate for the rules. */
+    private PersonDetector person;
+    private final PersonGate gate = new PersonGate();
+    private final PersonDetector.Input personInput = new PersonDetector.Input();
+    private volatile long lastPersonSeenMs;
+    private volatile long lastPersonWallMs;
+    private volatile String personBasis = "";
+    private static final long PERSON_STATUS_HOLD_MS = 10_000L;
+
     private volatile ThermalPolicy.Level level = ThermalPolicy.Level.NORMAL;
     private long lastAnalyzeMs;
     private long lastLiveMs;
@@ -163,6 +172,20 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
         return error;
     }
 
+    /** Person mode: the last check saw a person within the last few seconds. */
+    boolean personPresent() {
+        return person != null && lastPersonSeenMs > 0
+                && SystemClock.elapsedRealtime() - lastPersonSeenMs < PERSON_STATUS_HOLD_MS;
+    }
+
+    long lastPersonWallMs() {
+        return lastPersonWallMs;
+    }
+
+    String personBasis() {
+        return personBasis;
+    }
+
     boolean storageFull() {
         return storageFull;
     }
@@ -203,6 +226,8 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
             liveFrame = liveScale == 1 ? null : new byte[(width / 2) * (height / 2) * 3 / 2];
             liveRect = new Rect(0, 0, width / liveScale, height / liveScale);
             detector = MotionDetector.forFrame(width, height);
+            gate.reset();
+            person = settings.personMode() ? new HybridPersonDetector(new AndroidFaceFinder(), settings.personSens) : null;
             recorder = new VideoRecorder(width, height, settings.bitrate(), settings.fps, settings.rotation,
                     settings.timestamp);
 
@@ -231,6 +256,10 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
 
     private void close() {
         stopRecording();
+        if (person != null) {
+            person.close();
+            person = null;
+        }
         if (camera != null) {
             try {
                 camera.setPreviewCallbackWithBuffer(null);
@@ -293,12 +322,17 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
             if (motion) {
                 lastMotionMs = now;
                 lastMotionWallMs = System.currentTimeMillis();
-                if (!recorder.isRecording()) startRecording(now);
+                if (person != null) gate.onMotion(now); // person mode: motion only opens the gate
+                else if (!recorder.isRecording()) startRecording(now);
             }
         }
+        if (person != null) checkPerson(frame, now, l);
 
         if (recorder.isRecording()) {
-            if (now - lastMotionMs > settings.postRecordSec * 1000L) {
+            long keepMs = settings.postRecordSec * 1000L;
+            boolean idle = person != null ? gate.shouldStop(now, keepMs) : now - lastMotionMs > keepMs;
+            if (idle) {
+                if (person != null) events.event("人が見えなくなって" + settings.postRecordSec + "秒たったため、録画を止めました");
                 stopRecording();
             } else {
                 boolean timeUp = settings.segmentMin > 0 && now - recorder.startedAtMs() > settings.segmentMin * 60_000L;
@@ -339,6 +373,37 @@ final class CameraPipeline implements Camera.PreviewCallback, Camera.ErrorCallba
         }
 
         updateSensorRate(wanted || recorder.isRecording(), l, now);
+    }
+
+    /**
+     * Person mode: asks the detector (only while motion is recent, or every few seconds while
+     * recording) and lets {@link PersonGate} decide when to start.
+     */
+    private void checkPerson(byte[] frame, long now, ThermalPolicy.Level l) {
+        if (!gate.wantCheck(now, recorder.isRecording(), l)) return;
+        PersonDetector.Input in = personInput;
+        in.nv21 = frame;
+        in.width = width;
+        in.height = height;
+        in.rotation = settings.rotation;
+        in.motionMask = detector.changedMask();
+        in.gridW = detector.gridW();
+        in.gridH = detector.gridH();
+        PersonDetector.Result r = person.detect(in);
+        in.nv21 = null;
+        gate.onResult(now, r.person);
+        if (r.person) {
+            lastPersonSeenMs = now;
+            lastPersonWallMs = System.currentTimeMillis();
+            personBasis = r.basis;
+        }
+        if (!recorder.isRecording() && gate.shouldStart(now)) {
+            startRecording(now);
+            if (recorder.isRecording()) {
+                gate.onRecordingStarted(now);
+                events.event("人を検知したため録画を開始しました（根拠: " + r.basis + "）");
+            }
+        }
     }
 
     /**

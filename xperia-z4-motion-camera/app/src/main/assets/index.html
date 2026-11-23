@@ -83,7 +83,7 @@
     flex: 1 1 12em; max-width: 22em; font-size: 15px; padding: 6px 8px; border-radius: 6px; border: 1px solid #444;
     background: #1f1f1f; color: #eee; box-sizing: border-box; }
   .settings .note { flex-basis: 100%; font-size: 12px; color: #ffb74d; }
-  #settingsMsg.err { color: #ff8a80; }
+  #settingsMsg.err, #updateMsg.err { color: #ff8a80; }
   #settingsMsg { margin-top: 8px; min-height: 1.4em; font-size: 14px; }
 </style>
 </head>
@@ -99,6 +99,9 @@
     <div id="offMsg" class="msg hidden">
       <div>監視オフ中です（カメラ・動体検知・録画は停止しています）</div>
       <button type="button" id="monOn">監視を開始</button>
+    </div>
+    <div id="policyMsg" class="msg hidden">
+      <div id="policyText"></div>
     </div>
     <div id="paused" class="msg hidden">
       <div>発熱を抑えるため、ライブ映像は10分で自動停止します</div>
@@ -145,6 +148,18 @@
       <p><button type="button" id="saveSettings">保存</button></p>
       <div id="settingsMsg" class="meta"></div>
     </details>
+  </div>
+
+  <h2>アプリの更新</h2>
+  <div class="panel">
+    <dl class="kv" id="updateKv"></dl>
+    <p>
+      <button type="button" id="updCheck">更新を確認</button>
+      <button type="button" id="updDownload" class="hidden">ダウンロード</button>
+      <button type="button" id="updInstall" class="hidden">導入画面をZ4に表示</button>
+    </p>
+    <div id="updateMsg" class="meta" role="status"></div>
+    <p class="meta">Z4が自分で更新先（https）から新しい版を探します（1日1回）。ダウンロードした APK は、SHA-256 と署名（今のアプリと同じ鍵か）を確かめてから、Android 標準の導入画面を出します。導入の最終確認は Z4 の画面で行います。録画と設定は消えません。</p>
   </div>
 
   <h2>外出先からの視聴</h2>
@@ -734,12 +749,70 @@
   }
   monToggle.addEventListener('click', function () { setMonitoring(!monitoringOn); });
   $('monOn').addEventListener('click', function () { setMonitoring(true); });
+  // ---- why monitoring is stopped / detection mode ----
+  var policyMsg = $('policyMsg'), policyText = $('policyText');
+  function showPolicy(p) {
+    // The user's own off switch has its own banner; everything else (heat, battery, sleep time, update) is shown here.
+    var other = p && !p.active && !(p.reasons.length === 1 && p.reasons[0] === 'user_off');
+    show(policyMsg, !!other);
+    if (other) policyText.textContent = '監視は止まっています: ' + p.text;
+  }
+
+  // ---- app update ----
+  var updateKv = $('updateKv'), updateMsg = $('updateMsg'), updCheck = $('updCheck'),
+      updDownload = $('updDownload'), updInstall = $('updInstall');
+  var UPD_PHASE = { idle: '未確認', checking: '確認中…', up_to_date: '最新です', available: '新しい版があります',
+                    downloading: 'ダウンロード中', ready: '導入できます', error: 'うまくいきませんでした' };
+  function updSay(text, isError) {
+    updateMsg.textContent = text || '';
+    updateMsg.className = 'meta' + (isError ? ' err' : '');
+  }
+  function showUpdate(u) {
+    if (!u) return;
+    var rows = [['状態', (UPD_PHASE[u.phase] || u.phase) + (u.phase === 'downloading' ? '（' + Math.round(u.progress * 100) + '%）' : '')],
+                ['今の版', u.installed.name + '（' + u.installed.code + '）']];
+    if (u.latest) {
+      rows.push(['新しい版', u.latest.name + '（' + u.latest.code + '）  ' + fmtSize(u.latest.size)]);
+      if (u.latest.notes) rows.push(['内容', u.latest.notes]);
+      rows.push(['APKのSHA-256', u.latest.sha256, 'fp']);
+    }
+    rows.push(['最後の確認', u.lastCheck ? fmtTime(u.lastCheck) : 'まだ']);
+    rows.push(['次の自動確認', !u.auto ? '自動確認オフ' : (u.nextCheck ? fmtTime(u.nextCheck) : 'まもなく')]);
+    if (u.pinned) rows.push(['SHA-256の照合', '設定した値と一致を必須にしています']);
+    fillKv(updateKv, rows);
+    show(updDownload, u.phase === 'available' || (u.phase === 'error' && !!u.latest && u.action === 'download'));
+    show(updInstall, u.phase === 'ready');
+    updCheck.disabled = u.phase === 'checking' || u.phase === 'downloading';
+    if (u.phase === 'error' && u.error) updSay(u.error, true);
+    else if (u.phase === 'ready' && u.guide) updSay(u.guide, true);
+  }
+  function updAct(action) {
+    updSay('実行しています…');
+    request('POST', '/api/update', 'action=' + action, { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Z4-Action': 'update' },
+      function (err, text) {
+        var r = {};
+        try { r = JSON.parse(text || '{}'); } catch (e) { /* keep */ }
+        if (err) { updSay('実行できませんでした（' + err.message + '）', true); return; }
+        if (!r.ok) { updSay(r.message || '実行できませんでした', true); return; }
+        updSay(action === 'install' ? 'Z4の画面に導入の確認が出ます。Z4で「インストール」を押してください。' : '開始しました');
+        setTimeout(loadStatus, 1500);
+      });
+  }
+  updCheck.addEventListener('click', function () { updAct('check'); });
+  updDownload.addEventListener('click', function () { updAct('download'); });
+  updInstall.addEventListener('click', function () {
+    if (window.confirm('Z4の画面にアプリの導入確認を出します。\n導入中は監視が止まります。続けますか？')) updAct('install');
+  });
+
   var lastState = '';
   function loadStatus() {
     getJson('/api/status', function (err, s) {
       if (err) { stateEl.textContent = '接続できません'; stateEl.className = ''; return; }
       var txt = (STATE[s.state] || s.state) + '  電池 ' + (s.battery >= 0 ? s.battery + '%・' : '') + s.tempC.toFixed(1) + '℃'
         + (s.power ? '（' + s.power + '）' : (s.charging ? '（充電中）' : '')) + '  空き ' + (s.freeBytes / 1e9).toFixed(1) + ' GB';
+      if (s.mode) {
+        txt += '  ［' + (s.mode === 'person' ? '人を認識' + (s.person && s.state !== 'paused' && s.state !== 'stopped' && s.state !== 'cooling' ? (s.person.present ? '・人あり' : '・人なし') : '') : '動体検知') + '］';
+      }
       if (s.lastMotion) txt += '  最終検知 ' + new Date(s.lastMotion).toLocaleTimeString();
       if (s.error) txt += '  ⚠ ' + s.error;
       stateEl.textContent = txt;
@@ -750,6 +823,8 @@
         live.style.webkitTransform = live.style.transform = 'rotate(' + rotation + 'deg)';
       }
       showRemote(s.remote);
+      showPolicy(s.policy);
+      showUpdate(s.update);
       // Refresh the list when a recording has just finished (not while a delete is running).
       if (lastState === 'recording' && s.state !== 'recording' && !busy) loadList();
       lastState = s.state;

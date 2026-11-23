@@ -35,6 +35,7 @@ public class HttpServerTest {
     private java.util.Map<String, String> lastChanges;
     private volatile boolean monitoringOn = true;
     private byte[] video;
+    private volatile String lastUpdateAction;
 
     @Before
     public void setUp() throws IOException {
@@ -56,6 +57,8 @@ public class HttpServerTest {
             @Override public boolean monitoring() { return monitoringOn; }
             @Override public void setMonitoring(boolean on) { monitoringOn = on; }
             @Override public String settingsJson() { return "{\"groups\":[]}"; }
+            @Override public String updateJson() { return "{\"phase\":\"idle\"}"; }
+            @Override public String updateAction(String action) { lastUpdateAction = action; return action.equals("install") ? "導入できません" : null; }
             @Override public String updateSettings(java.util.Map<String, String> changes) {
                 lastChanges = changes;
                 return changes.containsKey("fps") && changes.get("fps").equals("99") ? "選択できない値です: fps" : null;
@@ -379,6 +382,39 @@ public class HttpServerTest {
         String list = new String(get("/api/recordings").body, StandardCharsets.UTF_8);
         // The fixture is not a real MP4, so the duration is unknown (-1).
         assertTrue(list, list.contains("\"duration\":-1"));
+    }
+
+    @Test
+    public void updateStateIsReadable() throws IOException {
+        Resp r = get("/api/update");
+        assertTrue(r.head.contains("200"));
+        assertEquals("{\"phase\":\"idle\"}", new String(r.body, StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void updateActionsNeedTheHeaderAndAKnownAction() throws IOException {
+        assertTrue(post("/api/update", "action=check").head.contains("403"));
+        assertNull(lastUpdateAction);
+        assertTrue(post("/api/update", "action=format", "X-Z4-Action: update").head.contains("400"));
+        assertNull(lastUpdateAction);
+        Resp ok = post("/api/update", "action=check", "X-Z4-Action: update");
+        assertEquals("{\"ok\":true,\"message\":null}", new String(ok.body, StandardCharsets.UTF_8));
+        assertEquals("check", lastUpdateAction);
+    }
+
+    @Test
+    public void updateFailureMessageIsPassedOn() throws IOException {
+        Resp r = post("/api/update", "action=install", "X-Z4-Action: update");
+        assertTrue(new String(r.body, StandardCharsets.UTF_8).startsWith("{\"ok\":false,\"message\":\"導入できません\""));
+    }
+
+    @Test
+    public void updateIsPasswordProtectedOnTheInternetPort() throws IOException {
+        useRemote();
+        password = "longenough";
+        assertTrue(get("/api/update").head.contains("401"));
+        assertTrue(post("/api/update", "action=check", "X-Z4-Action: update").head.contains("401"));
+        assertNull(lastUpdateAction);
     }
 
     @Test

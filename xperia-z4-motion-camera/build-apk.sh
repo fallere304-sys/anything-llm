@@ -5,6 +5,7 @@
 # Keep the keystore: an APK signed with a different key cannot update an installed one.
 # EXTERNAL_HOST=203.0.113.5 presets the "external address" setting for a personal build. Such an APK
 # contains your home IP: keep it private (APK_NAME lets you write it outside release/).
+# UPDATE_URL=https://.../update.json presets the update source (see make-update-manifest.sh).
 set -euo pipefail
 cd "$(dirname "$0")"
 SRC=app/src/main
@@ -20,12 +21,23 @@ APK=${APK_NAME:-release/z4motioncam-$VERSION_NAME.apk}
 rm -rf "$OUT" && mkdir -p "$OUT/gen" "$OUT/classes" "$OUT/dex" "$(dirname "$APK")"
 
 # Resource overlay for a personal build: listed first, so it wins over app/src/main/res.
+# EXTERNAL_HOST presets the external address; UPDATE_URL presets where the app looks for updates
+# (https only; the default points to this repository's release folder).
 OVERLAY=()
-if [ -n "$EXTERNAL_HOST" ]; then
-    [[ "$EXTERNAL_HOST" =~ ^[A-Za-z0-9.:-]+$ ]] || { echo "invalid EXTERNAL_HOST" >&2; exit 1; }
+if [ -n "$EXTERNAL_HOST" ] || [ -n "${UPDATE_URL:-}" ]; then
     mkdir -p "$OUT/preset/values"
-    printf '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <string name="default_external_host" translatable="false">%s</string>\n</resources>\n' \
-        "$EXTERNAL_HOST" > "$OUT/preset/values/preset.xml"
+    {
+        printf '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
+        if [ -n "$EXTERNAL_HOST" ]; then
+            [[ "$EXTERNAL_HOST" =~ ^[A-Za-z0-9.:-]+$ ]] || { echo "invalid EXTERNAL_HOST" >&2; exit 1; }
+            printf '    <string name="default_external_host" translatable="false">%s</string>\n' "$EXTERNAL_HOST"
+        fi
+        if [ -n "${UPDATE_URL:-}" ]; then
+            [[ "$UPDATE_URL" =~ ^https://[A-Za-z0-9._~:/?#@!+,=%-]+$ ]] || { echo "UPDATE_URL must be a plain https:// URL" >&2; exit 1; }
+            printf '    <string name="default_update_url" translatable="false">%s</string>\n' "$UPDATE_URL"
+        fi
+        printf '</resources>\n'
+    } > "$OUT/preset/values/preset.xml"
     OVERLAY=(-S "$OUT/preset")
 fi
 

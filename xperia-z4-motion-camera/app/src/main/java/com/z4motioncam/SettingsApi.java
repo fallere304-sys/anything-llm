@@ -24,7 +24,9 @@ final class SettingsApi {
     }
 
     private String defaultOf(SettingsSpec.Field f) {
-        return f.key.equals("external_host") ? context.getString(R.string.default_external_host) : f.def;
+        if (f.key.equals("external_host")) return context.getString(R.string.default_external_host);
+        if (f.key.equals("update_url")) return context.getString(R.string.default_update_url);
+        return f.def;
     }
 
     /** Current value as text (booleans as "true"/"false"). */
@@ -39,11 +41,14 @@ final class SettingsApi {
         SharedPreferences p = prefs();
         Object[][] groups = {
                 {R.string.pref_cat_camera, new String[] {"resolution", "fps", "rotation"}},
-                {R.string.pref_cat_motion, new String[] {"sensitivity", "post_record_sec", "segment_min", "timestamp"}},
+                {R.string.pref_cat_motion, new String[] {"detect_mode", "person_sens", "sensitivity", "post_record_sec", "segment_min", "timestamp"}},
                 {R.string.pref_cat_storage, new String[] {"use_sd", "min_free_mb"}},
                 {R.string.pref_cat_network, new String[] {"port"}},
                 {R.string.pref_cat_remote, new String[] {"remote_enabled", "password", "external_host", "remote_port",
                         "upnp", "ddns_domain", "ddns_token", "acme"}},
+                {R.string.pref_cat_power, new String[] {"low_batt_pause", "low_batt_resume", "quiet_enabled", "quiet_start",
+                        "quiet_end", "quiet_keep_pct"}},
+                {R.string.pref_cat_update, new String[] {"update_auto", "update_url", "update_sha256"}},
                 {R.string.pref_cat_system, new String[] {"autostart", "keep_front"}},
         };
         StringBuilder sb = new StringBuilder("{\"groups\":[");
@@ -118,6 +123,17 @@ final class SettingsApi {
             case "ddns_token": return R.string.pref_ddns_token;
             case "acme": return R.string.pref_acme;
             case "keep_front": return R.string.pref_keep_front;
+            case "detect_mode": return R.string.pref_detect_mode;
+            case "person_sens": return R.string.pref_person_sens;
+            case "low_batt_pause": return R.string.pref_low_batt_pause;
+            case "low_batt_resume": return R.string.pref_low_batt_resume;
+            case "quiet_enabled": return R.string.pref_quiet_enabled;
+            case "quiet_start": return R.string.pref_quiet_start;
+            case "quiet_end": return R.string.pref_quiet_end;
+            case "quiet_keep_pct": return R.string.pref_quiet_keep_pct;
+            case "update_auto": return R.string.pref_update_auto;
+            case "update_url": return R.string.pref_update_url;
+            case "update_sha256": return R.string.pref_update_sha256;
             default: return R.string.pref_autostart;
         }
     }
@@ -129,6 +145,8 @@ final class SettingsApi {
             case "rotation": return R.array.rotation_entries;
             case "sensitivity": return R.array.sensitivity_entries;
             case "post_record_sec": return R.array.post_record_entries;
+            case "detect_mode": return R.array.detect_mode_entries;
+            case "person_sens": return R.array.person_sens_entries;
             default: return R.array.segment_entries;
         }
     }

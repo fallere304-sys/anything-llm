@@ -31,6 +31,20 @@
 
     <PreferenceCategory android:title="@string/pref_cat_motion">
         <ListPreference
+            android:defaultValue="motion"
+            android:entries="@array/detect_mode_entries"
+            android:entryValues="@array/detect_mode_values"
+            android:key="detect_mode"
+            android:summary="%s"
+            android:title="@string/pref_detect_mode" />
+        <ListPreference
+            android:defaultValue="2"
+            android:entries="@array/person_sens_entries"
+            android:entryValues="@array/person_sens_values"
+            android:key="person_sens"
+            android:summary="%s"
+            android:title="@string/pref_person_sens" />
+        <ListPreference
             android:defaultValue="2"
             android:entries="@array/sensitivity_entries"
             android:entryValues="@array/sensitivity_values"
@@ -123,6 +137,55 @@
             android:key="acme"
             android:summary="@string/pref_acme_summary"
             android:title="@string/pref_acme" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/pref_cat_power">
+        <EditTextPreference
+            android:defaultValue="18"
+            android:inputType="number"
+            android:key="low_batt_pause"
+            android:title="@string/pref_low_batt_pause" />
+        <EditTextPreference
+            android:defaultValue="50"
+            android:inputType="number"
+            android:key="low_batt_resume"
+            android:title="@string/pref_low_batt_resume" />
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="quiet_enabled"
+            android:title="@string/pref_quiet_enabled" />
+        <EditTextPreference
+            android:defaultValue="03:00"
+            android:inputType="time"
+            android:key="quiet_start"
+            android:title="@string/pref_quiet_start" />
+        <EditTextPreference
+            android:defaultValue="04:00"
+            android:inputType="time"
+            android:key="quiet_end"
+            android:title="@string/pref_quiet_end" />
+        <EditTextPreference
+            android:defaultValue="80"
+            android:inputType="number"
+            android:key="quiet_keep_pct"
+            android:title="@string/pref_quiet_keep_pct" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/pref_cat_update">
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="update_auto"
+            android:title="@string/pref_update_auto" />
+        <EditTextPreference
+            android:defaultValue="@string/default_update_url"
+            android:inputType="textUri"
+            android:key="update_url"
+            android:title="@string/pref_update_url" />
+        <EditTextPreference
+            android:defaultValue=""
+            android:inputType="text"
+            android:key="update_sha256"
+            android:title="@string/pref_update_sha256" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="@string/pref_cat_system">
